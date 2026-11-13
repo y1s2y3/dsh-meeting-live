@@ -429,6 +429,29 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-minutes-item{display:flex;gap:6px;font-size:12px;line-height:20px;color:#334155}
 .dsm-minutes-dot{flex:0 0 auto;width:5px;height:5px;margin-top:7px;border-radius:50%;background:#93B4F5}
 .dsm-minutes-empty{font-size:12px;color:#8A94A6}
+/* ── 录音弹窗：关键信息更醒目 ── */
+.dsm-rec-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.dsm-rec-item{display:flex;align-items:center;gap:9px;padding:10px 11px;border:1px solid #E4E9F2;border-radius:12px;background:#F8FAFE}
+.dsm-rec-item-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:#E8F0FF;color:#2563EB}
+.dsm-rec-item-icon--screen{background:#EAF3FF;color:#1D4ED8}
+.dsm-rec-item-icon--speech{background:#F1ECFF;color:#6D4AFF}
+.dsm-rec-item-body{min-width:0}
+.dsm-rec-item-label{font-size:10.5px;line-height:14px;color:#8A94A6}
+.dsm-rec-item-value{font-size:12.5px;line-height:18px;font-weight:650;color:#0F172A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-rec-item-value--on{color:#15803D}
+.dsm-rec-item-value--warn{color:#B45309}
+.dsm-rec-produce{display:flex;align-items:center;gap:6px;margin-top:8px;padding:7px 10px;border-radius:9px;background:#EAF1FF;border:1px solid #C7DAFF;color:#2563EB;font-size:11.5px;line-height:16px}
+.dsm-rec-form{display:flex;flex-direction:column;gap:10px}
+.dsm-rec-title .dsm-input{height:40px;font-size:14px;font-weight:650;letter-spacing:.2px}
+.dsm-rec-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:end;padding:11px 12px;border:1px dashed #D9E2F0;border-radius:12px;background:#FBFCFF}
+.dsm-rec-settings .dsm-check{align-self:center;margin-top:2px}
+.dsm-rec-tip{font-size:11px;line-height:16px;color:#8A94A6}
+.dsm-btn--lg{height:36px;padding:0 18px;font-size:13px;font-weight:650;border-radius:9px}
+.dsm-live-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;line-height:16px;padding:1px 7px;border-radius:999px;background:#FEF2F2;border:1px solid #FBC7C7;color:#DC2626}
+.dsm-root .dsm-live-stat{background:#F8FAFE;border:1px solid #E4E9F2;border-radius:12px;padding:9px 11px}
+.dsm-root .dsm-live-stat-value{font-size:22px;font-weight:700;letter-spacing:.5px;line-height:28px}
+.dsm-root .dsm-live-stat-label{font-size:11px;color:#8A94A6}
+.dsm-root .dsm-level{height:8px;border-radius:999px;background:#E9EEF6;overflow:hidden}
 
 /* ── 待办 / 原始转写：与会议纪要一致的卡片样式 ── */
 .dsm-root .dsm-section-card{background:#FFFFFF;border:1px solid #E3E9F2;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.05);overflow:hidden;padding:0}
@@ -2816,6 +2839,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       play: ['M6 4.3l5 3.7-5 3.7z'],
       folder: ['M2.8 4.2h4l1.2 1.5h5.2v6.8H2.8z'],
       info: ['M8 3a5 5 0 1 0 0 10A5 5 0 0 0 8 3Z', 'M8 7.4v3.4', 'M8 5.2v.2'],
+      screen: ['M2.6 3.6h10.8v6.6H2.6z', 'M5.6 12.6h4.8', 'M8 10.2v2.4'],
     }
 
     function Icon(props) {
@@ -3856,6 +3880,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                     ? '已暂停录音'
                     : '正在录音'),
               h('span', { className: 'dsm-hint' }, live.meetingTitle ?? ''),
+              live.screen === true
+                ? h('span', { className: 'dsm-live-badge' }, '录屏中')
+                : null,
             ),
             h(
               'div',
@@ -4008,91 +4035,148 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 : '打开麦克风边说边出字，关闭弹窗后仍在后台录音'),
             ),
           ),
-                    h(
-            'div',
-            { key: 'form' },
-            h(
+                    tab === 'record'
+            ? h(
               'div',
-              { className: 'dsm-row' },
-              h(Field, { label: '会议标题（可留空）' }, h(TextInput, {
-                value: form.title,
-                onChange: update('title'),
-                placeholder: `留空 = ${defaultRecordingTitle()}；之后可改，AI 生成纪要时会自动起名`,
-              })),
-              h(Field, { label: '会议日期' }, h(TextInput, { type: 'date', value: form.date, onChange: update('date') })),
-            ),
-            h(Field, { label: '参会人（逗号分隔）' }, h(TextInput, {
-              value: form.attendees,
-              onChange: update('attendees'),
-              placeholder: '张三，李四',
-            })),
-          ),
-          tab === 'record'
-            ? h(
-              Field,
-              { label: '麦克风输入设备' },
-              h(Select, {
-                value: inputDeviceId,
-                onChange: (value) => {
-                  setInputDeviceId(value)
-                  selectedInputDeviceId = value
-                  writePreferredInputDevice(value)
-                },
-                options: [
-                  { value: '', label: '系统默认输入设备' },
-                  ...inputDevices.map((device) => ({ value: device.deviceId, label: device.label })),
-                ],
-              }),
-              h('div', { className: 'dsm-hint' }, inputDeviceId === ''
-                ? '默认设备由 Windows 决定；识别不出文字时可在这里改选实际使用的麦克风（选择会记住）。'
-                : '已固定使用该设备；如果它被拔出，录音会自动回退到系统默认设备。'),
-            )
-            : null,
-          tab === 'record'
-            ? h(
-              'label',
-              { className: 'dsm-check' + (liveActive ? ' dsm-check--off' : '') },
-              h('input', {
-                type: 'checkbox',
-                checked: form.screen === true,
-                disabled: liveActive,
-                onChange: (event) => {
-                  const checked = event.target.checked
-                  update('screen')(checked)
-                  if (checked && screenSources.length === 0) {
-                    void requestJson('/screen/sources').then((payload) => {
-                      const list = Array.isArray(payload?.sources) ? payload.sources : []
-                      setScreenSources(list)
-                      setScreenSourceError(list.length === 0 ? '没有发现可录制的屏幕' : null)
-                      if (list.length > 0) update('screenSource')(list[0].id)
-                    }).catch((error) => {
-                      setScreenSourceError(messageOf(error))
-                    })
-                  }
-                },
-              }),
-              h('span', null, '同步录屏（录屏由本机 ffmpeg 采集，结束后自动合成带配音的 MP4 + 单独音频）'),
+              { key: 'overview', className: 'dsm-rec-overview' },
+              h(
+                'div',
+                { className: 'dsm-rec-item' },
+                h('span', { className: 'dsm-rec-item-icon' }, h(Icon, { name: 'mic', size: 15 })),
+                h(
+                  'div',
+                  { className: 'dsm-rec-item-body' },
+                  h('div', { className: 'dsm-rec-item-label' }, '麦克风'),
+                  h('div', { className: 'dsm-rec-item-value' }, inputDeviceId === ''
+                    ? '系统默认设备'
+                    : (inputDevices.find((item) => item.deviceId === inputDeviceId)?.label ?? '系统默认设备')),
+                ),
+              ),
+              h(
+                'div',
+                { className: 'dsm-rec-item' },
+                h('span', { className: 'dsm-rec-item-icon dsm-rec-item-icon--screen' }, h(Icon, { name: 'screen', size: 15 })),
+                h(
+                  'div',
+                  { className: 'dsm-rec-item-body' },
+                  h('div', { className: 'dsm-rec-item-label' }, '录屏'),
+                  h('div', { className: 'dsm-rec-item-value' + (form.screen === true ? ' dsm-rec-item-value--on' : '') }, form.screen === true
+                    ? (screenSources.find((item) => item.id === form.screenSource)?.label ?? '整个桌面')
+                    : '未开启'),
+                ),
+              ),
+              h(
+                'div',
+                { className: 'dsm-rec-item' },
+                h('span', { className: 'dsm-rec-item-icon dsm-rec-item-icon--speech' }, h(Icon, { name: 'sparkle', size: 15 })),
+                h(
+                  'div',
+                  { className: 'dsm-rec-item-body' },
+                  h('div', { className: 'dsm-rec-item-label' }, '语音识别'),
+                  h('div', { className: 'dsm-rec-item-value' + (speechAvailable ? ' dsm-rec-item-value--on' : ' dsm-rec-item-value--warn') }, speechAvailable ? '已就绪' : (speech === null ? '检查中…' : '不可用')),
+                ),
+              ),
             )
             : null,
           tab === 'record' && form.screen === true
             ? h(
-              Field,
-              { label: '录屏画面' },
-              h(Select, {
-                value: form.screenSource,
-                onChange: (value) => update('screenSource')(value),
-                options: screenSources.length > 0
-                  ? screenSources.map((item) => ({ value: item.id, label: item.label }))
-                  : [{ value: 'desktop', label: '整个桌面' }],
-              }),
-              h('div', { className: 'dsm-hint' }, screenSourceError !== null
-                ? '读取屏幕列表失败：' + screenSourceError
-                : '开始录音时会同时录制所选画面；停止后由本机 ffmpeg 合成 MP4（带配音）。'),
+              'div',
+              { key: 'produce', className: 'dsm-rec-produce' },
+              h(Icon, { name: 'play', size: 12 }),
+              h('span', null, '结束后自动生成：MP4 视频（带配音） + WAV 音频'),
             )
             : null,
-          h('div', { key: 'hint', className: 'dsm-hint' }, tab === 'record'
-            ? '实时转写约 6–10 秒延迟；标题可留空，会自动命名，之后可改（AI 生成纪要时也会自动起名）。可在后台录音，关闭弹窗不中断。'
-            : '文件转写仍使用浏览器解码 → 16kHz 单声道 PCM16 WAV → 90 秒切片逐段识别；支持 WAV / MP3 / M4A / MP4 / WebM。'),
+          h(
+            'div',
+            { key: 'form', className: 'dsm-rec-form' },
+            h(
+              'div',
+              { className: 'dsm-rec-title' },
+              h(Field, { label: '会议标题（留空自动命名）' }, h(TextInput, {
+                value: form.title,
+                onChange: update('title'),
+                placeholder: defaultRecordingTitle(),
+              })),
+            ),
+            h(
+              'div',
+              { className: 'dsm-row' },
+              h(Field, { label: '会议日期' }, h(TextInput, { type: 'date', value: form.date, onChange: update('date') })),
+              h(Field, { label: '参会人（逗号分隔）' }, h(TextInput, {
+                value: form.attendees,
+                onChange: update('attendees'),
+                placeholder: '张三，李四',
+              })),
+            ),
+          ),
+          tab === 'record'
+            ? h(
+              'div',
+              { key: 'settings', className: 'dsm-rec-settings' },
+              h(
+                Field,
+                { label: '麦克风输入设备' },
+                h(Select, {
+                  value: inputDeviceId,
+                  onChange: (value) => {
+                    setInputDeviceId(value)
+                    selectedInputDeviceId = value
+                    writePreferredInputDevice(value)
+                  },
+                  options: [
+                    { value: '', label: '系统默认输入设备' },
+                    ...inputDevices.map((device) => ({ value: device.deviceId, label: device.label })),
+                  ],
+                }),
+                h('div', { className: 'dsm-hint' }, '选择会记住；识别不出文字时可改选实际使用的麦克风。'),
+              ),
+              h(
+                'label',
+                { className: 'dsm-check' + (liveActive ? ' dsm-check--off' : '') },
+                h('input', {
+                  type: 'checkbox',
+                  checked: form.screen === true,
+                  disabled: liveActive,
+                  onChange: (event) => {
+                    const checked = event.target.checked
+                    update('screen')(checked)
+                    if (checked && screenSources.length === 0) {
+                      void requestJson('/screen/sources').then((payload) => {
+                        const list = Array.isArray(payload?.sources) ? payload.sources : []
+                        setScreenSources(list)
+                        setScreenSourceError(list.length === 0 ? '没有发现可录制的屏幕' : null)
+                        if (list.length > 0) update('screenSource')(list[0].id)
+                      }).catch((error) => {
+                        setScreenSourceError(messageOf(error))
+                      })
+                    }
+                  },
+                }),
+                h('span', null, '同步录屏'),
+              ),
+              form.screen === true
+                ? h(
+                  Field,
+                  { label: '录屏画面' },
+                  h(Select, {
+                    value: form.screenSource,
+                    onChange: (value) => update('screenSource')(value),
+                    options: screenSources.length > 0
+                      ? screenSources.map((item) => ({ value: item.id, label: item.label }))
+                      : [{ value: 'desktop', label: '整个桌面' }],
+                  }),
+                )
+                : null,
+            )
+            : null,
+          h(
+            'div',
+            { key: 'hint', className: 'dsm-rec-tip' },
+            tab === 'record'
+              ? '转写约 6–10 秒延迟；可后台进行，关闭弹窗不中断。选好麦克风后先试说一句，看字数是否变化。'
+              : '文件转写使用浏览器解码 → 16kHz 单声道 PCM16 WAV → 90 秒切片逐段识别；支持 WAV / MP3 / M4A / MP4 / WebM。',
+          ),
+
           speechAvailable
             ? null
             : h('div', {
@@ -4236,7 +4320,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             ? h('button', {
               key: 'start',
               type: 'button',
-              className: 'dsm-btn dsm-btn--primary',
+              className: 'dsm-btn dsm-btn--primary dsm-btn--lg',
               onClick: startLive,
               disabled: !speechAvailable,
               title: speechAvailable ? undefined : '本机语音识别服务不可用',

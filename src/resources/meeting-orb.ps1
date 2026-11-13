@@ -108,10 +108,10 @@ function Format-Timer([int]$seconds) {
 
 $buttonStyle = @'
     <Style x:Key="OrbButton" TargetType="Button">
-      <Setter Property="Foreground" Value="#FFEDEFF2" />
-      <Setter Property="Background" Value="#1FFFFFFF" />
+      <Setter Property="Foreground" Value="#FF475569" />
+      <Setter Property="Background" Value="#FFFFFFFF" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="BorderBrush" Value="#38FFFFFF" />
+      <Setter Property="BorderBrush" Value="#E1E7F1" />
       <Setter Property="Padding" Value="12,6" />
       <Setter Property="FontSize" Value="12" />
       <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
@@ -126,10 +126,11 @@ $buttonStyle = @'
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#33FFFFFF" />
+                <Setter TargetName="Chrome" Property="Background" Value="#EEF3FB" />
+                <Setter Property="Foreground" Value="#2563EB" />
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#4DFFFFFF" />
+                <Setter TargetName="Chrome" Property="Background" Value="#E2EBFF" />
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.45" />
@@ -140,7 +141,7 @@ $buttonStyle = @'
       </Setter>
     </Style>
     <Style x:Key="GhostButton" TargetType="Button">
-      <Setter Property="Foreground" Value="#FFB9C0CA" />
+      <Setter Property="Foreground" Value="#FF8A94A6" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="FontSize" Value="14" />
@@ -153,7 +154,7 @@ $buttonStyle = @'
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#33FFFFFF" />
+                <Setter TargetName="Chrome" Property="Background" Value="#EEF3FB" />
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -180,10 +181,10 @@ $buttonStyle
       <RowDefinition Height="Auto" />
       <RowDefinition Height="10" />
     </Grid.RowDefinitions>
-    <Border x:Name="Card" Grid.Row="0" CornerRadius="14" Background="#E4151720"
-            BorderThickness="1" BorderBrush="#3DFFFFFF" Padding="13,10">
+    <Border x:Name="Card" Grid.Row="0" CornerRadius="14" Background="#F5FFFFFF"
+            BorderThickness="1" BorderBrush="#E3E9F2" Padding="13,10">
       <Border.Effect>
-        <DropShadowEffect Color="#FF000000" BlurRadius="22" ShadowDepth="2" Opacity="0.4" />
+        <DropShadowEffect Color="#0F172A" BlurRadius="22" ShadowDepth="2" Opacity="0.18" />
       </Border.Effect>
       <Grid>
         <Grid.RowDefinitions>
@@ -199,7 +200,7 @@ $buttonStyle
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
           <TextBlock x:Name="BubbleTitle" Grid.Column="0" Text="Meeting" FontSize="13.5" FontWeight="SemiBold"
-                     FontFamily="Microsoft YaHei UI" Foreground="#FFEDEFF2" VerticalAlignment="Center"
+                     FontFamily="Microsoft YaHei UI" Foreground="#FF0F172A" VerticalAlignment="Center"
                      TextTrimming="CharacterEllipsis" />
           <Button x:Name="BubbleClose" Grid.Column="1" Style="{StaticResource GhostButton}" Content="&#x00D7;"
                   Width="30" Height="26" ToolTip="Close" />
@@ -208,17 +209,17 @@ $buttonStyle
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,8">
           <Ellipse x:Name="BubbleDot" Width="8" Height="8" Fill="#FFE0574B" VerticalAlignment="Center" Margin="0,0,7,0" />
           <TextBlock x:Name="BubbleStatus" Text="REC" FontSize="12" FontFamily="Microsoft YaHei UI"
-                     Foreground="#FFDDE1E7" VerticalAlignment="Center" />
+                     Foreground="#FF475569" VerticalAlignment="Center" />
           <TextBlock x:Name="BubbleTimer" Text="00:00" FontSize="12" FontFamily="Consolas"
-                     Foreground="#FFDDE1E7" VerticalAlignment="Center" Margin="9,0,0,0" />
+                     Foreground="#FF334155" VerticalAlignment="Center" Margin="9,0,0,0" />
           <TextBlock x:Name="BubbleChars" Text="" FontSize="11" FontFamily="Microsoft YaHei UI"
-                     Foreground="#FF8B93A0" VerticalAlignment="Center" Margin="10,0,0,0" />
+                     Foreground="#FF8A94A6" VerticalAlignment="Center" Margin="10,0,0,0" />
         </StackPanel>
 
-        <Border Grid.Row="2" Height="150" CornerRadius="10" Background="#14FFFFFF"
-                BorderThickness="1" BorderBrush="#26FFFFFF" Padding="9,7">
+        <Border Grid.Row="2" Height="150" CornerRadius="10" Background="#F7F9FC"
+                BorderThickness="1" BorderBrush="#E4E9F2" Padding="9,7">
           <TextBox x:Name="BubbleTranscript" Text="" IsReadOnly="True" BorderThickness="0"
-                   Background="Transparent" Foreground="#FFDDE1E7" FontSize="12"
+                   Background="Transparent" Foreground="#FF334155" FontSize="12"
                    FontFamily="Microsoft YaHei UI" TextWrapping="Wrap"
                    VerticalScrollBarVisibility="Auto" IsTabStop="False" />
         </Border>
@@ -231,26 +232,26 @@ $buttonStyle
           <Button x:Name="BubblePause" Grid.Column="0" Style="{StaticResource OrbButton}" Content="Pause"
                   HorizontalAlignment="Left" />
           <Button x:Name="BubbleStop" Grid.Column="1" Style="{StaticResource OrbButton}" Content="Stop"
-                  Foreground="#FFE0574B" BorderBrush="#80E0574B" Background="#26E0574B" />
+                  Foreground="#FFDC2626" BorderBrush="#F4C7C7" Background="#FFFEF2F2" />
         </Grid>
       </Grid>
     </Border>
 
     <!-- 指向下方球的小尖角 -->
     <Path Grid.Row="1" HorizontalAlignment="Right" Margin="0,0,41,0" Width="14" Height="10" Stretch="Fill"
-          Fill="#E4151720" Stroke="#3DFFFFFF" StrokeThickness="1" Data="M1,0 L7,9 L13,0" />
+          Fill="#F5FFFFFF" Stroke="#E3E9F2" StrokeThickness="1" Data="M1,0 L7,9 L13,0" />
   </Grid>
 
   <!-- 悬浮球（固定在窗口右下角） -->
   <Grid x:Name="BallHost" Grid.Row="1" Width="$BALL_SIZE" Height="$BALL_SIZE" HorizontalAlignment="Right">
-    <Ellipse x:Name="Ripple" Width="$BALL_CORE" Height="$BALL_CORE" Stroke="#FFE0574B" StrokeThickness="1.6"
+    <Ellipse x:Name="Ripple" Width="$BALL_CORE" Height="$BALL_CORE" Stroke="#FF2F6BFF" StrokeThickness="1.6"
              Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
              RenderTransformOrigin="0.5,0.5">
       <Ellipse.RenderTransform>
         <ScaleTransform x:Name="RippleScale" ScaleX="1" ScaleY="1" />
       </Ellipse.RenderTransform>
     </Ellipse>
-    <Ellipse x:Name="LevelRing" Width="$BALL_CORE" Height="$BALL_CORE" Stroke="#FF7FAEFF" StrokeThickness="2.6"
+    <Ellipse x:Name="LevelRing" Width="$BALL_CORE" Height="$BALL_CORE" Stroke="#FF2F6BFF" StrokeThickness="2.6"
              Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
              RenderTransformOrigin="0.5,0.5">
       <Ellipse.RenderTransform>
@@ -258,10 +259,10 @@ $buttonStyle
       </Ellipse.RenderTransform>
     </Ellipse>
     <Border x:Name="BallCore" Width="$BALL_CORE" Height="$BALL_CORE" CornerRadius="34"
-            BorderThickness="1" BorderBrush="#73FFFFFF" Background="Transparent"
+            BorderThickness="1" BorderBrush="#BFCFF0" Background="Transparent"
             HorizontalAlignment="Center" VerticalAlignment="Center">
       <Border.Effect>
-        <DropShadowEffect x:Name="BallGlow" Color="#FFE0574B" BlurRadius="20" ShadowDepth="0" Opacity="0.2" />
+        <DropShadowEffect x:Name="BallGlow" Color="#FF2F6BFF" BlurRadius="22" ShadowDepth="0" Opacity="0.26" />
       </Border.Effect>
       <Grid>
         <Ellipse x:Name="BallHighlight" Width="46" Height="46" HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -279,13 +280,13 @@ $buttonStyle
             <ScaleTransform x:Name="MicScale" ScaleX="1" ScaleY="1" />
           </Viewbox.RenderTransform>
           <Canvas Width="16" Height="16">
-            <Path Stroke="#FFF3F6FB" StrokeThickness="1.45" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+            <Path Stroke="#FF1F2937" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                   Data="M8,2.6 A2,2 0 0 1 10,4.6 L10,7.8 A2,2 0 0 1 6,7.8 L6,4.6 A2,2 0 0 1 8,2.6 Z M4.2,7.4 L4.2,8 A3.8,3.8 0 0 0 11.8,8 L11.8,7.4 M8,11.9 L8,13.8 M5.9,13.8 L10.1,13.8" />
           </Canvas>
         </Viewbox>
         <TextBlock x:Name="OrbTimer" Text="00:00" FontSize="11" FontFamily="Consolas"
-                   Foreground="#FFDCE3ED" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,6" />
-        <Ellipse x:Name="OrbDot" Width="10" Height="10" Fill="#FFE0574B" Stroke="#66FFFFFF" StrokeThickness="1"
+                   Foreground="#FF475569" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,6" />
+        <Ellipse x:Name="OrbDot" Width="10" Height="10" Fill="#FFE0574B" Stroke="#FFFFFFFF" StrokeThickness="1.2"
                  HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,7,7,0" />
       </Grid>
     </Border>
@@ -301,9 +302,9 @@ function Set-BallGradient($root) {
   $gradient.RadiusX = 0.9
   $gradient.RadiusY = 0.9
   foreach ($stop in @(
-    @{ offset = 0.0; color = 'F2_3A4050' },
-    @{ offset = 0.58; color = 'F2_20242B' },
-    @{ offset = 1.0; color = 'F5_14161A' }
+    @{ offset = 0.0; color = 'FC_FFFFFF' },
+    @{ offset = 0.62; color = 'FA_F3F7FF' },
+    @{ offset = 1.0; color = 'FC_E4EDFB' }
   )) {
     $parts = $stop.color.Split('_')
     $color = [System.Windows.Media.ColorConverter]::ConvertFromString('#' + $parts[1])
@@ -377,17 +378,17 @@ if ($Preview -ne '') {
   $ballRoot.FindName('LevelRing').Opacity = 0.55
   $ballRoot.FindName('LevelRingScale').ScaleX = 1.12
   $ballRoot.FindName('LevelRingScale').ScaleY = 1.12
-  Save-Preview $ballRoot $BALL_SIZE $BALL_SIZE (Join-Path $Preview 'ball.png')
+  Save-Preview $ballRoot $BALL_SIZE $BALL_SIZE (Join-Path $Preview 'ball.png') '#FFDDE4EF'
 
   $ballRoot.FindName('OrbTimer').Text = '01:23:45'
-  $ballRoot.FindName('OrbDot').Fill = (Brush '#FFE0A64B')
+  $ballRoot.FindName('OrbDot').Fill = (Brush '#FFD97706')
   $ballRoot.FindName('OrbDot').Opacity = 0.85
   $ballRoot.FindName('Ripple').Opacity = 0
   $ballRoot.FindName('RippleScale').ScaleX = 1
   $ballRoot.FindName('RippleScale').ScaleY = 1
   $ballRoot.FindName('MicScale').ScaleX = 1
   $ballRoot.FindName('MicScale').ScaleY = 1
-  Save-Preview $ballRoot $BALL_SIZE $BALL_SIZE (Join-Path $Preview 'ball-paused.png')
+  Save-Preview $ballRoot $BALL_SIZE $BALL_SIZE (Join-Path $Preview 'ball-paused.png') '#FFDDE4EF'
 
   # bubble + ball
   $bubbleRoot = [Windows.Markup.XamlReader]::Parse($shellXaml)
@@ -406,14 +407,14 @@ if ($Preview -ne '') {
   $bubbleRoot.FindName('MicScale').ScaleY = 1.12
   $bubbleRoot.Measure([System.Windows.Size]::new($CARD_WIDTH, 1000))
   $bubbleHeight = [int][math]::Ceiling($bubbleRoot.DesiredSize.Height)
-  Save-Preview $bubbleRoot $CARD_WIDTH $bubbleHeight (Join-Path $Preview 'bubble.png') '#FF3A3F48'
+  Save-Preview $bubbleRoot $CARD_WIDTH $bubbleHeight (Join-Path $Preview 'bubble.png') '#FFDDE4EF'
 
   $bubbleRoot.FindName('BubbleStatus').Text = 'Paused'
   $bubbleRoot.FindName('BubblePause').Content = 'Resume'
   $bubbleRoot.FindName('BubbleDot').Fill = (Brush '#FFE0A64B')
   $bubbleRoot.FindName('MicScale').ScaleX = 1
   $bubbleRoot.FindName('MicScale').ScaleY = 1
-  Save-Preview $bubbleRoot $CARD_WIDTH $bubbleHeight (Join-Path $Preview 'bubble-paused.png') '#FF3A3F48'
+  Save-Preview $bubbleRoot $CARD_WIDTH $bubbleHeight (Join-Path $Preview 'bubble-paused.png') '#FFDDE4EF'
 
   Write-Output ('preview written to ' + $Preview)
   exit 0
@@ -592,7 +593,7 @@ function Update-Animation {
     $levelRingScale.ScaleY = $levelRingValue
     $ballGlow.Opacity = 0.2 + 0.62 * $smooth
     $ballGlow.BlurRadius = 20 + 16 * $smooth
-    $window.Opacity = (0.9 + 0.05 * $smooth) - 0.03 * $script:Phase
+    $window.Opacity = (0.96 + 0.03 * $smooth) - 0.02 * $script:Phase
   } elseif ($status -eq 'paused') {
     $orbDot.Opacity = 0.85
     $ripple.Opacity = 0
@@ -605,7 +606,7 @@ function Update-Animation {
     $micScale.ScaleY = 1
     $ballGlow.Opacity = 0.1
     $ballGlow.BlurRadius = 16
-    $window.Opacity = 0.86
+    $window.Opacity = 0.94
   } else {
     $orbDot.Opacity = 1
     $ripple.Opacity = 0
@@ -618,7 +619,7 @@ function Update-Animation {
     $micScale.ScaleY = 1
     $ballGlow.Opacity = 0.12
     $ballGlow.BlurRadius = 16
-    $window.Opacity = 0.93
+    $window.Opacity = 0.96
   }
 }
 
