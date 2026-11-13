@@ -3623,7 +3623,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 value: summarySelection,
                 onChange: (value) => { void saveSummarySelection(value) },
                 options: [
-                  { value: '', label: defaultModelLabelText(defaultModel) },
+                  { value: '', label: defaultModelLabel },
                   ...dshModels.map((item) => ({ value: item.provider + '|' + item.id, label: item.name + '（' + (item.displayName || item.provider) + '）' })),
                 ],
               })),

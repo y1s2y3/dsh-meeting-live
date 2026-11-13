@@ -139,6 +139,7 @@ code = code.replace(hookAnchor, `    globalThis.__TEST_HOOKS__ = {
       EmptyState,
       RecordModal,
       clearLiveRecording,
+      SettingsModal,
       extractVoiceFeature,
       assignLiveSpeaker,
       relativeStamp,
