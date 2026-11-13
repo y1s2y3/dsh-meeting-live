@@ -366,14 +366,18 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-stage-title{font-size:14px;font-weight:600}
 .dsm-stage-text{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:19px;max-width:420px;word-break:break-word}
 .dsm-done-icon{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
-.dsm-toast-stack{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;flex-direction:column;gap:8px;max-width:min(380px,90vw);pointer-events:none}
-.dsm-toast{pointer-events:auto;display:flex;flex-direction:column;gap:3px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-toast-bg);color:var(--dsw-alias-toast-label);box-shadow:0 10px 30px color-mix(in srgb,var(--dsw-alias-label-primary) 20%,transparent);padding:9px 12px;animation:dsm-toast-in .16s ease}
+.dsm-toast-stack{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;flex-direction:column;gap:8px;max-width:min(400px,90vw);pointer-events:none}
+.dsm-toast{pointer-events:auto;display:flex;align-items:flex-start;gap:10px;border:1px solid #E4E9F2;border-radius:12px;background:#FFFFFF;color:#0F172A;box-shadow:0 12px 28px rgba(15,23,42,.14);padding:11px 12px;padding:9px 12px;animation:dsm-toast-in .16s ease}
 @keyframes dsm-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.dsm-toast--error{border-color:var(--dsw-alias-state-error-primary)}
-.dsm-toast--warn{border-color:var(--dsw-alias-state-warn-primary)}
-.dsm-toast--success{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,transparent)}
-.dsm-toast-title{font-size:12px;font-weight:650}
-.dsm-toast-body{font-size:11.5px;line-height:17px;color:var(--dsw-alias-label-secondary);word-break:break-word}
+.dsm-toast-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:#EAF1FF;color:#2563EB}
+.dsm-toast--success .dsm-toast-icon{background:#E8F8EE;color:#0B7A3B}
+.dsm-toast--error .dsm-toast-icon{background:#FEF2F2;color:#DC2626}
+.dsm-toast--warn .dsm-toast-icon{background:#FFF4E5;color:#B45309}
+.dsm-toast-content{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;padding-top:2px}
+.dsm-toast-title{font-size:12.5px;font-weight:650;line-height:18px;color:#0F172A}
+.dsm-toast-body{font-size:11.5px;line-height:17px;color:#8A94A6;word-break:break-word}
+.dsm-toast-close{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:#8A94A6;cursor:pointer;margin-top:1px}
+.dsm-toast-close:hover{background:#F3F7FE;color:#2563EB}
 .dsm-icon-badge{position:relative;display:inline-flex}
 .dsm-icon-dot{position:absolute;top:-3px;right:-4px;min-width:12px;height:12px;border-radius:999px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-size:9px;line-height:12px;text-align:center;padding:0 3px;font-weight:600}
 .dsm-dialog-text{font-size:12.5px;line-height:20px;color:var(--dsw-alias-label-secondary);margin:0;word-break:break-word}
@@ -3361,12 +3365,32 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         void loadSettings().catch((caught) => { setError(messageOf(caught)) })
       }, [])
 
+      const downloadMissRef = useRef(0)
+
       useEffect(() => {
         if (downloading === '') return undefined
+        const kind = downloading
         const timer = window.setInterval(() => {
           void requestJson('/models/status').then((payload) => {
             if (!mountedRef.current) return
-            setModelsState(payload?.state ?? null)
+            const state = payload?.state ?? null
+            setModelsState(state)
+            const active = state?.downloading ?? null
+            if (active !== null) { downloadMissRef.current = 0; return }
+            if (state?.assets?.[kind]?.ready === true) {
+              downloadMissRef.current = 0
+              setDownloading('')
+              notifySuccess('模型下载完成', modelTitle(kind) + ' 已就绪')
+              void loadSettings().catch(() => {})
+              return
+            }
+            downloadMissRef.current += 1
+            if (downloadMissRef.current >= 3) {
+              downloadMissRef.current = 0
+              setDownloading('')
+              setError('模型下载中断（网络到模型源不稳定），可点「下载/重装」再试一次')
+              void loadSettings().catch(() => {})
+            }
           }).catch(() => {})
         }, 1500)
         return () => { window.clearInterval(timer) }
@@ -3438,20 +3462,23 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
+      const modelTitle = (kind) => (kind === 'paraformer' ? 'Paraformer 中文识别模型' : kind === 'segmentation' ? '说话人分段模型' : '说话人声纹模型')
+
       const downloadModel = async (kind, force) => {
         setDownloading(kind)
         setError(null)
+        downloadMissRef.current = 0
         try {
           if (force === true) {
             await requestJson('/models/' + kind, { method: 'DELETE' }).catch(() => {})
           }
           await requestJson('/models/' + kind + '/download', { method: 'POST' })
-          notifySuccess('模型下载完成', kind === 'paraformer' ? 'Paraformer 中文识别模型已就绪' : (kind === 'segmentation' ? '说话人分段模型已就绪' : '声纹模型已就绪'))
+          notify('info', '开始下载', modelTitle(kind) + '（大模型需要几分钟，可关闭弹窗）')
+          // 进度与完成提示交给轮询（见下面的 effect），不要在这里提示"完成"
+          setModelsState((previous) => previous === null ? previous : { ...previous, downloading: { kind, percent: 0, fileName: '' } })
         } catch (caught) {
-          setError(messageOf(caught))
-        } finally {
           setDownloading('')
-          await loadSettings().catch(() => {})
+          setError(messageOf(caught))
         }
       }
 
@@ -3459,7 +3486,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         try {
           await requestJson('/models/' + kind, { method: 'DELETE' })
           await loadSettings()
-          notifySuccess('已删除模型', '')
+          notifySuccess('已卸载模型', modelTitle(kind) + ' 已从本机移除，可随时重装')
         } catch (caught) {
           setError(messageOf(caught))
         }
@@ -5929,12 +5956,25 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               'div',
               { key: toast.id, className: `dsm-toast dsm-toast--${toast.level ?? 'info'}` },
               h(
-                'div',
-                { className: 'dsm-toast-title' },
-                toast.level === 'error' ? '⚠ ' : toast.level === 'success' ? '✓ ' : '',
-                toast.title,
+                'span',
+                { className: 'dsm-toast-icon' },
+                h(Icon, {
+                  name: toast.level === 'error' ? 'alert' : toast.level === 'success' ? 'check' : toast.level === 'warn' ? 'info' : 'info',
+                  size: 14,
+                }),
               ),
-              toast.body ? h('div', { className: 'dsm-toast-body' }, toast.body) : null,
+              h(
+                'div',
+                { className: 'dsm-toast-content' },
+                h('div', { className: 'dsm-toast-title' }, toast.title),
+                toast.body ? h('div', { className: 'dsm-toast-body' }, toast.body) : null,
+              ),
+              h('button', {
+                type: 'button',
+                className: 'dsm-toast-close',
+                'aria-label': '关闭提示',
+                onClick: () => dismissToast(toast.id),
+              }, h(Icon, { name: 'close', size: 12 })),
             )),
           ),
       )
