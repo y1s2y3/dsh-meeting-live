@@ -134,12 +134,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-side-count{font-size:11px;color:var(--dsw-alias-label-secondary);font-weight:400}
 .dsm-search{position:relative;display:flex;align-items:center}
 .dsm-search .dsm-search-icon{position:absolute;left:8px;color:var(--dsw-alias-label-secondary);pointer-events:none;display:flex}
-.dsm-input{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);padding:5px 8px;font-size:12px;line-height:18px;font-family:inherit}
-.dsm-input::placeholder{color:var(--dsw-alias-label-secondary)}
-.dsm-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}
+/* 输入框：深一点的描边 + 内阴影，确保在白色弹窗里一眼看出是可输入的 */
+.dsm-input{width:100%;box-sizing:border-box;border:1px solid #C6D2E3;border-radius:8px;background:#FFFFFF;color:#0F172A;padding:6px 9px;font-size:12.5px;line-height:19px;font-family:inherit;box-shadow:inset 0 1px 2px rgba(15,23,42,.05);transition:border-color .12s ease,box-shadow .12s ease,background .12s ease}
+.dsm-input:hover:not(:disabled):not(:focus){border-color:#A8B8CE}
+.dsm-input::placeholder{color:#94A3B8;opacity:1}
+.dsm-input:focus{outline:none;border-color:#2F6BFF;background:#FFFFFF;box-shadow:0 0 0 3px rgba(47,107,255,.16),inset 0 1px 2px rgba(15,23,42,.04)}
+.dsm-input:disabled{background:#F1F5F9;color:#8A94A6;box-shadow:none;border-color:#DCE4EF}
 .dsm-input--search{padding-left:27px}
-.dsm-input--cell{padding:2px 6px;font-size:12px;line-height:17px}
+.dsm-input--cell{padding:3px 7px;font-size:12px;line-height:17px;border-radius:7px}
 .dsm-textarea{resize:vertical;min-height:96px;line-height:19px}
+/* 弹窗里的输入框再强调一档（弹窗背景是纯白，靠描边区分） */
+.dsm-modal .dsm-input,.dsm-modal .dsm-textarea{border-color:#BFCCDF;background:#FCFDFF}
+.dsm-modal .dsm-input:focus,.dsm-modal .dsm-textarea:focus{background:#FFFFFF}
+.dsm-modal .dsm-label{color:#64748B;font-weight:500}
 .dsm-filters{display:flex;gap:4px;flex-wrap:wrap}
 .dsm-filter{border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:6px;padding:2px 7px;font-size:11px;line-height:17px;font-family:inherit;cursor:pointer}
 .dsm-filter:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
