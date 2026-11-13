@@ -413,6 +413,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-minutes-spacer{flex:1 1 auto}
 .dsm-minutes-action{display:inline-flex;align-items:center;gap:4px;border:1px solid transparent;background:transparent;color:#5A6474;font-family:inherit;font-size:11px;line-height:16px;padding:3px 7px;border-radius:7px;cursor:pointer}
 .dsm-minutes-action:hover{background:#EEF3FB;color:#2563EB}
+.dsm-minutes-action--primary{background:#2563EB;border-color:#2563EB;color:#FFFFFF}
+.dsm-minutes-action--primary:hover:not(:disabled){background:#1D4ED8;border-color:#1D4ED8;color:#FFFFFF}
+.dsm-minutes-action:disabled{opacity:.5;cursor:not-allowed}
 .dsm-minutes-caret{display:inline-block;font-size:12px;line-height:12px;transform:translateY(-1px);transition:transform .16s ease}
 .dsm-minutes-caret--up{transform:translateY(-3px) rotate(180deg)}
 .dsm-minutes-body{position:relative;height:96px;overflow:hidden;padding:11px 14px;transition:height .18s ease}
@@ -4576,24 +4579,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       if (summary === null || summary === undefined) return null
       const oneLine = typeof summary.oneLine === 'string' ? summary.oneLine : ''
       const overview = typeof summary.overview === 'string' ? summary.overview : ''
-      const keyPoints = Array.isArray(summary.keyPoints) ? summary.keyPoints : []
       const decisions = Array.isArray(summary.decisions) ? summary.decisions : []
-      const risks = Array.isArray(summary.risks) ? summary.risks : []
       const textOf = (item) => (typeof item === 'string' ? item : String(item?.text ?? ''))
       const plain = []
       if (oneLine !== '') plain.push(oneLine)
       if (overview !== '') plain.push('', '【概述】', overview)
-      if (keyPoints.length > 0) {
-        plain.push('', '【关键要点】')
-        for (const item of keyPoints) plain.push('· ' + textOf(item))
-      }
       if (decisions.length > 0) {
         plain.push('', '【决策事项】')
         for (const item of decisions) plain.push('· ' + textOf(item))
-      }
-      if (risks.length > 0) {
-        plain.push('', '【风险】')
-        for (const item of risks) plain.push('· ' + textOf(item))
       }
       const copyAll = async () => {
         try {
@@ -4603,9 +4596,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         } catch { }
       }
       const groups = []
-      if (keyPoints.length > 0) groups.push({ title: '关键要点', items: keyPoints })
       if (decisions.length > 0) groups.push({ title: '决策事项', items: decisions })
-      if (risks.length > 0) groups.push({ title: '风险', items: risks })
       return h(
         'section',
         { className: 'dsm-minutes' + (expanded ? ' dsm-minutes--expanded' : '') },
@@ -4616,6 +4607,20 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           h('span', { className: 'dsm-minutes-title' }, 'AI 会议纪要'),
           summary.generatedAt ? h('span', { className: 'dsm-minutes-meta' }, '生成于 ' + formatStamp(summary.generatedAt)) : null,
           h('span', { className: 'dsm-minutes-spacer' }),
+          props.canSummarize === true
+            ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsm-minutes-action dsm-minutes-action--primary',
+                onClick: () => { if (typeof props.onSummarize === 'function') props.onSummarize() },
+                disabled: props.summarizing === true,
+                title: props.summarizing === true ? '正在重新生成…' : '重新生成会覆盖当前 AI 纪要',
+              },
+              h(Icon, { name: 'refresh', size: 12 }),
+              h('span', null, props.summarizing === true ? '生成中…' : '重新生成纪要'),
+            )
+            : null,
           h(
             'button',
             {
@@ -4688,7 +4693,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           hasTranscript,
           hasSummary,
         }),
-        h(AiMinutesCard, { summary }),
+        h(AiMinutesCard, {
+          summary,
+          onSummarize: props.onSummarize,
+          summarizing: props.summarizing !== null,
+          canSummarize: hasTranscript,
+        }),
         summaryStartedAt !== null
           ? h(SummarizingCard, { startedAt: summaryStartedAt })
           : null,
@@ -4705,7 +4715,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 'div',
                 { className: 'dsm-cta-text' },
                 hasTranscript
-                  ? '转写已就绪。点击生成结构化的关键要点、决策、风险和待办清单（约 30–120 秒）。'
+                  ? '转写已就绪。点击生成会议概述、决策事项与待办清单（约 30–120 秒）。'
                   : '先录音、导入音频或粘贴会议文本，然后让 AI 生成结构化纪要。',
               ),
             ),
@@ -4733,39 +4743,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               ),
           )
           : null,
-        hasSummary
-          ? h(
-            'div',
-            { className: 'dsm-doc-section' },
-            h(
-              'div',
-              { className: 'dsm-row-actions', style: { justifyContent: 'flex-end' } },
-              h('button', {
-                type: 'button',
-                className: 'dsm-btn dsm-btn--sm dsm-btn--ghost',
-                onClick: props.onSummarize,
-                disabled: props.summarizing !== null,
-                title: '重新生成会覆盖当前 AI 纪要',
-              }, h(Icon, { name: 'refresh', size: 11 }), h('span', null, props.summarizing !== null ? '生成中…' : '重新生成纪要')),
-            ),
-          )
-          : null,
-        keyPoints.length > 0
-          ? h(
-            Section,
-            { title: '关键要点', icon: 'list', count: keyPoints.length },
-            h(
-              'div',
-              { className: 'dsm-points' },
-              ...keyPoints.map((point, index) => h(
-                'div',
-                { key: `${index}-${point}`, className: 'dsm-point' },
-                h('span', { className: 'dsm-point-num' }, String(index + 1).padStart(2, '0')),
-                h('span', { className: 'dsm-point-text' }, point),
-              )),
-            ),
-          )
-          : null,
         decisions.length > 0
           ? h(
             Section,
@@ -4784,30 +4761,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   decision.owner ? h('div', { className: 'dsm-owner' }, `负责人：${decision.owner}`) : null,
                 ),
               )),
-            ),
-          )
-          : null,
-        risks.length > 0
-          ? h(
-            Section,
-            { title: '风险与待确认', icon: 'alert', count: risks.length },
-            h(
-              'div',
-              { className: 'dsm-blocks' },
-              ...risks.map((risk, index) => {
-                const level = risk.level === 'high' || risk.level === 'medium' ? risk.level : 'low'
-                return h(
-                  'div',
-                  { key: `${index}-${risk.text}`, className: `dsm-risk dsm-risk--${level}` },
-                  h('span', { className: 'dsm-risk-sign' }, h(Icon, { name: 'alert', size: 13 })),
-                  h(
-                    'div',
-                    { className: 'dsm-risk-body' },
-                    h('div', { className: 'dsm-risk-text' }, risk.text),
-                    h('div', { className: 'dsm-risk-level' }, RISK_LABELS[level] ?? '提示'),
-                  ),
-                )
-              }),
             ),
           )
           : null,
