@@ -5910,6 +5910,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
     function Toolbar(props) {
       const { state, handlers } = props
+      const refreshing = props.refreshing === true
       const meeting = state.meeting
       const summarizing = state.summarizing !== null
       const exporting = state.exporting !== null
@@ -6297,7 +6298,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       return h(
         'div',
         { className: 'dsm-root' },
-        h(Toolbar, { state, handlers }),
+        h(Toolbar, { state, handlers, refreshing }),
         state.error !== null && !(state.status === 'error' && state.data === null)
           ? h(
             'div',
