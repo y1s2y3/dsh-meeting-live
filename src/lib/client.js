@@ -4821,7 +4821,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         { className: 'dsm-empty' },
         h('div', { className: 'dsm-empty-icon' }, h(Icon, { name: 'mic', size: 30, strokeWidth: 1.3 })),
         h('div', { className: 'dsm-empty-title' }, '把会议变成可执行的纪要'),
-        h('div', { className: 'dsm-empty-sub' }, '录音或导入转写后，AI 会自动整理关键要点、决策、风险与待办；确认后一键写入DSH 待办。'),
+        h('div', { className: 'dsm-empty-sub' }, '录音或导入转写后，AI 会自动整理会议概述、决策事项与待办；确认后一键写入 DSH 待办。'),
         h(
           'div',
           { className: 'dsm-entries' },
@@ -5099,7 +5099,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         try {
           const payload = await summarizeMeetingById(id, force)
           const meeting = payload?.meeting
-          const oneLine = meeting?.summary?.oneLine ?? '关键要点、决策、风险与待办已更新'
+          const oneLine = meeting?.summary?.oneLine ?? '会议概述、决策与待办已更新'
           notifySuccess(
             force ? '已重新生成纪要' : '已生成 AI 纪要',
             payload?.renamedTo
