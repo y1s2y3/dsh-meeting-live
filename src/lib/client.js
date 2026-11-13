@@ -165,8 +165,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     .dsm-meeting-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
     .dsm-meeting-sep{width:2px;height:2px;border-radius:50%;background:var(--dsw-alias-label-secondary);opacity:.7}
     .dsm-meeting-source{font-size:10.5px;line-height:15px;color:var(--dsw-alias-label-secondary)}
-    .dsm-meeting-status{color:#15803D;border-color:#B9E3C9;background:#F2FBF6}
-.dsm-meeting-status--idle{border-color:#F3D6A5;color:#B45309;background:#FFF9F0}
+    .dsm-meeting-status{color:#0B7A3B;border-color:#8FD9AE;background:#E8F8EE;font-weight:600}
+.dsm-meeting-status--idle{border-color:#F7B267;color:#B45309;background:#FFF3E0;font-weight:600}
     .dsm-meeting-icon{flex:0 0 auto;display:inline-flex;color:var(--dsw-alias-label-secondary)}
     .dsm-meeting-time{flex:0 0 auto;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;letter-spacing:.2px}
     .dsm-meeting-status{flex:0 0 auto;font-size:10px;line-height:15px;padding:0 5px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 34%,transparent);color:var(--dsw-alias-brand-primary);white-space:nowrap}
@@ -458,7 +458,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 /* ── 录音弹窗：关键信息更醒目 ── */
 .dsm-rec-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .dsm-rec-item--wide{grid-column:span 2}
-.dsm-rec-item--full{grid-column:1 / -1}
+.dsm-rec-item--full{grid-column:1 / -1;align-items:flex-end}
+.dsm-rec-item--full .dsm-rec-item-icon{align-self:flex-start;margin-top:2px}
+.dsm-rec-item--full .dsm-rec-item-body{align-self:stretch}
+.dsm-rec-item--full .dsm-rec-toggle{align-self:flex-end}
 .dsm-rec-select{min-width:0}
 .dsm-rec-select > select{height:30px;width:100%;border:1px solid #E4E9F2;border-radius:8px;background:#FFFFFF;color:#0F172A;font-family:inherit;font-size:12.5px;font-weight:650;padding:0 8px;cursor:pointer}
 .dsm-rec-select > select:hover{border-color:#C7DAFF}
@@ -3900,6 +3903,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         try {
           const payload = await requestJson('/screen/identify', { method: 'POST', body: { source: form.screenSource } })
           if (payload?.ok !== true) throw new Error(payload?.error ?? '屏幕识别失败')
+          notifySuccess(
+            '已在「' + String(payload?.label ?? '所选屏幕') + '」上显示提示',
+            '约 3 秒后自动消失；若没看到，请确认这块显示器在你当前视野内',
+          )
         } catch (error) {
           reportError(error, '屏幕识别失败')
         }

@@ -301,6 +301,11 @@ export async function muxScreenWithAudio({ videoPath, audioPath, outPath, logger
   }
 }
 
+/** 屏幕提示的渲染日志（排查"点了没看到"时看这里）。 */
+export function markerLogPath() {
+  return join(dirname(mediaRoot()), 'meeting-minutes-marker.log')
+}
+
 /** 屏幕提示脚本路径（resources/screen-marker.ps1）。 */
 function markerScriptPath() {
   return join(dirname(fileURLToPath(import.meta.url)), '..', 'resources', 'screen-marker.ps1')
@@ -349,14 +354,14 @@ export async function identifyScreen(screenId, logger) {
     '-X', String(Math.round(bounds.x)), '-Y', String(Math.round(bounds.y)),
     '-W', String(Math.round(bounds.width)), '-H', String(Math.round(bounds.height)),
     '-Title', '当前录制屏幕',
-    '-Hint', label + ' · 录屏范围已锁定，稍后自动隐藏',
-    '-HoldMs', '2000',
-  ], { detached: true, stdio: 'ignore', windowsHide: true })
+    '-Hint', label + ' · 录屏范围已锁定，3 秒后自动隐藏',
+    '-HoldMs', '3000',
+    '-LogFile', markerLogPath(),
+  ], { stdio: 'ignore', windowsHide: true })
   markerChild = child
   child.once('exit', () => { if (markerChild === child) markerChild = null })
-  child.unref()
-  logger?.info?.('meeting-minutes: screen identify marker on ' + label)
-  return { ok: true, bounds, label }
+  logger?.info?.('meeting-minutes: screen identify marker on ' + label + ' (log: ' + markerLogPath() + ')')
+  return { ok: true, bounds, label, logPath: markerLogPath() }
 }
 
 /** 清理临时录屏文件（合成成功或失败后都调用）。 */
