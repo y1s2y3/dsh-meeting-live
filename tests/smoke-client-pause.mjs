@@ -139,6 +139,9 @@ code = code.replace(hookAnchor, `    globalThis.__TEST_HOOKS__ = {
       EmptyState,
       RecordModal,
       clearLiveRecording,
+      extractVoiceFeature,
+      assignLiveSpeaker,
+      resetSpeakers: () => { liveEngine.speakerCentroids = [] },
       liveState: () => snapshot.live,
     }
 ${hookAnchor}`);
@@ -393,6 +396,25 @@ walk(fileModal, (element) => {
   if (Array.isArray(options) && options.some((option) => String(option?.label ?? '').includes('系统默认输入设备'))) fileHasDeviceSelect = true;
 });
 check('录音转写入口：不出现麦克风设备选择', !fileHasDeviceSelect, '');
+
+/* 14. 按音色估算说话人：不同基频分到 A/B，同一基频归为同一人 */
+function tone(hz, seconds) {
+  const rate = 16000;
+  const out = new Float32Array(Math.round(rate * seconds));
+  for (let index = 0; index < out.length; index += 1) out[index] = Math.sin((2 * Math.PI * hz * index) / rate) * 0.6;
+  return out;
+}
+hooks.resetSpeakers();
+const lowFeature = hooks.extractVoiceFeature(tone(120, 2));
+const highFeature = hooks.extractVoiceFeature(tone(240, 2));
+check('音色特征能估出基频', lowFeature !== null && Math.abs(lowFeature.pitch - 120) < 12 && highFeature !== null && Math.abs(highFeature.pitch - 240) < 24, JSON.stringify({ low: lowFeature?.pitch, high: highFeature?.pitch }));
+const lowLabel = hooks.assignLiveSpeaker(lowFeature);
+const highLabel = hooks.assignLiveSpeaker(highFeature);
+check('按音色分出两位说话人（A/B）', lowLabel === 0 && highLabel === 1, JSON.stringify({ lowLabel, highLabel }));
+const lowAgain = hooks.assignLiveSpeaker(hooks.extractVoiceFeature(tone(122, 2)));
+check('相近音色归为同一位说话人', lowAgain === lowLabel, JSON.stringify({ lowLabel, lowAgain }));
+const third = hooks.assignLiveSpeaker(hooks.extractVoiceFeature(tone(175, 2)));
+check('最多扩展到第三位说话人 C', third === 2, JSON.stringify({ third }));
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

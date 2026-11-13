@@ -317,6 +317,45 @@ export function normalizeMeeting(raw, options = {}) {
       model: asText(input.model, ''),
     })
 
+  /** 录制产物（MP4/WAV）：只保留必要字段，避免把无关内容写进库。 */
+  const rawMedia = Array.isArray(input.media) ? input.media : (Array.isArray(base.media) ? base.media : [])
+  const media = rawMedia
+    .map((entry) => {
+      if (entry === null || typeof entry !== 'object') return null
+      const path = capText(entry.path, 600)
+      if (path === '') return null
+      const item = {
+        kind: entry.kind === 'video' ? 'video' : 'audio',
+        name: capText(entry.name, 200),
+        path,
+        bytes: Math.max(0, Math.round(Number(entry.bytes) || 0)),
+        seconds: Math.round(clampNumber(entry.seconds, 0, 0, 24 * 3600)),
+        savedAt: capText(entry.savedAt, 40),
+      }
+      if (entry.converting === true) item.converting = true
+      if (entry.converted === true) item.converted = true
+      const convertError = capText(entry.convertError, 200)
+      if (convertError !== '') item.convertError = convertError
+      return item
+    })
+    .filter((entry) => entry !== null)
+    .slice(0, 10)
+
+  /** 分说话人转写片段：{ speaker: 'A'..'Z' | '', text, at }。 */
+  const rawSegments = Array.isArray(input.transcriptSegments)
+    ? input.transcriptSegments
+    : (Array.isArray(base.transcriptSegments) ? base.transcriptSegments : [])
+  const transcriptSegments = rawSegments
+    .map((segment) => {
+      if (segment === null || typeof segment !== 'object') return null
+      const text = capText(segment.text, 2000)
+      if (text === '') return null
+      const speaker = /^[A-Z]$/.test(String(segment.speaker ?? '')) ? String(segment.speaker) : ''
+      return { speaker, text, at: Math.max(0, Math.round(Number(segment.at) || 0)) }
+    })
+    .filter((segment) => segment !== null)
+    .slice(0, 500)
+
   return {
     id: asText(input.id, asText(base.id, newId())),
     title,
@@ -325,6 +364,8 @@ export function normalizeMeeting(raw, options = {}) {
     sourceType,
     transcript,
     transcriptSeconds,
+    transcriptSegments,
+    media,
     notes,
     autoImported,
     summary,

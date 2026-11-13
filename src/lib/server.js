@@ -364,7 +364,7 @@ export function registerRoutes(ctx, deps) {
           requireMeeting(store, id)
           const body = await readJsonBody(req)
           const patch = {}
-          for (const key of ['title', 'date', 'attendees', 'transcript', 'notes', 'sourceType', 'transcriptSeconds']) {
+          for (const key of ['title', 'date', 'attendees', 'transcript', 'transcriptSegments', 'notes', 'sourceType', 'transcriptSeconds', 'media']) {
             if (body[key] !== undefined) patch[key] = body[key]
           }
           if (body.appendTranscript === true) {

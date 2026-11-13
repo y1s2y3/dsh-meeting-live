@@ -430,6 +430,31 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-minutes-dot{flex:0 0 auto;width:5px;height:5px;margin-top:7px;border-radius:50%;background:#93B4F5}
 .dsm-minutes-empty{font-size:12px;color:#8A94A6}
 
+/* ── 待办 / 原始转写：与会议纪要一致的卡片样式 ── */
+.dsm-root .dsm-section-card{background:#FFFFFF;border:1px solid #E3E9F2;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.05);overflow:hidden;padding:0}
+.dsm-root .dsm-section-card .dsm-section-band{margin:0;padding:10px 13px;border-bottom:1px solid #EDF1F7;background:linear-gradient(180deg,#F7FAFF,#FFFFFF)}
+.dsm-root .dsm-section-card .dsm-section-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:#E8F0FF;color:#2563EB}
+.dsm-root .dsm-section-card .dsm-section-title{font-size:12.5px;font-weight:650;color:#0F172A;letter-spacing:.1px}
+.dsm-root .dsm-section-card .dsm-section-count,.dsm-root .dsm-section-card .dsm-section-sub{font-size:11px;color:#8A94A6}
+.dsm-section-actions{margin-left:auto;display:inline-flex;align-items:center}
+.dsm-section-action-row{display:inline-flex;align-items:center;gap:4px}
+.dsm-root .dsm-section-card > *:not(.dsm-section-band){margin:11px 13px}
+.dsm-root .dsm-section-card > *:last-child{margin-bottom:13px}
+.dsm-root .dsm-section-card > .dsm-todo-card{border:0;padding:0;background:transparent}
+.dsm-root .dsm-section-card > .dsm-transcript{border:0;background:transparent;padding:0}
+.dsm-transcript-lines{position:relative;max-height:132px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
+.dsm-transcript-lines--open{max-height:420px;overflow:auto}
+.dsm-transcript-lines:not(.dsm-transcript-lines--open)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:26px;background:linear-gradient(180deg,rgba(255,255,255,0),#FFFFFF);pointer-events:none}
+.dsm-transcript-line{display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:20px;color:#334155}
+.dsm-transcript-text{flex:1 1 auto;min-width:0;white-space:pre-wrap;word-break:break-word}
+.dsm-speaker{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-top:1px;padding:0 4px;border-radius:6px;font-size:10.5px;font-weight:700;color:#FFFFFF;background:#2F6BFF}
+.dsm-speaker--b{background:#7C3AED}
+.dsm-speaker--c{background:#059669}
+.dsm-speaker--d{background:#D97706}
+.dsm-speaker--x{background:#94A3B8}
+.dsm-transcript-plain{font-size:12px;line-height:20px;color:#334155;white-space:pre-wrap;max-height:220px;overflow:auto;font-family:inherit}
+.dsm-transcript-note{margin-top:8px;font-size:11px;line-height:16px;color:#8A94A6}
+
 /* ── 浅灰底 + 白色/浅蓝主题 ── */
 .dsm-root{--dsm-accent:#2F6BFF;--dsm-accent-strong:#2459E6;--dsm-accent-soft:#EAF1FF;--dsm-accent-line:#C7DAFF;--dsm-canvas:#F4F6FA;--dsm-surface:#FFFFFF;--dsm-line:#E4E9F2;--dsm-ink:#0F172A;--dsm-ink-2:#475569;--dsm-ink-3:#8A94A6;background:var(--dsm-canvas)}
 .dsm-root .dsm-toolbar{background:var(--dsm-surface);border-bottom:1px solid var(--dsm-line)}
@@ -1559,6 +1584,98 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       return merged
     }
 
+    /**
+     * 估算一段音频的「音色特征」（基频中位数 + 能量）。
+     * 只用于把不同说话人粗略分成 A/B/C/D 四组，不参与语音识别本身。
+     * @param samples - 16kHz Float32 音频。
+     * @returns `{ pitch, energy }`，静音段返回 null。
+     */
+    function extractVoiceFeature(samples) {
+      const rate = TARGET_RATE
+      const frameSize = Math.round(rate * 0.04)
+      const hop = Math.round(rate * 0.02)
+      if (samples.length < frameSize * 2) return null
+      const frames = []
+      let totalEnergy = 0
+      let frameCount = 0
+      for (let offset = 0; offset + frameSize <= samples.length; offset += hop) {
+        let energy = 0
+        for (let index = 0; index < frameSize; index += 1) {
+          const value = samples[offset + index]
+          energy += value * value
+        }
+        energy /= frameSize
+        totalEnergy += energy
+        frameCount += 1
+        if (energy > 1e-4) frames.push({ offset, energy })
+      }
+      if (frameCount === 0 || frames.length === 0) return null
+      const medianEnergy = totalEnergy / frameCount
+      // 取能量最高的若干帧估计基频，避免噪声段干扰
+      frames.sort((left, right) => right.energy - left.energy)
+      const picked = frames.slice(0, 12)
+      const minLag = Math.floor(rate / 400)
+      const maxLag = Math.floor(rate / 80)
+      const pitches = []
+      for (const frame of picked) {
+        let bestLag = 0
+        let bestScore = 0
+        for (let lag = minLag; lag <= maxLag && lag < frameSize - 8; lag += 1) {
+          let score = 0
+          for (let index = 0; index < frameSize - lag; index += 1) {
+            score += samples[frame.offset + index] * samples[frame.offset + index + lag]
+          }
+          if (score > bestScore) {
+            bestScore = score
+            bestLag = lag
+          }
+        }
+        if (bestLag > 0) pitches.push(rate / bestLag)
+      }
+      if (pitches.length === 0) return null
+      pitches.sort((left, right) => left - right)
+      return {
+        pitch: pitches[Math.floor(pitches.length / 2)],
+        energy: medianEnergy,
+      }
+    }
+
+    /**
+     * 在线聚类：按基频（对数尺度）把每段音频归到 A/B/C/D 某个说话人。
+     * 超过 4 人时归到最接近的一组；静音段返回 -1。
+     */
+    function assignLiveSpeaker(feature) {
+      if (feature === null) return -1
+      const centroids = liveEngine.speakerCentroids
+      const logPitch = Math.log2(feature.pitch)
+      let best = -1
+      let bestDistance = Infinity
+      for (let index = 0; index < centroids.length; index += 1) {
+        const distance = Math.abs(logPitch - Math.log2(centroids[index].pitch))
+        if (distance < bestDistance) {
+          bestDistance = distance
+          best = index
+        }
+      }
+      // 约 1 个半音以内视为同一人
+      const threshold = 0.09
+      if (best >= 0 && bestDistance <= threshold) {
+        centroids[best].pitch = centroids[best].pitch * 0.7 + feature.pitch * 0.3
+        centroids[best].energy = centroids[best].energy * 0.7 + feature.energy * 0.3
+        return best
+      }
+      if (centroids.length >= 4) {
+        if (best >= 0) {
+          centroids[best].pitch = centroids[best].pitch * 0.8 + feature.pitch * 0.2
+          return best
+        }
+        return 0
+      }
+      centroids.push({ pitch: feature.pitch, energy: feature.energy })
+      return centroids.length - 1
+    }
+
+
     const liveEngine = {
       stream: null,
       context: null,
@@ -1589,6 +1706,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       videoChunks: [],
       videoMime: '',
       pendingDisplay: null,
+      speakerCentroids: [],
+      segments: [],
       waiters: [],
       beforeUnload: null,
     }
@@ -2004,7 +2123,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }
     }
 
-    function applyLiveChunk(payload) {
+    function applyLiveChunk(payload, speakerIndex = -1) {
       const status = snapshot.live.status
       if (status !== 'preparing' && status !== 'recording' && status !== 'stopping') return
       const text = String(payload?.text ?? '').trim()
@@ -2023,13 +2142,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       } else if (text !== '') {
         liveEngine.emptyChunks = 0
       }
-      if (text === '' && snapshot.live.chars === 0) {
-        liveEngine.emptyChunks += 1
-        if (liveEngine.emptyChunks === 8) {
-          notify('warn', '一直没识别到语音', '请确认麦克风输入设备与系统音量（录音弹窗里可改选设备）')
-        }
-      } else if (text !== '') {
-        liveEngine.emptyChunks = 0
+      if (text !== '') {
+        // 记一段「说话人 + 文本」，结束后存进会议，用于按 A/B/C/D 展示。
+        const startedAt = Number(snapshot.live.startedAt) || Date.now()
+        liveEngine.segments.push({
+          speaker: speakerIndex >= 0 ? String.fromCharCode(65 + (speakerIndex % 26)) : '',
+          text,
+          at: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+        })
       }
       const patch = { transcript, chars: transcript.length, error: null }
       if (text !== '') patch.lastText = text.length > 90 ? text.slice(-90) : text
@@ -2038,6 +2158,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         const nextMeeting = { ...snapshot.meeting, transcript }
         const seconds = Number(payload?.transcriptSeconds)
         if (Number.isFinite(seconds) && seconds > 0) nextMeeting.transcriptSeconds = seconds
+        if (liveEngine.segments.length > 0) nextMeeting.transcriptSegments = liveEngine.segments
         commit({ meeting: nextMeeting })
       }
     }
@@ -2054,6 +2175,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     async function sendLiveChunk(samples) {
       const meetingId = snapshot.live.meetingId
       const session = liveEngine.sessionId
+      // 音色分组在录音线程里算好，跟着这段文本一起入库（只用于展示 A/B/C/D）。
+      const speakerIndex = assignLiveSpeaker(extractVoiceFeature(samples))
       try {
         if (meetingId === null) throw new Error('录制的会议不存在，无法转写')
         // 单段转写失败自动重试一次：网络抖动 / 识别服务短暂忙都常见，
@@ -2073,7 +2196,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         if (payload === null) throw lastError ?? new Error('实时转写失败')
         if (liveEngine.sessionId === session) {
           liveEngine.chunkFailures = 0
-          applyLiveChunk(payload)
+          applyLiveChunk(payload, speakerIndex)
         }
       } catch (error) {
         if (liveEngine.sessionId === session) {
@@ -2373,6 +2496,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       liveEngine.chunkFailures = 0
       liveEngine.orbWarned = false
       liveEngine.pcmParts = []
+      liveEngine.speakerCentroids = []
+      liveEngine.segments = []
       liveEngine.pendingDisplay = input?.display ?? null
       liveEngine.level = 0
       resetLiveState({
@@ -2484,6 +2609,16 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         savedMedia = await saveRecordingMedia(meetingId, videoBlob, seconds)
         if (savedMedia.length > 0) publishLive({ media: savedMedia })
         if (savedMedia.some((item) => item.converting === true)) void pollMediaConversion(meetingId)
+      }
+      // 把「说话人 + 文本」的分段写回会议，原始转写卡片据此按 A/B/C/D 展示。
+      const speakerSegments = liveEngine.segments
+      if (meetingId !== null && speakerSegments.length > 0) {
+        try {
+          const updated = await patchMeeting(meetingId, { transcriptSegments: speakerSegments })
+          if (updated !== null && updated !== undefined) commit({ meeting: updated, selectedId: meetingId })
+        } catch (error) {
+          reportError(error, '保存说话人标记失败')
+        }
       }
       const failure = liveEngine.failureMessage
       releaseLiveAudio()
@@ -2810,7 +2945,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     function Section(props) {
       return h(
         'section',
-        { className: 'dsm-doc-section' },
+        { className: 'dsm-doc-section' + (props.card === true ? ' dsm-section-card' : '') },
         h(
           'div',
           { className: 'dsm-section-band' },
@@ -2818,6 +2953,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           h('h2', { className: 'dsm-section-title' }, props.title),
           props.count !== undefined ? h('span', { className: 'dsm-section-count' }, `（${props.count}）`) : null,
           props.sub ? h('span', { className: 'dsm-section-sub' }, props.sub) : null,
+          props.actions ? h('span', { className: 'dsm-section-actions' }, props.actions) : null,
         ),
         props.children,
       )
@@ -4458,6 +4594,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           title: '待办事项',
           icon: 'check',
           count: todos.length,
+          card: true,
           sub: summary ? `已写入 ${todos.length - pending.length} / ${todos.length}` : undefined,
         },
         h(
@@ -4530,11 +4667,23 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
     function TranscriptSection(props) {
       const text = String(props.transcript ?? '')
+      const segments = Array.isArray(props.segments) ? props.segments : []
       const [open, setOpen] = useState(false)
       const [copied, setCopied] = useState(false)
+      const speakerCount = segments.reduce((count, segment) => {
+        const label = typeof segment?.speaker === 'string' ? segment.speaker : ''
+        return label !== '' && !count.includes(label) ? [...count, label] : count
+      }, []).length
+      const plainOf = () => {
+        if (segments.length === 0) return text
+        return segments.map((segment) => {
+          const label = typeof segment?.speaker === 'string' && segment.speaker !== '' ? segment.speaker + '：' : ''
+          return label + String(segment?.text ?? '')
+        }).join('\n')
+      }
       const copy = async () => {
         try {
-          await copyText(text)
+          await copyText(plainOf())
           setCopied(true)
           notifySuccess('已复制原始转写', formatChars(text.length))
           window.setTimeout(() => setCopied(false), 2000)
@@ -4542,30 +4691,55 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           reportError(caught, '复制失败')
         }
       }
+      const actions = [
+        h('button', {
+          key: 'copy',
+          type: 'button',
+          className: 'dsm-minutes-action',
+          onClick: () => { void copy() },
+          disabled: text === '',
+          title: '复制转写全文（带说话人标记）',
+        }, h(Icon, { name: 'copy', size: 12 }), h('span', null, copied ? '已复制' : '复制')),
+        h('button', {
+          key: 'toggle',
+          type: 'button',
+          className: 'dsm-minutes-action',
+          onClick: () => setOpen((previous) => !previous),
+          title: open ? '收起' : '展开全文',
+        }, h('span', null, open ? '收起' : '展开'), h('span', { className: 'dsm-minutes-caret' + (open ? ' dsm-minutes-caret--up' : '') }, '⌄')),
+      ]
       return h(
         Section,
-        { title: '原始转写', icon: 'doc', sub: formatChars(text.length) },
+        {
+          title: '原始转写',
+          icon: 'doc',
+          card: true,
+          sub: speakerCount > 0 ? formatChars(text.length) + ' · ' + speakerCount + ' 位说话人' : formatChars(text.length),
+          actions: h('div', { className: 'dsm-section-action-row' }, ...actions),
+        },
         h(
           'div',
-          { className: 'dsm-transcript' },
-          h(
-            'div',
-            { className: 'dsm-transcript-head' },
-            h('button', {
-              type: 'button',
-              className: 'dsm-transcript-toggle',
-              onClick: () => setOpen((previous) => !previous),
-            }, h(Icon, { name: 'chevron', size: 12, className: open ? 'dsm-chevron--open' : undefined }), h('span', null, open ? '收起转写' : '展开转写'), h('span', { className: 'dsm-transcript-meta' }, formatChars(text.length))),
-            h('span', { className: 'dsm-spacer' }),
-            h('button', {
-              type: 'button',
-              className: 'dsm-btn dsm-btn--sm',
-              onClick: () => { void copy() },
-              disabled: text === '',
-            }, h(Icon, { name: 'copy', size: 11 }), h('span', null, copied ? '已复制' : '复制全文')),
-          ),
-          open
-            ? h('pre', { className: 'dsm-transcript-body' }, text === '' ? '（暂无转写文本）' : text)
+          { className: 'dsm-transcript dsm-transcript--card' },
+          segments.length > 0
+            ? h(
+              'div',
+              { className: 'dsm-transcript-lines' + (open ? ' dsm-transcript-lines--open' : '') },
+              ...segments.map((segment, index) => {
+                const label = typeof segment?.speaker === 'string' ? segment.speaker : ''
+                const tone = label === '' ? 'x' : label.toLowerCase()
+                return h(
+                  'div',
+                  { key: 'seg-' + String(index), className: 'dsm-transcript-line' },
+                  label === ''
+                    ? null
+                    : h('span', { className: 'dsm-speaker dsm-speaker--' + tone }, label),
+                  h('span', { className: 'dsm-transcript-text' }, String(segment?.text ?? '')),
+                )
+              }),
+            )
+            : h('div', { className: 'dsm-transcript-plain' }, text === '' ? '（暂无转写文本）' : text),
+          speakerCount > 0
+            ? h('div', { className: 'dsm-transcript-note' }, 'A/B/C/D 为按音色自动分组的估算结果，仅供参考；导入的音频文件暂不区分说话人。')
             : null,
         ),
       )
@@ -4764,28 +4938,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             ),
           )
           : null,
-        sections.length > 0
-          ? h(
-            Section,
-            { title: '分节纪要', icon: 'doc', count: sections.length },
-            h(
-              'div',
-              { className: 'dsm-blocks' },
-              ...sections.map((section, index) => h(
-                'div',
-                { key: `${index}-${section.heading}`, className: 'dsm-block' },
-                h('div', { className: 'dsm-block-heading' }, section.heading),
-                Array.isArray(section.bullets) && section.bullets.length > 0
-                  ? h('ul', { className: 'dsm-bullets' }, ...section.bullets.map((bullet, bulletIndex) => h(
-                    'li',
-                    { key: `${bulletIndex}-${bullet}`, className: 'dsm-bullet' },
-                    bullet,
-                  )))
-                  : null,
-              )),
-            ),
-          )
-          : null,
         hasSummary && Array.isArray(summary?.todos)
           ? h(TodoSection, {
             meeting,
@@ -4803,7 +4955,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           )
           : null,
         hasTranscript
-          ? h(TranscriptSection, { transcript: meeting.transcript })
+          ? h(TranscriptSection, { transcript: meeting.transcript, segments: meeting.transcriptSegments })
           : null,
         attendees.length === 0
           ? null
