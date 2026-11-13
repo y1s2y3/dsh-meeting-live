@@ -373,6 +373,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-stage-title{font-size:14px;font-weight:600}
 .dsm-stage-text{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:19px;max-width:420px;word-break:break-word}
 .dsm-done-icon{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
+.dsm-error-panel{display:flex;flex-direction:column;gap:8px;margin:12px;padding:12px;border:1px solid #F4C7C7;border-radius:10px;background:#FEF2F2;color:#7F1D1D}
+.dsm-error-title{font-size:12.5px;font-weight:650;line-height:18px}
+.dsm-error-body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:17px;word-break:break-word;background:#FFFFFF;border:1px solid #FBE0E0;border-radius:8px;padding:8px;max-height:180px;overflow:auto}
+.dsm-error-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dsm-toast-stack{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;flex-direction:column;gap:8px;max-width:min(400px,90vw);pointer-events:none}
 .dsm-toast{pointer-events:auto;display:flex;align-items:flex-start;gap:10px;border:1px solid #E4E9F2;border-radius:12px;background:#FFFFFF;color:#0F172A;box-shadow:0 12px 28px rgba(15,23,42,.14);padding:11px 12px;padding:9px 12px;animation:dsm-toast-in .16s ease}
 @keyframes dsm-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -4605,7 +4609,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                       },
                       options: [
                         { value: '', label: '系统默认输入设备' },
-                        ...inputDevices.map((device) => ({ value: device.deviceId, label: device.label })),
+                        ...(Array.isArray(inputDevices) ? inputDevices : []).map((device) => ({ value: device.deviceId, label: device.label })),
                       ],
                     }),
                   ),
@@ -6371,6 +6375,54 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
     const inject = ['slots', 'layout']
 
+    /**
+     * 兜底错误边界：插件任何组件渲染抛错时展示可见的错误信息，
+     * 而不是整块面板白屏（便于用户截图反馈、也能点重试恢复）。
+     */
+    class PanelErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+        this.retry = this.retry.bind(this)
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error }
+      }
+
+      componentDidCatch(error) {
+        try { console.error('[meeting-minutes] render error', error) } catch { /* ignore */ }
+        try { window.__dsmMeetingMinutesError = String(error && error.stack ? error.stack : error) } catch { /* ignore */ }
+      }
+
+      retry() {
+        this.setState({ error: null })
+      }
+
+      render() {
+        if (this.state.error !== null) {
+          const message = String(this.state.error && this.state.error.message ? this.state.error.message : this.state.error)
+          return h(
+            'div',
+            { className: 'dsm-error-panel' },
+            h('div', { className: 'dsm-error-title' }, '会议纪要渲染出错（已拦截，避免白屏）'),
+            h('div', { className: 'dsm-error-body' }, message),
+            h('div', { className: 'dsm-error-actions' },
+              h('button', { type: 'button', className: 'dsm-btn dsm-btn--primary dsm-btn--sm', onClick: this.retry }, '重试'),
+              h('span', { className: 'dsm-hint' }, '若反复出现，请把这条错误信息截图反馈'),
+            ),
+          )
+        }
+        return this.props.children === undefined ? null : this.props.children
+      }
+    }
+
+    function withErrorBoundary(Component) {
+      return function MeetingMinutesBoundary(props) {
+        return h(PanelErrorBoundary, null, h(Component, props))
+      }
+    }
+
     function apply(ctx) {
       clientContext = ctx
       ensureStyle()
@@ -6379,17 +6431,17 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         id: 'meeting-minutes',
         order: 45,
         label: '会议纪要',
-      }, MeetingGlyph))
+      }, withErrorBoundary(MeetingGlyph)))
       ctx.slots.inject('main', () => ctx.slots.register({
         name: 'main',
         key: 'meeting-minutes',
-      }, MeetingPanel))
+      }, withErrorBoundary(MeetingPanel)))
       ctx.slots.inject('shell.overlay', () => ctx.slots.register({
         name: 'shell.overlay',
         id: 'meeting-minutes-toasts',
         order: 30,
         label: '会议纪要通知',
-      }, ToastOverlay))
+      }, withErrorBoundary(ToastOverlay)))
       // Poll for auto-ingested meetings and fresh status; the interval is owned
       // by the plugin effect so unloading the bundle clears it.
       ctx.effect(() => {

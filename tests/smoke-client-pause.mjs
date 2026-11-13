@@ -25,6 +25,13 @@ let hookCursor = 0;
 const hookStates = [];
 const hookRefs = [];
 const React = {
+  Component: class Component {
+    constructor(props) { this.props = props; this.state = {}; }
+    setState(update) {
+      const next = typeof update === 'function' ? update(this.state) : update;
+      this.state = { ...this.state, ...(next ?? {}) };
+    }
+  },
   createElement,
   Fragment,
   useState(init) {

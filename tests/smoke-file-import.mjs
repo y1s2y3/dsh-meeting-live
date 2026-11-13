@@ -7,6 +7,13 @@ let code = fs.readFileSync(file, 'utf8');
 const hookStates = [];
 let hookIndex = 0;
 const React = {
+  Component: class Component {
+    constructor(props) { this.props = props; this.state = {}; }
+    setState(update) {
+      const next = typeof update === 'function' ? update(this.state) : update;
+      this.state = { ...this.state, ...(next ?? {}) };
+    }
+  },
   createElement(type, props, ...children) {
     return { type, props: { ...(props ?? {}), children: children.length === 0 ? undefined : (children.length === 1 ? children[0] : children) }, isElement: true };
   },
