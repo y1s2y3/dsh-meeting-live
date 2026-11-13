@@ -305,6 +305,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-modal-title{font-size:15px;font-weight:650}
 .dsm-modal-sub{margin-top:3px;font-size:11.5px;line-height:18px;color:var(--dsw-alias-label-secondary)}
 .dsm-modal-lock{font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding-top:3px}
+.dsm-settings-btn{height:27px;padding:0 11px;gap:6px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);font-size:12px;font-weight:550;color:var(--dsw-alias-label-primary);box-shadow:0 1px 1px color-mix(in srgb,#000 4%,transparent)}
+.dsm-settings-btn svg{color:var(--dsw-alias-brand-primary)}
+.dsm-settings-btn:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 36%,transparent);color:var(--dsw-alias-brand-primary)}
 .dsm-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-family:inherit;padding:0}
 .dsm-iconbtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-modal-body{padding:4px 18px 14px;overflow:auto;display:flex;flex-direction:column;gap:10px}
@@ -2914,7 +2917,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       folder: ['M2.8 4.2h4l1.2 1.5h5.2v6.8H2.8z'],
       info: ['M8 3a5 5 0 1 0 0 10A5 5 0 0 0 8 3Z', 'M8 7.4v3.4', 'M8 5.2v.2'],
       screen: ['M2.6 3.6h10.8v6.6H2.6z', 'M5.6 12.6h4.8', 'M8 10.2v2.4'],
-      gear: ['M8 5.4a2.6 2.6 0 1 0 0 5.2A2.6 2.6 0 0 0 8 5.4Z', 'M8 2.2v1.2M8 12.6v1.2M2.2 8h1.2M12.6 8h1.2M3.9 3.9l.9.9M11.2 11.2l.9.9M12.1 3.9l-.9.9M4.8 11.2l-.9.9'],
+      sliders: ['M2.6 4.6h3.2', 'M10 4.6h3.4', 'M2.6 8h1.4', 'M8.2 8h5.2', 'M2.6 11.4h4.8', 'M11.6 11.4h1.8', 'M7.5 3.4a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z', 'M5.9 6.8a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z', 'M9.4 10.2a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z'],
     }
 
     function Icon(props) {
@@ -3019,12 +3022,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         'button',
         {
           type: 'button',
-          className: `dsm-btn${props.variant ? ` dsm-btn--${props.variant}` : ''}`,
+          className: `dsm-btn${props.variant ? ` dsm-btn--${props.variant}` : ''}${props.className ? ` ${props.className}` : ''}`,
           onClick: props.onClick,
           disabled: props.disabled === true,
           title: props.title ?? undefined,
         },
-        props.icon ? h(Icon, { name: props.icon, size: 13 }) : null,
+        props.icon ? h(Icon, { name: props.icon, size: props.iconSize ?? 13 }) : null,
         h('span', null, props.label),
       )
     }
@@ -5465,18 +5468,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           { className: 'dsm-brand' },
           h('span', { className: 'dsm-brand-title' }, '会议纪要'),
         ),
-        h(
-          'div',
-          { className: 'dsm-actions' },
-          // 新建 / 录音 / 导入 已移到左侧会议列表上方（更大更好点）
-          // 四个按会议走的操作（AI 生成 / 导出 / 删除）已移入会议记录封面区
-          h(ToolbarButton, {
-            icon: 'gear',
-            label: '设置',
-            onClick: handlers.settings,
-            title: '设置：生成纪要用哪个模型、自动入库开关与扫描',
-          }),
-        ),
         h('span', { className: 'dsm-spacer' }),
         h(SpeechChip, null),
         h('button', {
@@ -5486,6 +5477,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           title: '刷新',
           'aria-label': '刷新',
         }, h(Icon, { name: 'refresh', size: 14 })),
+        h(ToolbarButton, {
+          icon: 'sliders',
+          iconSize: 14,
+          className: 'dsm-settings-btn',
+          label: '设置',
+          onClick: handlers.settings,
+          title: '设置：生成纪要用哪个模型、自动入库开关与扫描',
+        }),
       )
     }
 
