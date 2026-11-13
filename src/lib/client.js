@@ -348,7 +348,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-radio-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
 .dsm-radio{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .dsm-radio input{accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-file-pick{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px dashed var(--dsw-alias-border-l2);border-radius:9px;padding:10px;background:color-mix(in srgb,var(--dsw-alias-label-secondary) 3%,transparent)}
+.dsm-file-pick{display:flex;flex-direction:column;gap:8px;border:1px dashed #D9E2F0;border-radius:10px;padding:10px;background:#FBFCFE}
+.dsm-file-first{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.dsm-file-selected{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid #E4E9F2;border-radius:10px;background:#FFFFFF}
+.dsm-file-selected .dsm-file-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:#E8F0FF;color:#2563EB}
+.dsm-file-selected .dsm-file-main{flex:1;min-width:0}
+.dsm-file-selected .dsm-file-name{font-size:12.5px;line-height:18px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-file-selected .dsm-file-meta{font-size:10.5px;line-height:15px;color:#8A94A6}
 .dsm-file-name{font-size:11.5px;color:var(--dsw-alias-label-secondary);word-break:break-all}
 .dsm-progress-card{display:flex;flex-direction:column;gap:7px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 32%,var(--dsw-alias-border-l1));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,var(--dsw-alias-bg-base));padding:10px 12px}
 .dsm-progress-head{display:flex;align-items:center;gap:8px;font-size:12px;line-height:18px}
@@ -840,8 +846,21 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     function defaultImportTitle(fileName) {
-      const base = String(fileName ?? '').replace(/\.[^.]+$/, '').trim()
-      return base !== '' ? base : `会议纪要 ${todayKey()}`
+      return buildTitleFromFileName(fileName)
+    }
+
+    /** 从文件名解析会议标题：去扩展名、去「会议录音」等前缀与时间戳，最多 40 字。 */
+    function buildTitleFromFileName(fileName) {
+      let base = String(fileName ?? '').replace(/\.[^.]+$/, '').trim()
+      base = base
+        .replace(/^(会议)?(录音|录屏|录像|音频|视频|meeting|recording|audio|video)[-_\s]*/i, '')
+        .replace(/[_-]?\d{8}[-_\s]?\d{4,6}/g, ' ')
+        .replace(/\d{4}[-_.年]\d{1,2}[-_.月]\d{1,2}([日_\sT]+\d{1,2}[-_.:时]\d{1,2}([-_.:分]\d{1,2}秒?)?)?/g, ' ')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      if (base === '') base = defaultRecordingTitle()
+      return base.length > 40 ? base.slice(0, 40) : base
     }
 
     function isPushed(todo) {
@@ -3056,8 +3075,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         type: props.type ?? 'text',
         value: props.value ?? '',
         placeholder: props.placeholder ?? '',
+        maxLength: props.maxLength ?? undefined,
         onChange: (event) => { props.onChange(event.target.value) },
         onKeyDown: props.onKeyDown,
+        onBlur: props.onBlur,
       })
     }
 
@@ -4072,6 +4093,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [fileResult, setFileResult] = useState(null)
       const [processLabel, setProcessLabel] = useState('')
       const [pickedName, setPickedName] = useState('')
+      const [pickedFile, setPickedFile] = useState(null)
       const [inputDevices, setInputDevices] = useState(() => [])
       const [inputDeviceId, setInputDeviceId] = useState(() => selectedInputDeviceId)
       const fileRef = useRef(null)
@@ -4676,17 +4698,22 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               h('span', null, '结束后自动生成：MP4 视频（带配音） + WAV 音频'),
             )
             : null,
-          h(
-            'div',
-            { key: 'form', className: 'dsm-rec-form' },
+          tab === 'record' || pickedFile !== null
+            ? h(
+              'div',
+              { key: 'form', className: 'dsm-rec-form' },
             h(
               'div',
               { className: 'dsm-rec-title' },
-              h(Field, { label: '会议标题（留空自动命名）' }, h(TextInput, {
+              h(Field, { label: tab === 'file' ? '会议标题（已根据文件名自动生成，可修改）' : '会议标题（留空自动命名）' }, h(TextInput, {
                 value: form.title,
+                maxLength: 60,
                 onChange: update('title'),
                 placeholder: defaultRecordingTitle(),
               })),
+              tab === 'file' && pickedFile !== null
+                ? h('div', { className: 'dsm-hint' }, '最多 60 字 · 已用 ' + String(form.title.length) + ' 字')
+                : null,
             ),
             h(
               'div',
@@ -4698,7 +4725,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 placeholder: '张三，李四',
               })),
             ),
-          ),
+            )
+            : null,
           h(
             'div',
             { key: 'hint', className: 'dsm-rec-tip' },
@@ -4719,13 +4747,29 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             ? h(
               'div',
               { key: 'file', className: 'dsm-file-pick' },
-              h('button', {
-                type: 'button',
-                className: 'dsm-btn',
-                onClick: () => { fileRef.current?.click() },
-                disabled: !speechAvailable || fileBusy,
-              }, h(Icon, { name: 'upload', size: 13 }), h('span', null, '选择音频 / 视频文件')),
-              pickedName !== '' ? h('span', { className: 'dsm-file-name' }, `已选择：${pickedName}`) : null,
+              pickedFile === null
+                ? h('div', { className: 'dsm-file-first' },
+                  h('button', {
+                    type: 'button',
+                    className: 'dsm-btn dsm-btn--primary',
+                    onClick: () => { fileRef.current?.click() },
+                    disabled: !speechAvailable || fileBusy,
+                  }, h(Icon, { name: 'upload', size: 13 }), h('span', null, '选择音频 / 视频文件')),
+                  h('span', { className: 'dsm-hint' }, '先选文件，标题会自动根据文件名生成（可修改），再点开始转写'),
+                )
+                : h('div', { className: 'dsm-file-selected' },
+                  h('span', { className: 'dsm-file-icon' }, h(Icon, { name: 'doc', size: 14 })),
+                  h('div', { className: 'dsm-file-main' },
+                    h('div', { className: 'dsm-file-name' }, pickedFile.name),
+                    h('div', { className: 'dsm-file-meta' }, '已选择文件 · ' + Math.max(1, Math.round(pickedFile.size / 1024)) + ' KB'),
+                  ),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsm-btn dsm-btn--sm',
+                    onClick: () => { fileRef.current?.click() },
+                    disabled: fileBusy,
+                  }, '重新选择'),
+                ),
               h('input', {
                 ref: fileRef,
                 type: 'file',
@@ -4734,7 +4778,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 onChange: (event) => {
                   const file = event.target.files?.[0]
                   event.target.value = ''
-                  if (file) void runFileImport(file)
+                  if (!file) return
+                  setPickedFile(file)
+                  setPickedName(file.name)
+                  setFileError(null)
+                  setFileStage('idle')
+                  update('title')(buildTitleFromFileName(file.name))
                 },
               }),
             )
@@ -4855,14 +4904,23 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               disabled: !speechAvailable,
               title: speechAvailable ? undefined : '本机语音识别服务不可用',
             }, h(Icon, { name: 'mic', size: 13 }), h('span', null, '开始会议'))
-            : h('button', {
-              key: 'pick',
-              type: 'button',
-              className: 'dsm-btn dsm-btn--primary',
-              onClick: () => { fileRef.current?.click() },
-              disabled: !speechAvailable || fileBusy,
-              title: speechAvailable ? undefined : '本机语音识别服务不可用',
-            }, h(Icon, { name: 'upload', size: 13 }), h('span', null, '选择文件并转写')),
+            : pickedFile === null
+              ? h('button', {
+                key: 'pick',
+                type: 'button',
+                className: 'dsm-btn dsm-btn--primary',
+                onClick: () => { fileRef.current?.click() },
+                disabled: !speechAvailable || fileBusy,
+                title: speechAvailable ? undefined : '本机语音识别服务不可用',
+              }, h(Icon, { name: 'upload', size: 13 }), h('span', null, '选择音频 / 视频文件'))
+              : h('button', {
+                key: 'start-file',
+                type: 'button',
+                className: 'dsm-btn dsm-btn--primary dsm-btn--lg',
+                onClick: () => { void runFileImport(pickedFile) },
+                disabled: !speechAvailable || fileBusy,
+                title: speechAvailable ? undefined : '本机语音识别服务不可用',
+              }, h(Icon, { name: 'upload', size: 13 }), h('span', null, '开始转写')),
         ]
       }
 

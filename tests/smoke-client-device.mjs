@@ -158,6 +158,7 @@ if (!code.includes(hookAnchor)) {
   process.exit(1);
 }
 code = code.replace(hookAnchor, `    globalThis.__TEST_HOOKS__ = {
+      buildTitleFromFileName,
       RecordModal,
       openLiveCapture,
       listAudioInputDevices,
@@ -249,6 +250,19 @@ const labels = options.map((option) => option.label);
 check('下拉含「系统默认」+ 枚举到的设备', labels.length === 2 && labels[0] === '系统默认输入设备' && labels[1] === '麦克风 (Realtek)', JSON.stringify(labels));
 check('提示文案说明设备选择会记住', texts.some((text) => text.includes('选择会记住')));
 check('麦克风卡提供「检测」按钮', texts.some((text) => text === '检测'), JSON.stringify(texts.filter((text) => text.length <= 4)));
+
+
+/* ── 9. 录音转写：先选文件、标题自动解析 ─────────────────────────── */
+const fileElement = await renderWithEffects(hooks.RecordModal, { initialTab: 'file', onClose() {}, onOpenTextImport() {}, onSummarize() {} });
+const fileTexts = [];
+walk(fileElement, (element) => {
+  const kids = element.props?.children;
+  const flat = Array.isArray(kids) ? kids : [kids];
+  for (const child of flat) if (typeof child === 'string') fileTexts.push(child);
+});
+check('标题解析：去掉时间戳与下划线', hooks.buildTitleFromFileName('产品评审会议_20261113-1430.m4a') === '产品评审会议', hooks.buildTitleFromFileName('产品评审会议_20261113-1430.m4a'));
+check('标题解析：最多 40 字', hooks.buildTitleFromFileName('一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十多余的字符.mp3').length === 40, '')
+check('标题解析：纯时间戳文件名回退默认标题', hooks.buildTitleFromFileName('会议录音-20261113-1247.wav').includes('录音纪要'), hooks.buildTitleFromFileName('会议录音-20261113-1247.wav'));
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
