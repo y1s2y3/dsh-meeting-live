@@ -1724,6 +1724,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       pendingDisplay: null,
       speakerCentroids: [],
       segments: [],
+      screenActive: false,
       waiters: [],
       beforeUnload: null,
     }
@@ -2527,6 +2528,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       liveEngine.pcmParts = []
       liveEngine.speakerCentroids = []
       liveEngine.segments = []
+      liveEngine.screenActive = false
       liveEngine.pendingDisplay = input?.display ?? null
       liveEngine.level = 0
       resetLiveState({
@@ -2563,10 +2565,24 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         liveEngine.sink = capture.sink
         liveEngine.resampler = capture.resampler
         capture.processor.onaudioprocess = onLiveAudioProcess
-        if (input?.screen === true) await beginScreenCapture(capture.stream)
+        if (input?.screen === true) {
+          // 录屏由宿主 ffmpeg 采集（桌面端 Electron 没有实现屏幕采集处理器，浏览器拿不到画面）。
+          try {
+            const screenPayload = await requestJson('/meetings/' + encodeURIComponent(meeting.id) + '/screen/start', {
+              method: 'POST',
+              body: { source: input.screenSource ?? 'desktop' },
+            })
+            if (screenPayload?.ok !== true) throw new Error(screenPayload?.error ?? '录屏启动失败')
+            liveEngine.screenActive = true
+            notifySuccess('已开始录屏', String(screenPayload?.label ?? '整个桌面'))
+          } catch (error) {
+            liveEngine.screenActive = false
+            notify('warn', '录屏未开始', '已改为只录音频；' + messageOf(error))
+          }
+        }
         publishLive({
           status: 'recording',
-          screen: liveEngine.videoRecorder !== null,
+          screen: liveEngine.screenActive === true,
           startedAt: Date.now(),
           elapsedSeconds: 0,
           level: 0,
@@ -2596,7 +2612,17 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       updateLiveBeforeUnload()
       stopLiveTimer()
       stopLiveCapture()
-      const videoBlob = await finishScreenCapture()
+      let videoBlob = null
+      if (liveEngine.screenActive === true && snapshot.live.meetingId !== null) {
+        try {
+          const stopped = await requestJson('/meetings/' + encodeURIComponent(snapshot.live.meetingId) + '/screen/stop', { method: 'POST' })
+          if (stopped?.ok !== true) throw new Error(stopped?.error ?? '录屏收尾失败')
+        } catch (error) {
+          reportError(error, '录屏收尾失败')
+        }
+        liveEngine.screenActive = false
+        publishLive({ screen: false })
+      }
       // Flush whatever the audio thread already handed us, then wait for every
       // in-flight request before finalising the meeting.
       flushLiveSamples(true)
@@ -3587,7 +3613,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         date: todayKey(),
         attendees: '',
         screen: false,
+        screenSource: 'desktop',
       }))
+      const [screenSources, setScreenSources] = useState(() => [])
+      const [screenSourceError, setScreenSourceError] = useState(null)
       const [localError, setLocalError] = useState(null)
       const [fileStage, setFileStage] = useState('idle')
       const [fileError, setFileError] = useState(null)
@@ -3732,18 +3761,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         // automatic placeholder and the summarizer proposes a real one later.
         setLocalError(null)
         const wantScreen = form.screen === true
-        let displayPromise = null
-        if (wantScreen && typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
-          // getDisplayMedia 必须在点击手势里同步发起：等 await 之后再调会被浏览器拒绝。
-          displayPromise = navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false })
-          displayPromise.catch(() => {})
-        }
         void startLiveRecording({
           title: form.title.trim() === '' ? undefined : form.title.trim(),
           date: form.date || todayKey(),
           attendees: splitAttendees(form.attendees),
           screen: wantScreen,
-          display: displayPromise,
+          screenSource: form.screenSource ?? screenSources[0]?.id ?? 'desktop',
         })
       }
 
@@ -4033,9 +4056,38 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 type: 'checkbox',
                 checked: form.screen === true,
                 disabled: liveActive,
-                onChange: (event) => update('screen')(event.target.checked),
+                onChange: (event) => {
+                  const checked = event.target.checked
+                  update('screen')(checked)
+                  if (checked && screenSources.length === 0) {
+                    void requestJson('/screen/sources').then((payload) => {
+                      const list = Array.isArray(payload?.sources) ? payload.sources : []
+                      setScreenSources(list)
+                      setScreenSourceError(list.length === 0 ? '没有发现可录制的屏幕' : null)
+                      if (list.length > 0) update('screenSource')(list[0].id)
+                    }).catch((error) => {
+                      setScreenSourceError(messageOf(error))
+                    })
+                  }
+                },
               }),
-              h('span', null, '同步录屏（开始时会让你选择屏幕；结束后生成带配音的视频文件 + 单独的音频文件）'),
+              h('span', null, '同步录屏（录屏由本机 ffmpeg 采集，结束后自动合成带配音的 MP4 + 单独音频）'),
+            )
+            : null,
+          tab === 'record' && form.screen === true
+            ? h(
+              Field,
+              { label: '录屏画面' },
+              h(Select, {
+                value: form.screenSource,
+                onChange: (value) => update('screenSource')(value),
+                options: screenSources.length > 0
+                  ? screenSources.map((item) => ({ value: item.id, label: item.label }))
+                  : [{ value: 'desktop', label: '整个桌面' }],
+              }),
+              h('div', { className: 'dsm-hint' }, screenSourceError !== null
+                ? '读取屏幕列表失败：' + screenSourceError
+                : '开始录音时会同时录制所选画面；停止后由本机 ffmpeg 合成 MP4（带配音）。'),
             )
             : null,
           h('div', { key: 'hint', className: 'dsm-hint' }, tab === 'record'

@@ -13,6 +13,15 @@
 import { formatMoment, isGenericTitle, localDay, projectMeeting, todoProgress } from './model.js'
 import { sortMeetings } from './store.js'
 import { exportMeeting } from './export.js'
+import {
+  dropTempVideo,
+  isCapturing,
+  listScreenSources,
+  muxScreenWithAudio,
+  startScreenCapture,
+  stopScreenCapture,
+  takePendingVideo,
+} from './screen.js'
 import { existsSync, readdirSync } from 'node:fs'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -353,6 +362,12 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
+      if (segments.length === 2 && segments[0] === 'screen' && segments[1] === 'sources' && method === 'GET') {
+        const sources = await listScreenSources()
+        sendJson(res, 200, { ok: true, sources })
+        return
+      }
+
       if (segments.length === 1 && segments[0] === 'meetings' && method === 'POST') {
         const body = await readJsonBody(req)
         const meeting = await store.add({
@@ -373,6 +388,28 @@ export function registerRoutes(ctx, deps) {
       }
 
       const id = segments[1]
+
+      if (segments.length === 4 && segments[2] === 'screen' && segments[3] === 'start' && method === 'POST') {
+        requireMeeting(store, id)
+        const body = await readJsonBody(req)
+        const started = await startScreenCapture({ meetingId: id, source: String(body.source ?? 'desktop'), logger })
+        sendJson(res, started.ok === true ? 200 : 400, {
+          ok: started.ok === true,
+          label: started.label ?? null,
+          error: started.error ?? null,
+        })
+        return
+      }
+
+      if (segments.length === 4 && segments[2] === 'screen' && segments[3] === 'stop' && method === 'POST') {
+        const stopped = await stopScreenCapture(id, logger)
+        sendJson(res, stopped.ok === true ? 200 : 400, {
+          ok: stopped.ok === true,
+          seconds: stopped.seconds ?? 0,
+          error: stopped.error ?? null,
+        })
+        return
+      }
 
       if (segments.length === 2) {
         if (method === 'GET') {
@@ -396,6 +433,9 @@ export function registerRoutes(ctx, deps) {
           return
         }
         if (method === 'DELETE') {
+          try { await stopScreenCapture(id, logger) } catch { }
+          const pendingVideo = takePendingVideo(id)
+          if (pendingVideo !== null) await dropTempVideo(pendingVideo.tmpPath)
           const removed = await store.remove(id)
           try { await rm(join(mediaRoot(), id), { recursive: true, force: true }) } catch { }
           sendJson(res, removed === null ? 404 : 200, removed === null ? { ok: false, error: '未找到会议' } : { ok: true })
@@ -555,11 +595,34 @@ export function registerRoutes(ctx, deps) {
           seconds: Math.round(seconds),
           savedAt: new Date().toISOString(),
         }
-        const converting = kind === 'video' && findFfmpeg() !== null
-        const stored = { ...entry, converting }
-        const media = [...previous.filter((item) => item.kind !== kind), stored]
+        // 录屏由宿主 ffmpeg 采集成 mkv，等这段音频（WAV）上传后合成 MP4。
+        let muxed = null
+        if (kind === 'audio' && isCapturing(id) === false) {
+          const pendingVideo = takePendingVideo(id)
+          if (pendingVideo !== null) {
+            const mp4Name = safeMediaName(fileName.replace(/\.wav$/i, '') + '.mp4', '会议录屏.mp4')
+            const mp4Path = join(directory, mp4Name)
+            const result = await muxScreenWithAudio({ videoPath: pendingVideo.tmpPath, audioPath: target, outPath: mp4Path, logger })
+            await dropTempVideo(pendingVideo.tmpPath)
+            if (result.ok === true) {
+              muxed = {
+                kind: 'video',
+                name: mp4Name,
+                path: mp4Path,
+                bytes: result.bytes,
+                seconds: Math.round(seconds),
+                savedAt: new Date().toISOString(),
+                converted: true,
+              }
+            } else {
+              logger?.warn?.('meeting-minutes: 合成录屏视频失败：' + String(result.error ?? '未知原因'))
+            }
+          }
+        }
+        const stored = muxed === null ? entry : entry
+        const kept = previous.filter((item) => item.kind !== kind && (muxed === null || item.kind !== 'video'))
+        const media = [...kept, stored, ...(muxed === null ? [] : [muxed])]
         const updated = await store.patch(id, { media })
-        if (converting) void convertMeetingVideo(id, target, fileName, Math.round(seconds))
         sendJson(res, 200, { ok: true, media: (updated && updated.media) || media, entry: stored })
         return
       }

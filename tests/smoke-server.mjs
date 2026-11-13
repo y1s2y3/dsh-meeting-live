@@ -247,7 +247,7 @@ const videoBytes = Buffer.from('fake webm with audio', 'utf8')
 const videoRes = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/media/upload?kind=video&name=b.webm&seconds=42', videoBytes, 'application/octet-stream')
 const videoPayload = JSON.parse(videoRes.body)
 check('视频文件上传后两种媒体都在', Array.isArray(videoPayload.media) && videoPayload.media.length === 2, JSON.stringify(videoPayload.media?.map((item) => item.kind)))
-check('视频条目标记为正在转 MP4', videoPayload.entry?.converting === true && videoPayload.media.filter((item) => item.kind === 'video').every((item) => item.converting === true), JSON.stringify(videoPayload.media?.map((item) => ({ kind: item.kind, converting: item.converting }))))
+check('视频上传后作为普通视频条目保存', videoPayload.entry?.kind === 'video' && videoPayload.entry?.converting !== true, JSON.stringify(videoPayload.media?.map((item) => ({ kind: item.kind, converting: item.converting }))))
 
 const traversalRes = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/media/upload?kind=audio&name=..%2F..%2Fevil.wav', Buffer.from('x'), 'application/octet-stream')
 const traversalPayload = JSON.parse(traversalRes.body)
@@ -265,6 +265,20 @@ check('没有该类型文件时如实报错', openMissing.status === 400, openMi
 delete process.env.DSH_MEETING_NO_OPEN
 
 await mediaFs.rm(mediaHome, { recursive: true, force: true })
+
+
+/* 18. 宿主录屏接口（测试模式只验接口，不真的采集屏幕） */
+process.env.DSH_MEETING_NO_SCREEN = '1'
+const sourcesRes = await uploadCase('GET', '/dsh-meeting/screen/sources')
+const sourcesPayload = JSON.parse(sourcesRes.body)
+check('屏幕源接口返回桌面源', sourcesRes.status === 200 && Array.isArray(sourcesPayload.sources) && sourcesPayload.sources.length >= 1, sourcesRes.body.slice(0, 140))
+const startScreen = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/screen/start', JSON.stringify({ source: 'desktop' }), 'application/json')
+check('开始录屏返回 200', startScreen.status === 200 && JSON.parse(startScreen.body).ok === true, startScreen.body.slice(0, 140))
+const stopScreen = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/screen/stop', '{}', 'application/json')
+check('停止录屏返回 200', stopScreen.status === 200 && JSON.parse(stopScreen.body).ok === true, stopScreen.body.slice(0, 140))
+const stopAgain = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/screen/stop', '{}', 'application/json')
+check('没有录屏时停止会如实报错', stopAgain.status === 400, stopAgain.body.slice(0, 140))
+delete process.env.DSH_MEETING_NO_SCREEN
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
