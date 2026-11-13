@@ -4316,7 +4316,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             'div',
             { key: 'hint', className: 'dsm-rec-tip' },
             tab === 'record'
-              ? '转写约 6–10 秒延迟；可后台进行，关闭弹窗不中断。麦克风选择会记住，识别不出文字时可切换设备后先试说一句。'
+              ? '麦克风选择会记住；识别不出文字时，可先切换设备再试说一句。'
               : '文件转写使用浏览器解码 → 16kHz 单声道 PCM16 WAV → 90 秒切片逐段识别；支持 WAV / MP3 / M4A / MP4 / WebM。',
           ),
 
