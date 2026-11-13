@@ -26,7 +26,7 @@ export const CLOUD_PROVIDERS = {
 /** 默认设置。 */
 export const DEFAULT_SETTINGS = {
   transcribe: {
-    provider: 'sensevoice-local',
+    provider: 'paraformer-local',
     cloud: {
       iflytek: { appId: '', apiKey: '', apiSecret: '' },
       tencent: { secretId: '', secretKey: '', region: 'ap-shanghai', engine: '16k_zh' },
@@ -89,9 +89,11 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
   const baseInput = base !== null && typeof base === 'object' ? base : DEFAULT_SETTINGS
   const transcribe = input.transcribe !== null && typeof input.transcribe === 'object' ? input.transcribe : {}
   const baseTranscribe = baseInput.transcribe ?? DEFAULT_SETTINGS.transcribe
-  const provider = TRANSCRIBE_PROVIDERS.includes(transcribe.provider)
-    ? transcribe.provider
-    : (TRANSCRIBE_PROVIDERS.includes(baseTranscribe.provider) ? baseTranscribe.provider : 'sensevoice-local')
+  // SenseVoice 已从设置项移除：历史配置自动迁移到 Paraformer
+  const rawProvider = transcribe.provider === 'sensevoice-local' ? 'paraformer-local' : transcribe.provider
+  const provider = TRANSCRIBE_PROVIDERS.includes(rawProvider)
+    ? rawProvider
+    : (TRANSCRIBE_PROVIDERS.includes(baseTranscribe.provider) ? baseTranscribe.provider : 'paraformer-local')
   const summary = input.summary !== null && typeof input.summary === 'object' ? input.summary : {}
   const baseSummary = baseInput.summary ?? DEFAULT_SETTINGS.summary
   const summaryRaw = summary.custom !== null && typeof summary.custom === 'object' ? summary.custom : {}

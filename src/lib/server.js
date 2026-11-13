@@ -443,6 +443,7 @@ export function registerRoutes(ctx, deps) {
 
       if (segments.length === 1 && segments[0] === 'settings' && (method === 'PATCH' || method === 'POST')) {
         const body = await readJsonBody(req)
+        const warnings = []
         if (body.model !== undefined) {
           await store.setSummaryModel(body.model)
         }
@@ -463,14 +464,14 @@ export function registerRoutes(ctx, deps) {
               custom: { ...current.summary.custom, ...(incoming.summary?.custom ?? {}) },
             },
           }
-          // 切到云端引擎时先校验凭据，避免录音时才发现配置残缺
+          // 配置不完整不阻止保存：先让用户能切模式/填一半，真正用到时再给明确错误
           if (merged.transcribe?.provider?.startsWith('cloud-') === true) {
             const cloudError = validateCloudSettings(merged.transcribe.provider, merged.transcribe.cloud)
-            if (cloudError !== null) throw new Error(cloudError)
+            if (cloudError !== null) warnings.push(cloudError)
           }
           if (merged.summary?.mode === 'custom') {
             const summaryError = validateSummaryCustom(merged.summary.custom)
-            if (summaryError !== null) throw new Error(summaryError)
+            if (summaryError !== null) warnings.push(summaryError)
           }
           await store.setSettings(merged)
         }
@@ -479,6 +480,7 @@ export function registerRoutes(ctx, deps) {
           model: store.summaryModel,
           settings: store.settings,
           terms: parseTerms(store.settings.terms),
+          warnings,
         })
         return
       }

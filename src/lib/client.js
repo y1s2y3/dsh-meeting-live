@@ -3332,6 +3332,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [downloading, setDownloading] = useState('')
       const [cloudTab, setCloudTab] = useState('iflytek')
       const [summarySelection, setSummarySelection] = useState('')
+      const [localSummaryMode, setLocalSummaryMode] = useState(null)
+      const [termsText, setTermsText] = useState('')
+      const [termsSaving, setTermsSaving] = useState(false)
+      const termsTouchedRef = useRef(false)
       const mountedRef = useRef(true)
 
       useEffect(() => {
@@ -3348,6 +3352,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         setDefaultModel(payload?.defaultModel ?? null)
         const chosen = payload?.model
         setSummarySelection(chosen !== null && chosen !== undefined ? String(chosen.provider) + '|' + String(chosen.model) : '')
+        if (termsTouchedRef.current !== true) setTermsText(payload?.settings?.terms ?? '')
       }
 
       useEffect(() => {
@@ -3418,6 +3423,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
+      /** 术语表失焦时保存；保存期间不清空本地输入。 */
+      const saveTerms = async () => {
+        setTermsSaving(true)
+        try {
+          await requestJson('/settings', { method: 'PATCH', body: { settings: { terms: termsText } } })
+          termsTouchedRef.current = false
+        } catch (caught) {
+          setError(messageOf(caught))
+        } finally {
+          setTermsSaving(false)
+        }
+      }
+
       const downloadModel = async (kind) => {
         setDownloading(kind)
         setError(null)
@@ -3477,13 +3495,17 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const defaultModelLabel = defaultModel === null || defaultModel === undefined || String(defaultModel.model ?? '') === ''
         ? '跟随 DSH 默认模型'
         : '跟随 DSH 默认模型（' + String(defaultModel.model) + '）'
+      const summaryMode = localSummaryMode ?? (settings.summary.mode === 'custom' ? 'custom' : 'dsh')
       const modelReady = (kind) => modelsState?.assets?.[kind]?.ready === true
       const downloadingState = modelsState?.downloading ?? null
       const percent = typeof downloadingState?.percent === 'number' ? downloadingState.percent : 0
 
       const radioRow = (checked, onSelect, title, desc, right) => h(
         'div',
-        { className: 'dsm-set-option' + (checked ? ' dsm-set-option--on' : '') },
+        {
+          className: 'dsm-set-option' + (checked ? ' dsm-set-option--on' : ''),
+          onClick: () => { if (!checked) onSelect() },
+        },
         h('input', { type: 'radio', checked, onChange: () => { onSelect() } }),
         h(
           'div',
@@ -3496,6 +3518,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
       const transcribeProvider = settings.transcribe.provider
       const cloudConfig = settings.transcribe.cloud ?? {}
+      const transcribeMode = transcribeProvider.startsWith('cloud-') ? 'cloud' : 'local'
 
       const modelPage = h(
         'div',
@@ -3505,23 +3528,32 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             h('span', { className: 'dsm-set-section-title' }, '语音转写模型'),
             h('span', { className: 'dsm-set-section-desc' }, '把会议音频转成文字；本地模型离线运行，云端模型需联网与凭据。'),
           ),
-          radioRow(
-            transcribeProvider === 'sensevoice-local',
-            () => { if (transcribeProvider !== 'sensevoice-local') updateTranscribe({ provider: 'sensevoice-local' }) },
-            'SenseVoice（内置，本地）',
-            '开箱即用 · 228 MB · 中文准确率高、速度快，不支持热词与说话人分离',
-            h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已就绪'),
+          h('div', { className: 'dsm-set-tabs' },
+            h('button', {
+              key: 'mode-local',
+              type: 'button',
+              className: 'dsm-set-tab' + (transcribeMode === 'local' ? ' dsm-set-tab--on' : ''),
+              onClick: () => { if (transcribeMode !== 'local') updateTranscribe({ provider: 'paraformer-local' }) },
+            }, '本地模型'),
+            h('button', {
+              key: 'mode-cloud',
+              type: 'button',
+              className: 'dsm-set-tab' + (transcribeMode === 'cloud' ? ' dsm-set-tab--on' : ''),
+              onClick: () => { if (transcribeMode !== 'cloud') updateTranscribe({ provider: 'cloud-' + cloudTab }) },
+            }, '云端模型'),
           ),
-          radioRow(
-            transcribeProvider === 'paraformer-local',
-            () => { if (transcribeProvider !== 'paraformer-local') updateTranscribe({ provider: 'paraformer-local' }) },
-            'Paraformer-zh（本地，支持说话人分离）',
-            '需下载模型 · 中文长句与专业词更稳；配合 pyannote + cam++ 可输出 S1/S2 真说话人',
-            modelReady('paraformer') && modelReady('segmentation') && modelReady('campplus')
-              ? h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已就绪')
-              : h('span', { className: 'dsm-set-badge' }, '未下载'),
-          ),
-          h('div', { className: 'dsm-set-models' },
+          transcribeMode === 'local'
+            ? radioRow(
+              transcribeProvider === 'paraformer-local',
+              () => { if (transcribeProvider !== 'paraformer-local') updateTranscribe({ provider: 'paraformer-local' }) },
+              'Paraformer-zh（本地，支持说话人分离）',
+              '中文长句与专业词更稳；配合 pyannote + cam++ 可输出 S1/S2 真说话人，音频不出本机',
+              modelReady('paraformer') && modelReady('segmentation') && modelReady('campplus')
+                ? h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已就绪')
+                : h('span', { className: 'dsm-set-badge' }, '未下载'),
+            )
+            : null,
+          transcribeMode === 'local' ? h('div', { className: 'dsm-set-models' },
             ...[
               ['paraformer', '识别模型 Paraformer-zh', '约 217 MB'],
               ['segmentation', '说话人分段（pyannote）', '约 1 MB'],
@@ -3544,66 +3576,69 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                     onClick: () => { void downloadModel(kind) },
                   }, downloading === kind ? '下载中…' : '下载')),
             )),
-          ),
-          h('div', { className: 'dsm-set-inline' },
-            h('label', { className: 'dsm-check' },
-              h('input', {
-                type: 'checkbox',
-                checked: settings.diarize === true,
-                onChange: (event) => { void patchSettings({ diarize: event.target.checked }) },
-              }),
-              h('span', null, '启用真说话人分离（需三个模型就绪）'),
-            ),
-          ),
-        ),
-        h('div', { className: 'dsm-set-section' },
-          h('div', { className: 'dsm-set-section-head' },
-            h('span', { className: 'dsm-set-section-title' }, '云端语音识别'),
-            h('span', { className: 'dsm-set-section-desc' }, '把音频发到云服务识别；适合对准确率/热词要求高的场景。'),
-          ),
-          h('div', { className: 'dsm-set-tabs' },
-            ...Object.entries({ iflytek: '讯飞', tencent: '腾讯云', aliyun: '阿里云' }).map(([key, label]) => h(
-              'button',
-              {
-                key: 'cloud-tab-' + key,
-                type: 'button',
-                className: 'dsm-set-tab' + (cloudTab === key ? ' dsm-set-tab--on' : ''),
-                onClick: () => setCloudTab(key),
-              },
-              label,
-            )),
-          ),
-          radioRow(
-            transcribeProvider === 'cloud-' + cloudTab,
-            () => { if (transcribeProvider !== 'cloud-' + cloudTab) updateTranscribe({ provider: 'cloud-' + cloudTab }) },
-            '使用' + (cloudTab === 'iflytek' ? '讯飞' : cloudTab === 'tencent' ? '腾讯云' : '阿里云') + '语音识别',
-            '需要填写下方凭据；音频会离开本机',
-            null,
-          ),
-          cloudTab === 'iflytek'
-            ? h('div', { className: 'dsm-set-grid' },
-              h(Field, { label: 'AppID' }, h(TextInput, { value: cloudConfig.iflytek?.appId ?? '', onChange: (value) => updateCloud('iflytek', 'appId', value), placeholder: '讯飞控制台 AppID' })),
-              h(Field, { label: 'APIKey' }, h(TextInput, { value: cloudConfig.iflytek?.apiKey ?? '', onChange: (value) => updateCloud('iflytek', 'apiKey', value) })),
-              h(Field, { label: 'APISecret' }, h(TextInput, { value: cloudConfig.iflytek?.apiSecret ?? '', onChange: (value) => updateCloud('iflytek', 'apiSecret', value) })),
+          )
+            : null,
+          transcribeMode === 'local'
+            ? h('div', { className: 'dsm-set-inline' },
+              h('label', { className: 'dsm-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: settings.diarize === true,
+                  onChange: (event) => { void patchSettings({ diarize: event.target.checked }) },
+                }),
+                h('span', null, '启用真说话人分离（需三个模型就绪）'),
+              ),
             )
             : null,
-          cloudTab === 'tencent'
-            ? h('div', { className: 'dsm-set-grid' },
-              h(Field, { label: 'SecretId' }, h(TextInput, { value: cloudConfig.tencent?.secretId ?? '', onChange: (value) => updateCloud('tencent', 'secretId', value) })),
-              h(Field, { label: 'SecretKey' }, h(TextInput, { value: cloudConfig.tencent?.secretKey ?? '', onChange: (value) => updateCloud('tencent', 'secretKey', value) })),
-              h(Field, { label: '地域' }, h(TextInput, { value: cloudConfig.tencent?.region ?? 'ap-shanghai', onChange: (value) => updateCloud('tencent', 'region', value) })),
-              h(Field, { label: '引擎' }, h(TextInput, { value: cloudConfig.tencent?.engine ?? '16k_zh', onChange: (value) => updateCloud('tencent', 'engine', value) })),
+          transcribeMode === 'cloud'
+            ? h(
+              'div',
+              { className: 'dsm-set-cloud' },
+              h('div', { className: 'dsm-set-tabs' },
+                ...Object.entries({ iflytek: '讯飞', tencent: '腾讯云', aliyun: '阿里云' }).map(([key, label]) => h(
+                  'button',
+                  {
+                    key: 'cloud-tab-' + key,
+                    type: 'button',
+                    className: 'dsm-set-tab' + (cloudTab === key ? ' dsm-set-tab--on' : ''),
+                    onClick: () => setCloudTab(key),
+                  },
+                  label,
+                )),
+              ),
+              radioRow(
+                transcribeProvider === 'cloud-' + cloudTab,
+                () => { if (transcribeProvider !== 'cloud-' + cloudTab) updateTranscribe({ provider: 'cloud-' + cloudTab }) },
+                '使用' + (cloudTab === 'iflytek' ? '讯飞' : cloudTab === 'tencent' ? '腾讯云' : '阿里云') + '语音识别',
+                '需要填写下方凭据；音频会离开本机',
+                null,
+              ),
+              cloudTab === 'iflytek'
+                ? h('div', { className: 'dsm-set-grid' },
+                  h(Field, { label: 'AppID' }, h(TextInput, { value: cloudConfig.iflytek?.appId ?? '', onChange: (value) => updateCloud('iflytek', 'appId', value), placeholder: '讯飞控制台 AppID' })),
+                  h(Field, { label: 'APIKey' }, h(TextInput, { value: cloudConfig.iflytek?.apiKey ?? '', onChange: (value) => updateCloud('iflytek', 'apiKey', value) })),
+                  h(Field, { label: 'APISecret' }, h(TextInput, { value: cloudConfig.iflytek?.apiSecret ?? '', onChange: (value) => updateCloud('iflytek', 'apiSecret', value) })),
+                )
+                : null,
+              cloudTab === 'tencent'
+                ? h('div', { className: 'dsm-set-grid' },
+                  h(Field, { label: 'SecretId' }, h(TextInput, { value: cloudConfig.tencent?.secretId ?? '', onChange: (value) => updateCloud('tencent', 'secretId', value) })),
+                  h(Field, { label: 'SecretKey' }, h(TextInput, { value: cloudConfig.tencent?.secretKey ?? '', onChange: (value) => updateCloud('tencent', 'secretKey', value) })),
+                  h(Field, { label: '地域' }, h(TextInput, { value: cloudConfig.tencent?.region ?? 'ap-shanghai', onChange: (value) => updateCloud('tencent', 'region', value) })),
+                  h(Field, { label: '引擎' }, h(TextInput, { value: cloudConfig.tencent?.engine ?? '16k_zh', onChange: (value) => updateCloud('tencent', 'engine', value) })),
+                )
+                : null,
+              cloudTab === 'aliyun'
+                ? h('div', { className: 'dsm-set-grid' },
+                  h(Field, { label: 'AppKey' }, h(TextInput, { value: cloudConfig.aliyun?.appKey ?? '', onChange: (value) => updateCloud('aliyun', 'appKey', value) })),
+                  h(Field, { label: 'AccessKeyId' }, h(TextInput, { value: cloudConfig.aliyun?.accessKeyId ?? '', onChange: (value) => updateCloud('aliyun', 'accessKeyId', value) })),
+                  h(Field, { label: 'AccessKeySecret' }, h(TextInput, { value: cloudConfig.aliyun?.accessKeySecret ?? '', onChange: (value) => updateCloud('aliyun', 'accessKeySecret', value) })),
+                  h(Field, { label: '地域' }, h(TextInput, { value: cloudConfig.aliyun?.region ?? 'cn-shanghai', onChange: (value) => updateCloud('aliyun', 'region', value) })),
+                )
+                : null,
+              h('div', { className: 'dsm-hint' }, '凭据只保存在本机会议数据文件里；切换云端后，录音会实时上传到对应云服务。'),
             )
             : null,
-          cloudTab === 'aliyun'
-            ? h('div', { className: 'dsm-set-grid' },
-              h(Field, { label: 'AppKey' }, h(TextInput, { value: cloudConfig.aliyun?.appKey ?? '', onChange: (value) => updateCloud('aliyun', 'appKey', value) })),
-              h(Field, { label: 'AccessKeyId' }, h(TextInput, { value: cloudConfig.aliyun?.accessKeyId ?? '', onChange: (value) => updateCloud('aliyun', 'accessKeyId', value) })),
-              h(Field, { label: 'AccessKeySecret' }, h(TextInput, { value: cloudConfig.aliyun?.accessKeySecret ?? '', onChange: (value) => updateCloud('aliyun', 'accessKeySecret', value) })),
-              h(Field, { label: '地域' }, h(TextInput, { value: cloudConfig.aliyun?.region ?? 'cn-shanghai', onChange: (value) => updateCloud('aliyun', 'region', value) })),
-            )
-            : null,
-          h('div', { className: 'dsm-hint' }, '凭据只保存在本机会议数据文件里；切换云端后，录音会实时上传到对应云服务。'),
         ),
         h('div', { className: 'dsm-set-section' },
           h('div', { className: 'dsm-set-section-head' },
@@ -3611,13 +3646,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             h('span', { className: 'dsm-set-section-desc' }, '把转写整理成结构化纪要（一句话结论/决策/待办）。'),
           ),
           radioRow(
-            settings.summary.mode !== 'custom',
-            () => { if (settings.summary.mode === 'custom') updateSummary({ mode: 'dsh' }) },
+            summaryMode === 'dsh',
+            () => { if (summaryMode === 'custom') { setLocalSummaryMode('dsh'); updateSummary({ mode: 'dsh' }) } },
             '使用 DSH 已配置模型',
             '与 DSH 设置里的模型一致；也可以在这里单独指定',
             null,
           ),
-          settings.summary.mode !== 'custom'
+          summaryMode === 'dsh'
             ? h('div', { className: 'dsm-set-grid' },
               h(Field, { label: 'DSH 模型' }, h(Select, {
                 value: summarySelection,
@@ -3630,13 +3665,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             )
             : null,
           radioRow(
-            settings.summary.mode === 'custom',
-            () => { if (settings.summary.mode !== 'custom') updateSummary({ mode: 'custom' }) },
+            summaryMode === 'custom',
+            () => { if (summaryMode !== 'custom') { setLocalSummaryMode('custom'); updateSummary({ mode: 'custom' }) } },
             '手动配置模型接口',
             '任意 OpenAI 兼容接口（/chat/completions）',
             null,
           ),
-          settings.summary.mode === 'custom'
+          summaryMode === 'custom'
             ? h('div', { className: 'dsm-set-grid' },
               h(Field, { label: '接口地址' }, h(TextInput, { value: settings.summary.custom?.baseUrl ?? '', onChange: (value) => updateSummaryCustom('baseUrl', value), placeholder: 'https://api.example.com/v1' })),
               h(Field, { label: '模型名' }, h(TextInput, { value: settings.summary.custom?.model ?? '', onChange: (value) => updateSummaryCustom('model', value), placeholder: 'qwen-max' })),
@@ -3660,10 +3695,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           ),
           h(Field, { label: '术语表（一行一个，最多 60 字/条）' }, h(TextArea, {
             rows: 4,
-            value: settings.terms ?? '',
-            onChange: (value) => { void patchSettings({ terms: value }) },
+            value: termsText,
+            onChange: (value) => { termsTouchedRef.current = true; setTermsText(value) },
+            onBlur: () => { void saveTerms() },
             placeholder: '多个名词换行输入',
           })),
+          termsSaving ? h('div', { className: 'dsm-hint' }, '术语保存中…') : null,
         ),
         error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
       )
