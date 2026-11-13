@@ -431,6 +431,16 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-minutes-empty{font-size:12px;color:#8A94A6}
 /* ── 录音弹窗：关键信息更醒目 ── */
 .dsm-rec-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.dsm-rec-item--wide{grid-column:span 2}
+.dsm-rec-item--full{grid-column:1 / -1}
+.dsm-rec-select{min-width:0}
+.dsm-rec-select > select{height:30px;width:100%;border:1px solid #E4E9F2;border-radius:8px;background:#FFFFFF;color:#0F172A;font-family:inherit;font-size:12.5px;font-weight:650;padding:0 8px;cursor:pointer}
+.dsm-rec-select > select:hover{border-color:#C7DAFF}
+.dsm-rec-toggle{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 12px;border-radius:8px;border:1px solid #2F6BFF;background:#2F6BFF;color:#FFFFFF;font-family:inherit;font-size:12px;font-weight:650;cursor:pointer}
+.dsm-rec-toggle:hover:not(:disabled){background:#2459E6;border-color:#2459E6}
+.dsm-rec-toggle--on{background:#FFFFFF;border-color:#F4C7C7;color:#DC2626}
+.dsm-rec-toggle--on:hover:not(:disabled){background:#FEF2F2;border-color:#F0AFAF}
+.dsm-rec-toggle:disabled{opacity:.55;cursor:not-allowed}
 .dsm-rec-item{display:flex;align-items:center;gap:9px;padding:10px 11px;border:1px solid #E4E9F2;border-radius:12px;background:#F8FAFE}
 .dsm-rec-item-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:#E8F0FF;color:#2563EB}
 .dsm-rec-item-icon--screen{background:#EAF3FF;color:#1D4ED8}
@@ -3669,6 +3679,21 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }, [liveStatus, state.orbActive])
 
       const update = (key) => (value) => setForm((previous) => ({ ...previous, [key]: value }))
+      /** 状态卡里的「开启/关闭录屏」：开启时按需拉取屏幕列表。 */
+      const toggleScreen = () => {
+        const next = form.screen !== true
+        update('screen')(next)
+        if (next && screenSources.length === 0) {
+          void requestJson('/screen/sources').then((payload) => {
+            const list = Array.isArray(payload?.sources) ? payload.sources : []
+            setScreenSources(list)
+            setScreenSourceError(list.length === 0 ? '没有发现可录制的屏幕' : null)
+            if (list.length > 0) update('screenSource')(list[0].id)
+          }).catch((error) => {
+            setScreenSourceError(messageOf(error))
+          })
+        }
+      }
 
       useEffect(() => {
         mountedRef.current = true
@@ -4041,28 +4066,29 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               { key: 'overview', className: 'dsm-rec-overview' },
               h(
                 'div',
-                { className: 'dsm-rec-item' },
+                { className: 'dsm-rec-item dsm-rec-item--wide' },
                 h('span', { className: 'dsm-rec-item-icon' }, h(Icon, { name: 'mic', size: 15 })),
                 h(
                   'div',
                   { className: 'dsm-rec-item-body' },
-                  h('div', { className: 'dsm-rec-item-label' }, '麦克风'),
-                  h('div', { className: 'dsm-rec-item-value' }, inputDeviceId === ''
-                    ? '系统默认设备'
-                    : (inputDevices.find((item) => item.deviceId === inputDeviceId)?.label ?? '系统默认设备')),
-                ),
-              ),
-              h(
-                'div',
-                { className: 'dsm-rec-item' },
-                h('span', { className: 'dsm-rec-item-icon dsm-rec-item-icon--screen' }, h(Icon, { name: 'screen', size: 15 })),
-                h(
-                  'div',
-                  { className: 'dsm-rec-item-body' },
-                  h('div', { className: 'dsm-rec-item-label' }, '录屏'),
-                  h('div', { className: 'dsm-rec-item-value' + (form.screen === true ? ' dsm-rec-item-value--on' : '') }, form.screen === true
-                    ? (screenSources.find((item) => item.id === form.screenSource)?.label ?? '整个桌面')
-                    : '未开启'),
+                  h('div', { className: 'dsm-rec-item-label' }, '麦克风（点这里直接切换）'),
+                  h(
+                    'div',
+                    { className: 'dsm-rec-select' },
+                    h(Select, {
+                      compact: true,
+                      value: inputDeviceId,
+                      onChange: (value) => {
+                        setInputDeviceId(value)
+                        selectedInputDeviceId = value
+                        writePreferredInputDevice(value)
+                      },
+                      options: [
+                        { value: '', label: '系统默认输入设备' },
+                        ...inputDevices.map((device) => ({ value: device.deviceId, label: device.label })),
+                      ],
+                    }),
+                  ),
                 ),
               ),
               h(
@@ -4076,6 +4102,43 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   h('div', { className: 'dsm-rec-item-value' + (speechAvailable ? ' dsm-rec-item-value--on' : ' dsm-rec-item-value--warn') }, speechAvailable ? '已就绪' : (speech === null ? '检查中…' : '不可用')),
                 ),
               ),
+              h(
+                'div',
+                { className: 'dsm-rec-item dsm-rec-item--full' },
+                h('span', { className: 'dsm-rec-item-icon dsm-rec-item-icon--screen' }, h(Icon, { name: 'screen', size: 15 })),
+                h(
+                  'div',
+                  { className: 'dsm-rec-item-body' },
+                  h('div', { className: 'dsm-rec-item-label' }, '录屏' + (form.screen === true ? '（已开启，结束后自动合成 MP4）' : '')),
+                  form.screen === true
+                    ? h(
+                        'div',
+                        { className: 'dsm-rec-select' },
+                        h(Select, {
+                          compact: true,
+                          value: form.screenSource,
+                          onChange: (value) => update('screenSource')(value),
+                          options: screenSources.length > 0
+                            ? screenSources.map((item) => ({ value: item.id, label: item.label }))
+                            : [{ value: 'desktop', label: '整个桌面' }],
+                        }),
+                      )
+                    : h('div', { className: 'dsm-rec-item-value' }, '未开启 · 点右侧按钮开启录屏'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsm-rec-toggle' + (form.screen === true ? ' dsm-rec-toggle--on' : ''),
+                    disabled: liveActive,
+                    title: form.screen === true ? "关闭录屏" : "开启录屏（结束后自动合成 MP4）",
+                    onClick: () => { toggleScreen() },
+                  },
+                  h(Icon, { name: form.screen === true ? 'close' : 'play', size: 12 }),
+                  h('span', null, form.screen === true ? '关闭' : '开启'),
+                ),
+              ),
+              screenSourceError !== null ? h('div', { className: 'dsm-hint dsm-hint--warn', style: { gridColumn: '1 / -1' } }, '读取屏幕列表失败：' + screenSourceError) : null,
             )
             : null,
           tab === 'record' && form.screen === true
@@ -4109,71 +4172,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               })),
             ),
           ),
-          tab === 'record'
-            ? h(
-              'div',
-              { key: 'settings', className: 'dsm-rec-settings' },
-              h(
-                Field,
-                { label: '麦克风输入设备' },
-                h(Select, {
-                  value: inputDeviceId,
-                  onChange: (value) => {
-                    setInputDeviceId(value)
-                    selectedInputDeviceId = value
-                    writePreferredInputDevice(value)
-                  },
-                  options: [
-                    { value: '', label: '系统默认输入设备' },
-                    ...inputDevices.map((device) => ({ value: device.deviceId, label: device.label })),
-                  ],
-                }),
-                h('div', { className: 'dsm-hint' }, '选择会记住；识别不出文字时可改选实际使用的麦克风。'),
-              ),
-              h(
-                'label',
-                { className: 'dsm-check' + (liveActive ? ' dsm-check--off' : '') },
-                h('input', {
-                  type: 'checkbox',
-                  checked: form.screen === true,
-                  disabled: liveActive,
-                  onChange: (event) => {
-                    const checked = event.target.checked
-                    update('screen')(checked)
-                    if (checked && screenSources.length === 0) {
-                      void requestJson('/screen/sources').then((payload) => {
-                        const list = Array.isArray(payload?.sources) ? payload.sources : []
-                        setScreenSources(list)
-                        setScreenSourceError(list.length === 0 ? '没有发现可录制的屏幕' : null)
-                        if (list.length > 0) update('screenSource')(list[0].id)
-                      }).catch((error) => {
-                        setScreenSourceError(messageOf(error))
-                      })
-                    }
-                  },
-                }),
-                h('span', null, '同步录屏'),
-              ),
-              form.screen === true
-                ? h(
-                  Field,
-                  { label: '录屏画面' },
-                  h(Select, {
-                    value: form.screenSource,
-                    onChange: (value) => update('screenSource')(value),
-                    options: screenSources.length > 0
-                      ? screenSources.map((item) => ({ value: item.id, label: item.label }))
-                      : [{ value: 'desktop', label: '整个桌面' }],
-                  }),
-                )
-                : null,
-            )
-            : null,
           h(
             'div',
             { key: 'hint', className: 'dsm-rec-tip' },
             tab === 'record'
-              ? '转写约 6–10 秒延迟；可后台进行，关闭弹窗不中断。选好麦克风后先试说一句，看字数是否变化。'
+              ? '转写约 6–10 秒延迟；可后台进行，关闭弹窗不中断。麦克风选择会记住，识别不出文字时可切换设备后先试说一句。'
               : '文件转写使用浏览器解码 → 16kHz 单声道 PCM16 WAV → 90 秒切片逐段识别；支持 WAV / MP3 / M4A / MP4 / WebM。',
           ),
 

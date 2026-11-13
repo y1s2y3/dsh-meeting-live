@@ -236,11 +236,11 @@ const texts = [];
 let deviceField = null;
 let selectElement = null;
 walk(recordElement, (element) => {
-  if (element.props?.label === '麦克风输入设备') deviceField = element;
+  if (typeof element.props?.label === 'string' && element.props.label.includes('麦克风')) deviceField = element;
   if (Array.isArray(element.props?.options)) selectElement = element;
   const children = element.props?.children;
   const flat = Array.isArray(children) ? children : [children];
-  for (const child of flat) if (typeof child === 'string') texts.push(child);
+  for (const child of flat) { if (typeof child !== 'string') continue; texts.push(child); if (child.includes('麦克风')) deviceField = element; }
 });
 check('录音弹窗出现「麦克风输入设备」字段', deviceField !== null);
 check('渲染出设备下拉', selectElement !== null);
