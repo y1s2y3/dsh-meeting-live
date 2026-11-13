@@ -14,6 +14,13 @@ import { formatMoment, isGenericTitle, localDay, projectMeeting, todoProgress } 
 import { sortMeetings } from './store.js'
 import { exportMeeting } from './export.js'
 import {
+  CLOUD_PROVIDERS,
+  TRANSCRIBE_PROVIDERS,
+  parseTerms,
+  validateCloudSettings,
+  validateSummaryCustom,
+} from './settings.js'
+import {
   dropTempVideo,
   isCapturing,
   listScreenSources,
@@ -24,7 +31,7 @@ import {
   takePendingVideo,
 } from './screen.js'
 import { existsSync, readdirSync } from 'node:fs'
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -201,6 +208,14 @@ export async function buildState(deps) {
     Promise.resolve().then(() => asr.status()),
         deps.dshTodo !== undefined ? deps.dshTodo.describe(calendar) : calendar.status(),
   ])
+  const settingsNow = store.settings
+  const transcribeProvider = settingsNow.transcribe.provider
+  const transcribeReady = transcribeProvider === 'paraformer-local'
+    ? (deps.paraformer !== undefined && deps.paraformer !== null && deps.paraformer.available() === true)
+    : (transcribeProvider.startsWith('cloud-') ? true : speech.available === true)
+  const diarizationReady = deps.paraformer !== undefined && deps.paraformer !== null
+    ? deps.paraformer.diarizationAvailable()
+    : false
   const meetings = sortMeetings(store.snapshot().meetings).map((meeting) => projectMeeting(meeting))
   const auto = autoIngest?.status?.() ?? null
   const totals = meetings.reduce((acc, meeting) => {
@@ -225,6 +240,12 @@ export async function buildState(deps) {
       },
     },
     speech,
+    transcribe: {
+      provider: transcribeProvider,
+      ready: transcribeReady === true,
+      diarizationReady: diarizationReady === true,
+      correctTranscript: settingsNow.correctTranscript === true,
+    },
     calendar: calendarStatus,
     totals,
     meetings,
@@ -395,11 +416,27 @@ export function registerRoutes(ctx, deps) {
         } catch {
           defaultModel = null
         }
+        const settings = store.settings
+        const modelsState = deps.modelManager !== undefined && deps.modelManager !== null
+          ? deps.modelManager.status()
+          : null
+        const paraformerReady = deps.paraformer !== undefined && deps.paraformer !== null
+          ? deps.paraformer.available()
+          : false
+        const diarizationReady = deps.paraformer !== undefined && deps.paraformer !== null
+          ? deps.paraformer.diarizationAvailable()
+          : false
         sendJson(res, 200, {
           ok: true,
           model: store.summaryModel,
           defaultModel,
           models: models.filter((item) => item.id !== ''),
+          settings,
+          transcribeProviders: TRANSCRIBE_PROVIDERS,
+          cloudProviders: CLOUD_PROVIDERS,
+          modelsState,
+          paraformerReady,
+          diarizationReady,
         })
         return
       }
@@ -409,8 +446,81 @@ export function registerRoutes(ctx, deps) {
         if (body.model !== undefined) {
           await store.setSummaryModel(body.model)
         }
-        sendJson(res, 200, { ok: true, model: store.summaryModel })
+        if (body.settings !== undefined) {
+          const incoming = body.settings !== null && typeof body.settings === 'object' ? body.settings : {}
+          const current = store.settings
+          const merged = {
+            ...current,
+            ...incoming,
+            transcribe: {
+              ...current.transcribe,
+              ...(incoming.transcribe ?? {}),
+              cloud: { ...current.transcribe.cloud, ...(incoming.transcribe?.cloud ?? {}) },
+            },
+            summary: {
+              ...current.summary,
+              ...(incoming.summary ?? {}),
+              custom: { ...current.summary.custom, ...(incoming.summary?.custom ?? {}) },
+            },
+          }
+          // 切到云端引擎时先校验凭据，避免录音时才发现配置残缺
+          if (merged.transcribe?.provider?.startsWith('cloud-') === true) {
+            const cloudError = validateCloudSettings(merged.transcribe.provider, merged.transcribe.cloud)
+            if (cloudError !== null) throw new Error(cloudError)
+          }
+          if (merged.summary?.mode === 'custom') {
+            const summaryError = validateSummaryCustom(merged.summary.custom)
+            if (summaryError !== null) throw new Error(summaryError)
+          }
+          await store.setSettings(merged)
+        }
+        sendJson(res, 200, {
+          ok: true,
+          model: store.summaryModel,
+          settings: store.settings,
+          terms: parseTerms(store.settings.terms),
+        })
         return
+      }
+
+      if (segments.length === 2 && segments[0] === 'settings' && segments[1] === 'cloud-test' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const provider = String(body.provider ?? '')
+        const cloud = body.cloud ?? store.settings.transcribe.cloud
+        const cloudError = validateCloudSettings(provider, cloud)
+        if (cloudError !== null) throw new Error(cloudError)
+        sendJson(res, 200, {
+          ok: true,
+          message: '配置格式校验通过；真实连通性会在录音转写时验证（当前未发起网络请求）',
+        })
+        return
+      }
+
+      if (segments.length >= 2 && segments[0] === 'models') {
+        const manager = deps.modelManager
+        if (manager === undefined || manager === null) throw new Error('模型管理不可用')
+        if (segments.length === 2 && segments[1] === 'status' && method === 'GET') {
+          sendJson(res, 200, { ok: true, state: manager.status() })
+          return
+        }
+        if (segments.length === 3 && segments[2] === 'download' && method === 'POST') {
+          const kind = String(segments[1])
+          // 大模型下载耗时几分钟：立刻返回，进度由 GET /models/status 轮询。
+          void manager.download(kind).then((result) => {
+            if (result.ok !== true) logger?.warn?.('meeting-minutes: model download failed: ' + String(result.error ?? ''))
+          }).catch((error) => {
+            logger?.warn?.('meeting-minutes: model download crashed: ' + (error instanceof Error ? error.message : String(error)))
+          })
+          sendJson(res, 200, { ok: true, started: true, state: manager.status() })
+          return
+        }
+        if (segments.length === 2 && method === 'DELETE') {
+          const kind = String(segments[1])
+          const result = await manager.remove(kind)
+          if (result.ok !== true) throw new Error(result.error ?? '删除失败')
+          sendJson(res, 200, { ok: true, state: manager.status() })
+          return
+        }
       }
 
       if (segments.length === 2 && segments[0] === 'screen' && segments[1] === 'identify' && method === 'POST') {
@@ -510,7 +620,11 @@ export function registerRoutes(ctx, deps) {
         const meeting = requireMeeting(store, id)
         const body = await readJsonBody(req)
         logger?.info?.(`meeting-minutes: summarizing ${id} (${meeting.transcript.length} chars)`)
-        const summary = await summarizer.summarize(meeting, { selection: store.summaryModel })
+        const settingsNow = store.settings
+        const summary = await summarizer.summarize(meeting, {
+          selection: store.summaryModel,
+          custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
+        })
         const patch = {}
         if (meeting.attendees.length === 0 && summary.attendees.length > 0) {
           patch.attendees = summary.attendees
@@ -539,9 +653,25 @@ export function registerRoutes(ctx, deps) {
         const providerId = url.searchParams.get('provider') ?? undefined
         const bytes = await readRawBody(req)
         if (bytes.length === 0) throw new Error('音频为空：没有收到可识别的数据。')
+        const transcribeSettings = store.settings.transcribe
+        const engine = transcribeSettings.provider
         let result
         try {
-          result = await asr.transcribeWav(bytes, { language, providerId })
+          if (engine === 'paraformer-local' && deps.paraformer !== undefined && deps.paraformer.available() === true) {
+            result = await deps.paraformer.transcribeWav(bytes)
+          } else if (engine.startsWith('cloud-') === true) {
+            const cloudKey = engine.replace('cloud-', '')
+            const cloudResult = await deps.cloudAsr.transcribeCloud({
+              provider: cloudKey,
+              config: transcribeSettings.cloud[cloudKey] ?? {},
+              wavBuffer: bytes,
+            })
+            if (cloudResult.ok !== true) throw new Error(cloudResult.error ?? '云端语音识别失败')
+            const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
+            result = { text: cloudResult.text, audioSeconds: Math.round(audioSeconds * 100) / 100, inferenceSeconds: 0 }
+          } else {
+            result = await asr.transcribeWav(bytes, { language, providerId })
+          }
         } catch (error) {
           // 实时转写是每 5 秒切一片滚动送识别的；某一片里没有可识别语音
           // （静音、环境噪声、说话太轻、刚点录音还没开口）属于正常现象，
@@ -687,6 +817,40 @@ export function registerRoutes(ctx, deps) {
         const media = [...kept, stored, ...(muxed === null ? [] : [muxed])]
         const updated = await store.patch(id, { media })
         sendJson(res, 200, { ok: true, media: (updated && updated.media) || media, entry: stored })
+        // 音频落盘后做两件后台事（不阻塞响应）：
+        //  1) 若装了 Paraformer + pyannote + cam++，整段跑真说话人分离，替换启发式的 A/B/C/D；
+        //  2) 若开启纠错，用 LLM 只改错别字/术语/人名。
+        if (kind === 'audio') {
+          void (async () => {
+            try {
+              const settingsNow = store.settings
+              if (settingsNow.diarize === true && deps.paraformer !== undefined && deps.paraformer.diarizationAvailable() === true) {
+                const analyzed = await deps.paraformer.transcribeFileWithSpeakers(target)
+                if (Array.isArray(analyzed.lines) && analyzed.lines.length > 0) {
+                  await store.patch(id, {
+                    transcript: analyzed.text,
+                    transcriptSegments: analyzed.lines.map((line) => ({ speaker: line.speaker, text: line.text, at: Math.round(line.start) })),
+                  })
+                  logger?.info?.('meeting-minutes: speaker diarization done (' + String(analyzed.speakers) + ' speakers, ' + String(analyzed.lines.length) + ' lines)')
+                }
+              }
+              if (settingsNow.correctTranscript === true) {
+                const current = requireMeeting(store, id)
+                if (typeof current.transcript === 'string' && current.transcript.trim() !== '') {
+                  const corrected = await summarizer.correctTranscript(current, {
+                    selection: store.summaryModel,
+                    terms: parseTerms(settingsNow.terms),
+                    custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
+                  })
+                  await store.patch(id, { transcript: corrected })
+                  logger?.info?.('meeting-minutes: transcript corrected by LLM')
+                }
+              }
+            } catch (error) {
+              logger?.warn?.('meeting-minutes: post-process audio failed: ' + (error instanceof Error ? error.message : String(error)))
+            }
+          })()
+        }
         return
       }
 

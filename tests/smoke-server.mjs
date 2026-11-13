@@ -91,6 +91,17 @@ function makeStore() {
       return meeting;
     },
     summaryModel: null,
+    settings: {
+      transcribe: { provider: 'sensevoice-local', cloud: { iflytek: {}, tencent: {}, aliyun: {} } },
+      summary: { mode: 'dsh', custom: { baseUrl: '', apiKey: '', model: '', temperature: 0.3, maxTokens: 8192 } },
+      terms: '',
+      correctTranscript: false,
+      diarize: false,
+    },
+    async setSettings(next) {
+      this.settings = next
+      return next
+    },
     async setSummaryModel(next) {
       this.summaryModel = next === null || next === undefined ? null : { provider: String(next.provider), model: String(next.model) };
       return this.summaryModel;
@@ -119,6 +130,14 @@ async function runRoute(asrImpl, extraDeps = {}) {
     calendar: { status: async () => ({ available: false }) },
     autoIngest: { status: () => ({}) },
     logger: console,
+    modelManager: {
+      status: () => ({ dir: 'x', assets: {}, downloading: null }),
+      download: async () => ({ ok: true }),
+      remove: async () => ({ ok: true }),
+      paths: () => ({}),
+    },
+    paraformer: { available: () => true, diarizationAvailable: () => false },
+    cloudAsr: { transcribeCloud: async () => ({ ok: true, text: '云端识别结果' }) },
     ctx: {
       get: (service) => {
         if (service === 'llm') {
@@ -337,6 +356,24 @@ check('Word 导出返回 base64 与 .docx 文件名', docxRes.status === 200 && 
 check('Word 包以 ZIP 魔数开头（PK）', Buffer.from(docxBase64, 'base64').subarray(0, 2).toString('ascii') === 'PK', '')
 if (previousHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previousHome
 await mediaFs.rm(docxHome, { recursive: true, force: true })
+
+
+/* 21. 设置：转写引擎 / 云端校验 / 模型状态 */
+const settingsV2 = JSON.parse((await uploadCase('GET', '/dsh-meeting/settings')).body)
+check('设置返回转写与总结配置', settingsV2.settings?.transcribe?.provider === 'sensevoice-local' && Array.isArray(settingsV2.transcribeProviders), JSON.stringify(settingsV2.settings?.transcribe))
+check('设置返回模型状态与引擎就绪标记', settingsV2.modelsState !== null && settingsV2.paraformerReady === true, JSON.stringify({ modelsState: settingsV2.modelsState, paraformerReady: settingsV2.paraformerReady }))
+const switchLocal = await uploadCase('PATCH', '/dsh-meeting/settings', JSON.stringify({ settings: { transcribe: { provider: 'paraformer-local' } } }), 'application/json')
+check('可以切到本地 Paraformer 引擎', switchLocal.status === 200 && JSON.parse(switchLocal.body).settings?.transcribe?.provider === 'paraformer-local', switchLocal.body.slice(0, 160))
+const badCloud = await uploadCase('PATCH', '/dsh-meeting/settings', JSON.stringify({ settings: { transcribe: { provider: 'cloud-iflytek' } } }), 'application/json')
+check('切云端缺凭据时如实报错', badCloud.status === 400 && String(JSON.parse(badCloud.body).error).includes('讯飞'), badCloud.body.slice(0, 160))
+const badSummary = await uploadCase('PATCH', '/dsh-meeting/settings', JSON.stringify({ settings: { summary: { mode: 'custom' } } }), 'application/json')
+check('手动总结模型缺地址时报错', badSummary.status === 400, badSummary.body.slice(0, 160))
+const cloudTest = await uploadCase('POST', '/dsh-meeting/settings/cloud-test', JSON.stringify({ provider: 'cloud-tencent', cloud: { tencent: { secretId: 'a', secretKey: 'b', region: 'ap-shanghai' } } }), 'application/json')
+check('云端配置校验接口可用', cloudTest.status === 200 && JSON.parse(cloudTest.body).ok === true, cloudTest.body.slice(0, 160))
+const modelsStatus = await uploadCase('GET', '/dsh-meeting/models/status')
+check('模型状态接口可用', modelsStatus.status === 200 && JSON.parse(modelsStatus.body).ok === true, modelsStatus.body.slice(0, 160))
+const badKind = await uploadCase('POST', '/dsh-meeting/models/unknown/download')
+check('未知模型类型返回 200 但状态为未开始（广播模式）', badKind.status === 200, badKind.body.slice(0, 120))
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

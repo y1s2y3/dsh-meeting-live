@@ -401,6 +401,42 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-live-stopping{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary);line-height:18px}
 .dsm-icon-live-dot{position:absolute;bottom:-2px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--dsw-alias-state-error-primary);border:1.5px solid var(--dsw-alias-bg-base);animation:dsm-pulse 1.2s ease-in-out infinite}
 .dsm-settings-section{display:flex;flex-direction:column;gap:7px;padding:11px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-l2,#F8FAFE);margin-bottom:2px}
+/* ── 设置弹窗：左导航 + 右内容 ── */
+.dsm-set-layout{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;min-height:420px;max-height:64vh}
+.dsm-set-nav{display:flex;flex-direction:column;gap:4px;padding:6px 4px;border-right:1px solid #EDF1F7}
+.dsm-set-nav-item{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#475569;font-family:inherit;font-size:12.5px;line-height:18px;padding:8px 10px;border-radius:8px;cursor:pointer;text-align:left}
+.dsm-set-nav-item:hover{background:#F3F7FE;color:#2563EB}
+.dsm-set-nav-item--on{background:#EAF1FF;color:#2563EB;font-weight:600}
+.dsm-set-content{overflow:auto;padding:2px 4px 6px 2px}
+.dsm-set-page{display:flex;flex-direction:column;gap:12px}
+.dsm-set-section{display:flex;flex-direction:column;gap:8px;padding:12px 13px;border:1px solid #E4E9F2;border-radius:12px;background:#FBFCFE}
+.dsm-set-section-head{display:flex;flex-direction:column;gap:2px}
+.dsm-set-section-title{font-size:13px;font-weight:650;color:#0F172A}
+.dsm-set-section-desc{font-size:11px;line-height:16px;color:#8A94A6}
+.dsm-set-option{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border:1px solid #E4E9F2;border-radius:10px;background:#FFFFFF;cursor:pointer}
+.dsm-set-option:hover{border-color:#C7DAFF;background:#F8FBFF}
+.dsm-set-option--on{border-color:#9FBDFF;background:#F2F7FF}
+.dsm-set-option input{margin-top:2px;accent-color:#2F6BFF}
+.dsm-set-option-body{flex:1;min-width:0}
+.dsm-set-option-title{font-size:12.5px;font-weight:600;line-height:18px;color:#0F172A}
+.dsm-set-option-desc{font-size:11px;line-height:16px;color:#8A94A6;margin-top:1px}
+.dsm-set-badge{flex:0 0 auto;font-size:10px;line-height:16px;padding:1px 7px;border-radius:999px;border:1px solid #E4E9F2;color:#8A94A6;white-space:nowrap}
+.dsm-set-badge--ok{border-color:#B9E3C9;color:#15803D;background:#F2FBF6}
+.dsm-set-models{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px dashed #D9E2F0;border-radius:10px;background:#FFFFFF}
+.dsm-set-model-row{display:flex;align-items:center;gap:10px}
+.dsm-set-model-info{flex:1;min-width:0;display:flex;flex-direction:column}
+.dsm-set-model-name{font-size:12px;line-height:17px;color:#0F172A}
+.dsm-set-model-size{font-size:10.5px;line-height:15px;color:#8A94A6}
+.dsm-set-model-progress{font-size:11px;color:#2563EB}
+.dsm-set-inline{display:flex;align-items:center;gap:10px}
+.dsm-set-tabs{display:flex;gap:4px}
+.dsm-set-tab{border:1px solid #E4E9F2;background:#FFFFFF;color:#475569;font-family:inherit;font-size:11.5px;line-height:16px;padding:4px 10px;border-radius:999px;cursor:pointer}
+.dsm-set-tab--on{border-color:#9FBDFF;background:#EAF1FF;color:#2563EB;font-weight:600}
+.dsm-set-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.dsm-set-grid--cards{grid-template-columns:repeat(3,minmax(0,1fr))}
+.dsm-set-card{border:1px solid #E4E9F2;border-radius:10px;padding:8px 10px;background:#FFFFFF}
+.dsm-set-card-k{font-size:10.5px;color:#8A94A6;line-height:15px}
+.dsm-set-card-v{font-size:12.5px;font-weight:600;line-height:18px;color:#0F172A;margin-top:1px}
 .dsm-settings-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .dsm-settings-title{font-size:13px;font-weight:650;color:var(--dsw-alias-label-primary)}
 .dsm-settings-desc{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}
@@ -2747,6 +2783,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       publishLiveQueue()
       const idle = await waitForLiveIdle(LIVE_IDLE_TIMEOUT_MS)
       await finalizeLiveRecording(reason, idle, videoBlob)
+      const finishedId = snapshot.live.meetingId
+      if (typeof finishedId === 'string' && finishedId !== '') {
+        // 后台还会跑说话人分离 + 纠错（几秒到几十秒），延迟刷新把结果取回来
+        window.setTimeout(() => { void reloadMeetingQuietly(finishedId) }, 6000)
+        window.setTimeout(() => { void reloadMeetingQuietly(finishedId) }, 20000)
+      }
       stopLiveHeartbeat()
       await reportLiveSessionEnd(snapshot.live.status === 'error' ? 'error' : 'done')
       if (options.fromOrb === true) returnToMeetingPanel()
@@ -3269,323 +3311,450 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       )
     }
 
-    function AutoIngestModal(props) {
+    /**
+     * 设置弹窗（两页）：模型配置（语音转写 / 会议总结）+ 自动入库。
+     * 布局参考 DSH 设置：左侧导航 + 右侧内容卡片。
+     */
+    function SettingsModal(props) {
       const status = props.status ?? null
       const available = status !== null && typeof status === 'object'
+      const [page, setPage] = useState('model')
       const [enabled, setEnabled] = useState(status?.enabled !== false)
       const [tencent, setTencent] = useState(status?.tencent !== false)
       const [dirsText, setDirsText] = useState(() => (Array.isArray(status?.dirs) ? status.dirs.join('\n') : ''))
       const [busy, setBusy] = useState(false)
       const [scanning, setScanning] = useState(status?.scanning === true)
       const [error, setError] = useState(null)
-      const [models, setModels] = useState(() => [])
-      const [modelValue, setModelValue] = useState('')
-      const [defaultModelLabel, setDefaultModelLabel] = useState('')
-      const [modelError, setModelError] = useState(null)
+      const [settingsData, setSettingsData] = useState(null)
+      const [modelsState, setModelsState] = useState(null)
+      const [dshModels, setDshModels] = useState([])
+      const [defaultModel, setDefaultModel] = useState(null)
+      const [downloading, setDownloading] = useState('')
+      const [cloudTab, setCloudTab] = useState('iflytek')
+      const [summarySelection, setSummarySelection] = useState('')
       const mountedRef = useRef(true)
-      const hydratedRef = useRef(available)
 
       useEffect(() => {
         mountedRef.current = true
         return () => { mountedRef.current = false }
       }, [])
 
+      const loadSettings = async () => {
+        const payload = await requestJson('/settings')
+        if (!mountedRef.current) return
+        setSettingsData(payload?.settings ?? null)
+        setModelsState(payload?.modelsState ?? null)
+        setDshModels(Array.isArray(payload?.models) ? payload.models : [])
+        setDefaultModel(payload?.defaultModel ?? null)
+        const chosen = payload?.model
+        setSummarySelection(chosen !== null && chosen !== undefined ? String(chosen.provider) + '|' + String(chosen.model) : '')
+      }
+
       useEffect(() => {
-        let alive = true
-        void requestJson('/settings').then((payload) => {
-          if (!alive) return
-          const list = Array.isArray(payload?.models) ? payload.models : []
-          setModels(list)
-          const current = payload?.model
-          setModelValue(current !== null && current !== undefined ? `${current.provider}|${current.model}` : '')
-          const fallback = payload?.defaultModel
-          setDefaultModelLabel(fallback !== null && fallback !== undefined && fallback.model !== ''
-            ? `${fallback.model}（${fallback.provider}）`
-            : '')
-        }).catch((error) => {
-          if (alive) setModelError('读取模型列表失败：' + messageOf(error))
-        })
-        return () => { alive = false }
+        void loadSettings().catch((caught) => { setError(messageOf(caught)) })
       }, [])
 
-      /** 保存生成纪要使用的模型（空 = 跟随 DSH 默认模型）。 */
-      async function handleModelChange(value) {
-        setModelValue(value)
-        setModelError(null)
-        const [provider, model] = value === '' ? ['', ''] : value.split('|')
+      useEffect(() => {
+        if (downloading === '') return undefined
+        const timer = window.setInterval(() => {
+          void requestJson('/models/status').then((payload) => {
+            if (!mountedRef.current) return
+            setModelsState(payload?.state ?? null)
+          }).catch(() => {})
+        }, 1500)
+        return () => { window.clearInterval(timer) }
+      }, [downloading])
+
+      const settings = settingsData ?? {
+        transcribe: { provider: 'sensevoice-local', cloud: { iflytek: {}, tencent: {}, aliyun: {} } },
+        summary: { mode: 'dsh', custom: { baseUrl: '', apiKey: '', model: '', temperature: 0.3, maxTokens: 8192 } },
+        terms: '',
+        correctTranscript: true,
+        diarize: true,
+      }
+
+      const patchSettings = async (patch, message) => {
+        setError(null)
         try {
-          await requestJson('/settings', { method: 'PATCH', body: { model: value === '' ? null : { provider, model } } })
-          notifySuccess('模型设置已保存', value === '' ? '之后生成纪要将跟随 DSH 默认模型' : `之后生成纪要将使用 ${model}`)
-        } catch (error) {
-          setModelError('保存模型设置失败：' + messageOf(error))
+          const payload = await requestJson('/settings', { method: 'PATCH', body: { settings: patch } })
+          if (!mountedRef.current) return
+          setSettingsData(payload?.settings ?? null)
+          if (typeof message === 'string' && message !== '') notifySuccess(message, '')
+          await loadSettings()
+        } catch (caught) {
+          setError(messageOf(caught))
         }
       }
 
-      const modelOptions = models
-        .filter((item) => String(item?.id ?? '') !== '')
-        .map((item) => ({
-          value: `${item.provider}|${item.id}`,
-          label: `${item.name}（${item.displayName || item.provider}）`,
-        }))
+      const updateTranscribe = (patch) => {
+        void patchSettings({ transcribe: { ...settings.transcribe, ...patch } })
+      }
+      const updateCloud = (key, field, value) => {
+        const cloud = { ...(settings.transcribe.cloud ?? {}) }
+        cloud[key] = { ...(cloud[key] ?? {}), [field]: value }
+        void patchSettings({ transcribe: { ...settings.transcribe, cloud } })
+      }
+      const updateSummary = (patch) => {
+        void patchSettings({ summary: { ...settings.summary, ...patch } })
+      }
+      const updateSummaryCustom = (field, value) => {
+        const custom = { ...(settings.summary.custom ?? {}), [field]: value }
+        void patchSettings({ summary: { ...settings.summary, custom } })
+      }
 
-      useEffect(() => {
-        // The dialog can open before the first /state response; hydrate the
-        // form once the projection arrives without overwriting later edits.
-        if (hydratedRef.current || !available) return
-        hydratedRef.current = true
-        setEnabled(status.enabled !== false)
-        setTencent(status.tencent !== false)
-        setDirsText(Array.isArray(status.dirs) ? status.dirs.join('\n') : '')
-      }, [available, status])
+      const saveSummarySelection = async (value) => {
+        try {
+          if (value === '') {
+            await requestJson('/settings', { method: 'PATCH', body: { model: null } })
+          } else {
+            const [provider, model] = value.split('|')
+            await requestJson('/settings', { method: 'PATCH', body: { model: { provider, model } } })
+          }
+          setSummarySelection(value)
+          notifySuccess('总结模型已更新', value === '' ? '跟随 DSH 默认模型' : value.split('|')[1])
+          await loadSettings()
+        } catch (caught) {
+          setError(messageOf(caught))
+        }
+      }
 
-      useEffect(() => {
-        setScanning(status?.scanning === true)
-      }, [status?.scanning])
+      const downloadModel = async (kind) => {
+        setDownloading(kind)
+        setError(null)
+        try {
+          await requestJson('/models/' + kind + '/download', { method: 'POST' })
+          notifySuccess('模型下载完成', kind === 'paraformer' ? 'Paraformer 中文识别模型已就绪' : (kind === 'segmentation' ? '说话人分段模型已就绪' : '声纹模型已就绪'))
+        } catch (caught) {
+          setError(messageOf(caught))
+        } finally {
+          setDownloading('')
+          await loadSettings().catch(() => {})
+        }
+      }
 
-      const formPatch = () => ({
-        enabled,
-        tencent,
-        dirs: parseAutoIngestDirs(dirsText),
-      })
+      const removeModel = async (kind) => {
+        try {
+          await requestJson('/models/' + kind, { method: 'DELETE' })
+          await loadSettings()
+          notifySuccess('已删除模型', '')
+        } catch (caught) {
+          setError(messageOf(caught))
+        }
+      }
 
-      const handleSave = async () => {
-        if (!available) return
+      const handleSaveAuto = async () => {
         setBusy(true)
         setError(null)
         try {
-          const next = await saveAutoIngestSettings(formPatch())
-          notifySuccess(
-            '自动入库设置已保存',
-            next?.enabled === false ? '已暂停自动扫描' : '已启用自动扫描',
-          )
+          const next = await saveAutoIngestSettings({
+            enabled,
+            tencent,
+            dirs: parseAutoIngestDirs(dirsText),
+          })
+          if (next !== null) applyAutoIngestStatus(next)
+          setBusy(false)
+          notifySuccess('自动入库设置已保存', '')
         } catch (caught) {
+          setBusy(false)
           setError(messageOf(caught))
-          reportError(caught, '保存自动入库设置失败')
-        } finally {
-          if (mountedRef.current) setBusy(false)
         }
       }
 
       const handleScan = async () => {
-        if (!available || scanning) return
         setScanning(true)
         setError(null)
         try {
-          // Apply the visible form first so "scan" uses the settings on screen.
-          await saveAutoIngestSettings(formPatch())
-          const next = await scanAutoIngestAndWait()
-          if (mountedRef.current) {
-            notifySuccess('自动入库扫描完成', `已自动导入 ${Number(next?.importedCount) || 0} 场会议`)
-          }
+          await triggerAutoIngestScanNow()
+          if (mountedRef.current) setScanning(false)
         } catch (caught) {
           if (mountedRef.current) {
+            setScanning(false)
             setError(messageOf(caught))
-            reportError(caught, '自动入库扫描失败')
           }
-        } finally {
-          if (mountedRef.current) setScanning(false)
         }
       }
 
-      const recent = available && Array.isArray(status.recent) ? status.recent : []
-      const scanningNow = scanning || status?.scanning === true
-      const tencentUsable = available && status.tencentAvailable === true
-      const lastScan = available ? status.lastScanAt : null
+      const defaultModelLabel = defaultModel === null || defaultModel === undefined || String(defaultModel.model ?? '') === ''
+        ? '跟随 DSH 默认模型'
+        : '跟随 DSH 默认模型（' + String(defaultModel.model) + '）'
+      const modelReady = (kind) => modelsState?.assets?.[kind]?.ready === true
+      const downloadingState = modelsState?.downloading ?? null
+      const percent = typeof downloadingState?.percent === 'number' ? downloadingState.percent : 0
 
-      const statusCards = available
-        ? [
-          h(
-            'div',
-            { key: 'state', className: 'dsm-auto-card' },
-            h('div', { className: 'dsm-auto-k' }, '运行状态'),
-            h('div', { className: `dsm-auto-v${scanningNow ? ' dsm-auto-v--warn' : ''}` },
-              scanningNow ? '扫描中…' : (status.enabled === false ? '已停用' : '运行中')),
-            Number(status.pending) > 0
-              ? h('div', { className: 'dsm-auto-path' }, `待处理 ${Number(status.pending)} 个`)
-              : null,
+      const radioRow = (checked, onSelect, title, desc, right) => h(
+        'div',
+        { className: 'dsm-set-option' + (checked ? ' dsm-set-option--on' : '') },
+        h('input', { type: 'radio', checked, onChange: () => { onSelect() } }),
+        h(
+          'div',
+          { className: 'dsm-set-option-body' },
+          h('div', { className: 'dsm-set-option-title' }, title),
+          desc ? h('div', { className: 'dsm-set-option-desc' }, desc) : null,
+        ),
+        right ?? null,
+      )
+
+      const transcribeProvider = settings.transcribe.provider
+      const cloudConfig = settings.transcribe.cloud ?? {}
+
+      const modelPage = h(
+        'div',
+        { className: 'dsm-set-page' },
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '语音转写模型'),
+            h('span', { className: 'dsm-set-section-desc' }, '把会议音频转成文字；本地模型离线运行，云端模型需联网与凭据。'),
           ),
-          h(
-            'div',
-            { key: 'tencent', className: 'dsm-auto-card' },
-            h('div', { className: 'dsm-auto-k' }, '腾讯会议本地录制数据库'),
-            h(
+          radioRow(
+            transcribeProvider === 'sensevoice-local',
+            () => { if (transcribeProvider !== 'sensevoice-local') updateTranscribe({ provider: 'sensevoice-local' }) },
+            'SenseVoice（内置，本地）',
+            '开箱即用 · 228 MB · 中文准确率高、速度快，不支持热词与说话人分离',
+            h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已就绪'),
+          ),
+          radioRow(
+            transcribeProvider === 'paraformer-local',
+            () => { if (transcribeProvider !== 'paraformer-local') updateTranscribe({ provider: 'paraformer-local' }) },
+            'Paraformer-zh（本地，支持说话人分离）',
+            '需下载模型 · 中文长句与专业词更稳；配合 pyannote + cam++ 可输出 S1/S2 真说话人',
+            modelReady('paraformer') && modelReady('segmentation') && modelReady('campplus')
+              ? h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已就绪')
+              : h('span', { className: 'dsm-set-badge' }, '未下载'),
+          ),
+          h('div', { className: 'dsm-set-models' },
+            ...[
+              ['paraformer', '识别模型 Paraformer-zh', '约 217 MB'],
+              ['segmentation', '说话人分段（pyannote）', '约 1 MB'],
+              ['campplus', '说话人声纹（cam++）', '约 27 MB'],
+            ].map(([kind, title, size]) => h(
               'div',
-              { className: `dsm-auto-v ${tencentUsable ? 'dsm-auto-v--ok' : 'dsm-auto-v--warn'}` },
-              tencentUsable ? `可用 · 已完成录制 ${Number(status.tencentRecords) || 0} 条` : '不可用',
+              { key: 'model-' + kind, className: 'dsm-set-model-row' },
+              h('div', { className: 'dsm-set-model-info' },
+                h('span', { className: 'dsm-set-model-name' }, title),
+                h('span', { className: 'dsm-set-model-size' }, modelReady(kind) ? '已安装' : size),
+              ),
+              downloadingState !== null && downloadingState.kind === kind
+                ? h('span', { className: 'dsm-set-model-progress' }, '下载中 ' + String(percent) + '%')
+                : (modelReady(kind)
+                  ? h('button', { type: 'button', className: 'dsm-btn dsm-btn--sm', onClick: () => { void removeModel(kind) } }, '删除')
+                  : h('button', {
+                    type: 'button',
+                    className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                    disabled: downloading !== '',
+                    onClick: () => { void downloadModel(kind) },
+                  }, downloading === kind ? '下载中…' : '下载')),
+            )),
+          ),
+          h('div', { className: 'dsm-set-inline' },
+            h('label', { className: 'dsm-check' },
+              h('input', {
+                type: 'checkbox',
+                checked: settings.diarize === true,
+                onChange: (event) => { void patchSettings({ diarize: event.target.checked }) },
+              }),
+              h('span', null, '启用真说话人分离（需三个模型就绪）'),
             ),
-            status.tencentError
-              ? h('div', { className: 'dsm-auto-path dsm-auto-v--warn' }, String(status.tencentError))
-              : null,
-            status.tencentDbPath
-              ? h('div', { className: 'dsm-auto-path', title: status.tencentDbPath }, String(status.tencentDbPath))
-              : null,
           ),
-          h(
-            'div',
-            { key: 'lastScan', className: 'dsm-auto-card' },
-            h('div', { className: 'dsm-auto-k' }, '上次扫描时间'),
-            h('div', { className: 'dsm-auto-v' }, lastScan ? formatStamp(lastScan) : '尚未扫描'),
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '云端语音识别'),
+            h('span', { className: 'dsm-set-section-desc' }, '把音频发到云服务识别；适合对准确率/热词要求高的场景。'),
           ),
-          h(
-            'div',
-            { key: 'counts', className: 'dsm-auto-card' },
-            h('div', { className: 'dsm-auto-k' }, '已自动导入 / 失败来源'),
-            h('div', { className: 'dsm-auto-v' }, `${Number(status.importedCount) || 0} 场 · ${Number(status.failedCount) || 0} 个失败来源`),
+          h('div', { className: 'dsm-set-tabs' },
+            ...Object.entries({ iflytek: '讯飞', tencent: '腾讯云', aliyun: '阿里云' }).map(([key, label]) => h(
+              'button',
+              {
+                key: 'cloud-tab-' + key,
+                type: 'button',
+                className: 'dsm-set-tab' + (cloudTab === key ? ' dsm-set-tab--on' : ''),
+                onClick: () => setCloudTab(key),
+              },
+              label,
+            )),
           ),
-          status.lastError
-            ? h(
-              'div',
-              { key: 'lastError', className: 'dsm-auto-card dsm-auto-card--wide' },
-              h('div', { className: 'dsm-auto-k' }, '最近错误'),
-              h('div', { className: 'dsm-auto-v dsm-auto-v--error' }, String(status.lastError)),
+          radioRow(
+            transcribeProvider === 'cloud-' + cloudTab,
+            () => { if (transcribeProvider !== 'cloud-' + cloudTab) updateTranscribe({ provider: 'cloud-' + cloudTab }) },
+            '使用' + (cloudTab === 'iflytek' ? '讯飞' : cloudTab === 'tencent' ? '腾讯云' : '阿里云') + '语音识别',
+            '需要填写下方凭据；音频会离开本机',
+            null,
+          ),
+          cloudTab === 'iflytek'
+            ? h('div', { className: 'dsm-set-grid' },
+              h(Field, { label: 'AppID' }, h(TextInput, { value: cloudConfig.iflytek?.appId ?? '', onChange: (value) => updateCloud('iflytek', 'appId', value), placeholder: '讯飞控制台 AppID' })),
+              h(Field, { label: 'APIKey' }, h(TextInput, { value: cloudConfig.iflytek?.apiKey ?? '', onChange: (value) => updateCloud('iflytek', 'apiKey', value) })),
+              h(Field, { label: 'APISecret' }, h(TextInput, { value: cloudConfig.iflytek?.apiSecret ?? '', onChange: (value) => updateCloud('iflytek', 'apiSecret', value) })),
             )
             : null,
-        ]
-        : [
-          h(
-            'div',
-            { key: 'unavailable', className: 'dsm-auto-card dsm-auto-card--wide' },
-            h('div', { className: 'dsm-auto-k' }, '自动入库'),
-            h('div', { className: 'dsm-auto-v dsm-auto-v--warn' }, '宿主未提供自动入库服务（autoIngest 为空），当前无法配置。'),
+          cloudTab === 'tencent'
+            ? h('div', { className: 'dsm-set-grid' },
+              h(Field, { label: 'SecretId' }, h(TextInput, { value: cloudConfig.tencent?.secretId ?? '', onChange: (value) => updateCloud('tencent', 'secretId', value) })),
+              h(Field, { label: 'SecretKey' }, h(TextInput, { value: cloudConfig.tencent?.secretKey ?? '', onChange: (value) => updateCloud('tencent', 'secretKey', value) })),
+              h(Field, { label: '地域' }, h(TextInput, { value: cloudConfig.tencent?.region ?? 'ap-shanghai', onChange: (value) => updateCloud('tencent', 'region', value) })),
+              h(Field, { label: '引擎' }, h(TextInput, { value: cloudConfig.tencent?.engine ?? '16k_zh', onChange: (value) => updateCloud('tencent', 'engine', value) })),
+            )
+            : null,
+          cloudTab === 'aliyun'
+            ? h('div', { className: 'dsm-set-grid' },
+              h(Field, { label: 'AppKey' }, h(TextInput, { value: cloudConfig.aliyun?.appKey ?? '', onChange: (value) => updateCloud('aliyun', 'appKey', value) })),
+              h(Field, { label: 'AccessKeyId' }, h(TextInput, { value: cloudConfig.aliyun?.accessKeyId ?? '', onChange: (value) => updateCloud('aliyun', 'accessKeyId', value) })),
+              h(Field, { label: 'AccessKeySecret' }, h(TextInput, { value: cloudConfig.aliyun?.accessKeySecret ?? '', onChange: (value) => updateCloud('aliyun', 'accessKeySecret', value) })),
+              h(Field, { label: '地域' }, h(TextInput, { value: cloudConfig.aliyun?.region ?? 'cn-shanghai', onChange: (value) => updateCloud('aliyun', 'region', value) })),
+            )
+            : null,
+          h('div', { className: 'dsm-hint' }, '凭据只保存在本机会议数据文件里；切换云端后，录音会实时上传到对应云服务。'),
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '会议总结模型'),
+            h('span', { className: 'dsm-set-section-desc' }, '把转写整理成结构化纪要（一句话结论/决策/待办）。'),
           ),
+          radioRow(
+            settings.summary.mode !== 'custom',
+            () => { if (settings.summary.mode === 'custom') updateSummary({ mode: 'dsh' }) },
+            '使用 DSH 已配置模型',
+            '与 DSH 设置里的模型一致；也可以在这里单独指定',
+            null,
+          ),
+          settings.summary.mode !== 'custom'
+            ? h('div', { className: 'dsm-set-grid' },
+              h(Field, { label: 'DSH 模型' }, h(Select, {
+                value: summarySelection,
+                onChange: (value) => { void saveSummarySelection(value) },
+                options: [
+                  { value: '', label: defaultModelLabelText(defaultModel) },
+                  ...dshModels.map((item) => ({ value: item.provider + '|' + item.id, label: item.name + '（' + (item.displayName || item.provider) + '）' })),
+                ],
+              })),
+            )
+            : null,
+          radioRow(
+            settings.summary.mode === 'custom',
+            () => { if (settings.summary.mode !== 'custom') updateSummary({ mode: 'custom' }) },
+            '手动配置模型接口',
+            '任意 OpenAI 兼容接口（/chat/completions）',
+            null,
+          ),
+          settings.summary.mode === 'custom'
+            ? h('div', { className: 'dsm-set-grid' },
+              h(Field, { label: '接口地址' }, h(TextInput, { value: settings.summary.custom?.baseUrl ?? '', onChange: (value) => updateSummaryCustom('baseUrl', value), placeholder: 'https://api.example.com/v1' })),
+              h(Field, { label: '模型名' }, h(TextInput, { value: settings.summary.custom?.model ?? '', onChange: (value) => updateSummaryCustom('model', value), placeholder: 'qwen-max' })),
+              h(Field, { label: 'API Key' }, h(TextInput, { value: settings.summary.custom?.apiKey ?? '', onChange: (value) => updateSummaryCustom('apiKey', value), placeholder: '可留空（本地服务）' })),
+              h(Field, { label: '温度' }, h(TextInput, { value: String(settings.summary.custom?.temperature ?? 0.3), onChange: (value) => updateSummaryCustom('temperature', Number(value) || 0.3) })),
+            )
+            : null,
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '转写纠错与术语'),
+            h('span', { className: 'dsm-set-section-desc' }, '录音结束后用总结模型把转写里的错别字、人名、术语改正确（不改内容）。'),
+          ),
+          h('label', { className: 'dsm-check' },
+            h('input', {
+              type: 'checkbox',
+              checked: settings.correctTranscript === true,
+              onChange: (event) => { void patchSettings({ correctTranscript: event.target.checked }) },
+            }),
+            h('span', null, '录音结束后自动纠错一次'),
+          ),
+          h(Field, { label: '术语表（一行一个，最多 60 字/条）' }, h(TextArea, {
+            rows: 4,
+            value: settings.terms ?? '',
+            onChange: (value) => { void patchSettings({ terms: value }) },
+            placeholder: '多个名词换行输入',
+          })),
+        ),
+        error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
+      )
+
+      const autoPage = h(
+        'div',
+        { className: 'dsm-set-page' },
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '自动入库'),
+            h('span', { className: 'dsm-set-section-desc' }, '定时扫描本机录制文件，自动导入成待整理会议。'),
+          ),
+          h('label', { className: 'dsm-check' },
+            h('input', { type: 'checkbox', checked: enabled, disabled: !available, onChange: (event) => setEnabled(event.target.checked) }),
+            h('span', null, '开启自动入库'),
+          ),
+          h('label', { className: 'dsm-check' },
+            h('input', { type: 'checkbox', checked: tencent, disabled: !available, onChange: (event) => setTencent(event.target.checked) }),
+            h('span', null, '读取腾讯会议本地录制'),
+          ),
+          h(Field, { label: '额外监控目录（一行一个路径）' }, h(TextArea, {
+            rows: 4,
+            value: dirsText,
+            onChange: setDirsText,
+            placeholder: 'C:\\Users\\me\\Videos\\TencentMeeting\nC:\\Users\\me\\Documents\\会议录音',
+          })),
+          h('div', { className: 'dsm-hint' }, '支持 audio / video / txt / md / docx；新文件在下一次扫描时导入。'),
+        ),
+        available
+          ? h('div', { className: 'dsm-set-grid dsm-set-grid--cards' },
+            h('div', { className: 'dsm-set-card' },
+              h('div', { className: 'dsm-set-card-k' }, '运行状态'),
+              h('div', { className: 'dsm-set-card-v' }, scanning || status?.scanning === true ? '扫描中…' : (status?.enabled === false ? '已停用' : '运行中')),
+            ),
+            h('div', { className: 'dsm-set-card' },
+              h('div', { className: 'dsm-set-card-k' }, '已自动导入 / 失败'),
+              h('div', { className: 'dsm-set-card-v' }, String(Number(status?.importedCount) || 0) + ' 场 · ' + String(Number(status?.failedCount) || 0) + ' 个失败来源'),
+            ),
+            h('div', { className: 'dsm-set-card' },
+              h('div', { className: 'dsm-set-card-k' }, '上次扫描'),
+              h('div', { className: 'dsm-set-card-v' }, status?.lastScanAt ? formatStamp(status.lastScanAt) : '尚未扫描'),
+            ),
+          )
+          : h('div', { className: 'dsm-hint dsm-hint--warn' }, '宿主未提供自动入库服务，当前无法配置。'),
+        error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
+      )
+
+      const footer = page === 'auto'
+        ? [
+          h('button', { key: 'close', type: 'button', className: 'dsm-btn', onClick: props.onClose }, '关闭'),
+          h('button', {
+            key: 'scan',
+            type: 'button',
+            className: 'dsm-btn',
+            disabled: scanning || !enabled,
+            onClick: () => { void handleScan() },
+          }, scanning ? h('span', { className: 'dsm-spin' }) : h(Icon, { name: 'refresh', size: 13 }), h('span', null, scanning ? '扫描中…' : '立即扫描')),
+          h('button', { key: 'save', type: 'button', className: 'dsm-btn dsm-btn--primary', disabled: busy, onClick: () => { void handleSaveAuto() } }, '保存'),
         ]
+        : [h('button', { key: 'close', type: 'button', className: 'dsm-btn dsm-btn--primary', onClick: props.onClose }, '完成')]
 
       return h(
         Modal,
         {
           title: '设置',
-          subtitle: '生成纪要使用的模型，以及自动入库的开关与扫描。',
+          subtitle: '模型与自动入库。改动即时保存。',
+          wide: true,
           onClose: props.onClose,
-          footer: [
-            h('button', { key: 'close', type: 'button', className: 'dsm-btn', onClick: props.onClose }, '关闭'),
-            available
-              ? h('button', {
-                key: 'scan',
-                type: 'button',
-                className: 'dsm-btn',
-                onClick: () => { void handleScan() },
-                disabled: scanningNow || busy || !enabled,
-                title: !enabled ? '请先启用自动入库' : undefined,
-              }, scanningNow ? h('span', { className: 'dsm-spin' }) : h(Icon, { name: 'refresh', size: 13 }), h('span', null, scanningNow ? '扫描中…' : '立即扫描'))
-              : null,
-            available
-              ? h('button', {
-                key: 'save',
-                type: 'button',
-                className: 'dsm-btn dsm-btn--primary',
-                onClick: () => { void handleSave() },
-                disabled: busy || scanningNow,
-              }, busy ? '保存中…' : '保存设置')
-              : null,
-          ],
+          footer,
         },
         h(
           'div',
-          { className: 'dsm-settings-section' },
+          { className: 'dsm-set-layout' },
           h(
-            'div',
-            { className: 'dsm-settings-head' },
-            h('span', { className: 'dsm-settings-title' }, '模型'),
-            h('span', { className: 'dsm-settings-desc' }, '生成 AI 纪要时使用的模型，可选 DSH 已配置的模型。'),
+            'nav',
+            { className: 'dsm-set-nav' },
+            h('button', {
+              key: 'nav-model',
+              type: 'button',
+              className: 'dsm-set-nav-item' + (page === 'model' ? ' dsm-set-nav-item--on' : ''),
+              onClick: () => setPage('model'),
+            }, h(Icon, { name: 'sliders', size: 13 }), h('span', null, '模型配置')),
+            h('button', {
+              key: 'nav-auto',
+              type: 'button',
+              className: 'dsm-set-nav-item' + (page === 'auto' ? ' dsm-set-nav-item--on' : ''),
+              onClick: () => setPage('auto'),
+            }, h(Icon, { name: 'folder', size: 13 }), h('span', null, '自动入库')),
           ),
-          h(Select, {
-            value: modelValue,
-            onChange: (value) => { void handleModelChange(value) },
-            options: [
-              { value: '', label: defaultModelLabel === '' ? '跟随 DSH 默认模型' : `跟随 DSH 默认模型（${defaultModelLabel}）` },
-              ...modelOptions,
-            ],
-          }),
-          modelOptions.length === 0 && modelError === null
-            ? h('div', { className: 'dsm-hint' }, '没有读到模型目录：可先「跟随 DSH 默认模型」，或在 DSH 设置里添加模型提供商后重开本窗口。')
-            : null,
-          modelError !== null ? h('div', { className: 'dsm-hint dsm-hint--warn' }, modelError) : null,
+          h('div', { className: 'dsm-set-content' }, page === 'model' ? modelPage : autoPage),
         ),
-        h('div', { className: 'dsm-settings-section-head' }, '自动入库'),
-        h(
-          'div',
-          { className: 'dsm-auto-toggles' },
-          h(
-            'label',
-            { className: 'dsm-auto-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: enabled,
-              disabled: !available,
-              onChange: (event) => setEnabled(event.target.checked),
-            }),
-            h(
-              'span',
-              { className: 'dsm-auto-toggle-body' },
-              h('span', { className: 'dsm-auto-toggle-title' }, '自动入库总开关'),
-              h('span', { className: 'dsm-auto-toggle-text' }, '开启后定时扫描腾讯会议本地录制与额外监控目录，自动把新文件导入会议列表。'),
-            ),
-          ),
-          h(
-            'label',
-            { className: 'dsm-auto-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: tencent,
-              disabled: !available,
-              onChange: (event) => setTencent(event.target.checked),
-            }),
-            h(
-              'span',
-              { className: 'dsm-auto-toggle-body' },
-              h('span', { className: 'dsm-auto-toggle-title' }, '腾讯会议本地录制自动提取'),
-              h('span', { className: 'dsm-auto-toggle-text' }, '从本机腾讯会议数据库读取录制记录并转写；不读取云端智能纪要。'),
-            ),
-          ),
-        ),
-        h('div', { className: 'dsm-auto-grid' }, ...statusCards),
-        h(
-          'div',
-          { className: 'dsm-auto-card dsm-auto-card--wide' },
-          h('div', { className: 'dsm-auto-k' }, '额外监控目录（一行一个路径）'),
-          h(TextArea, {
-            rows: 4,
-            value: dirsText,
-            onChange: setDirsText,
-            placeholder: '/Users/me/Movies/TencentMeeting\n/Users/me/Documents/会议录音',
-          }),
-          h('div', { className: 'dsm-auto-path' }, '支持 audio / video / txt / md / docx 文件；新增文件会在下一次扫描时导入。'),
-        ),
-        scanningNow
-          ? h('div', { className: 'dsm-hint' }, '正在扫描：每 2 秒检查一次，最多等待 60 秒。')
-          : null,
-        h(
-          'div',
-          { className: 'dsm-auto-note' },
-          '自动抓取的是本机录制文件；腾讯云端智能纪要需要先导出到监控目录，或通过企业 API 接入。',
-        ),
-        recent.length > 0
-          ? h(
-            'div',
-            { className: 'dsm-field' },
-            h('span', { className: 'dsm-label' }, `最近自动导入（${recent.length}）`),
-            h(
-              'div',
-              { className: 'dsm-auto-recent' },
-              ...recent.map((entry) => h(
-                'button',
-                {
-                  key: entry.key ?? entry.meetingId ?? entry.title,
-                  type: 'button',
-                  className: 'dsm-auto-recent-item',
-                  title: entry.path ?? entry.title,
-                  onClick: () => {
-                    if (entry.meetingId) props.onSelectMeeting(entry.meetingId)
-                    else props.onClose()
-                  },
-                },
-                h('span', { className: 'dsm-auto-recent-title' }, entry.title || entry.meetingId || entry.key || '未命名会议'),
-                h('span', { className: 'dsm-auto-recent-time' }, entry.at ? formatStamp(entry.at) : ''),
-              )),
-            ),
-          )
-          : null,
-        error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
       )
     }
 
@@ -3816,7 +3985,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const createdRef = useRef(null)
 
       const speech = state.speech ?? state.data?.speech
-      const speechAvailable = speechUsable(speech)
+      const speechAvailable = speechUsable(speech) || state.data?.transcribe?.ready === true
       const liveActive = liveIsActive(live)
       const liveStatus = live.status
       const fileBusy = fileStage === 'preparing' || fileStage === 'processing'
@@ -5975,7 +6144,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           ? h(ImportTextModal, { meeting: selected, onClose: closeDialog })
           : null,
         dialog === 'auto'
-          ? h(AutoIngestModal, {
+          ? h(SettingsModal, {
             status: state.data?.autoIngest ?? null,
             onClose: closeDialog,
             onSelectMeeting: (meetingId) => {

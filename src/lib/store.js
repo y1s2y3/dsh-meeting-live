@@ -17,8 +17,9 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { DEFAULT_AUTO_INGEST, normalizeAutoIngestConfig, normalizeMeeting, normalizeSummaryModel } from './model.js'
+import { DEFAULT_SETTINGS, normalizeSettings } from './settings.js'
 
-const EMPTY = { version: 1, updatedAt: null, meetings: [], autoIngest: { ...DEFAULT_AUTO_INGEST }, summaryModel: null }
+const EMPTY = { version: 1, updatedAt: null, meetings: [], autoIngest: { ...DEFAULT_AUTO_INGEST }, summaryModel: null, settings: structuredClone(DEFAULT_SETTINGS) }
 const STORE_FILE = 'meeting-minutes.json'
 
 /** The harness home directory. */
@@ -51,6 +52,7 @@ async function readDocument(file, logger) {
       meetings,
       autoIngest: normalizeAutoIngestConfig(parsed?.autoIngest),
       summaryModel: normalizeSummaryModel(parsed?.summaryModel),
+      settings: normalizeSettings(parsed?.settings),
     }
   } catch (error) {
     logger?.warn?.(`meeting-minutes: unreadable store ${file}, starting empty (${String(error?.message ?? error)})`)
@@ -104,6 +106,7 @@ export class MeetingStore {
       meetings: this.#doc.meetings.map((meeting) => structuredClone(meeting)),
       autoIngest: structuredClone(this.#doc.autoIngest),
       summaryModel: normalizeSummaryModel(this.#doc.summaryModel),
+      settings: structuredClone(this.#doc.settings),
     }
   }
 
@@ -118,6 +121,19 @@ export class MeetingStore {
       doc.autoIngest = normalizeAutoIngestConfig({ ...doc.autoIngest, ...patch })
     })
     return this.#doc.autoIngest
+  }
+
+  /** 插件设置（转写引擎 / 纪要模型 / 术语 / 说话人分离开关）。 */
+  get settings() {
+    return structuredClone(this.#doc.settings)
+  }
+
+  /** 合并保存设置（缺字段保留旧值，非法值退回默认）。 */
+  async setSettings(patch) {
+    await this.update((doc) => {
+      doc.settings = normalizeSettings({ ...doc.settings, ...patch }, doc.settings)
+    })
+    return this.#doc.settings
   }
 
   /** 生成纪要使用的模型；null 表示跟随 DSH 默认模型。 */

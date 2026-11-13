@@ -182,9 +182,13 @@ export function createSummarizer(options) {
       throw new Error('这场会议还没有文本内容：请先录音转写，或导入腾讯会议纪要文本。')
     }
     const signal = options.signal
+    const custom = options.custom ?? null
+    const callModelFn = async (messages, system) => {
+      if (custom !== null) return callCustomModel(messages, system, custom, signal)
+      return callModel(messages, system, signal, options.selection ?? null)
+    }
     const messages = [{ role: 'user', content: [{ type: 'text', text: buildUserPrompt(meeting) }] }]
-    const selection = options.selection ?? null
-    const first = await callModel(messages, SYSTEM_PROMPT, signal, selection)
+    const first = await callModelFn(messages, SYSTEM_PROMPT)
     const parsed = parseSummaryJson(first.text)
     if (parsed !== null) {
       return normalizeSummary(parsed, {
@@ -198,7 +202,7 @@ export function createSummarizer(options) {
       role: 'user',
       content: [{ type: 'text', text: buildRepairPrompt(first.text, meeting) }],
     }]
-    const second = await callModel(repairMessages, SYSTEM_PROMPT, signal, selection)
+    const second = await callModelFn(repairMessages, SYSTEM_PROMPT)
     const repaired = parseSummaryJson(second.text)
     if (repaired === null) {
       throw new Error('模型返回的纪要格式无法解析，请重试一次；若持续失败，可换一个模型再生成。')
@@ -208,6 +212,33 @@ export function createSummarizer(options) {
       now: new Date(),
       model: `${second.route.provider}/${second.route.model}`,
     })
+  }
+
+  /**
+   * 用 LLM 对转写做一次"只改错别字/术语/人名"的纠错。
+   * 失败时抛错，调用方保留原文。
+   */
+  async function correctTranscript(meeting, options = {}) {
+    const raw = typeof meeting?.transcript === 'string' ? meeting.transcript : ''
+    if (raw.trim() === '') throw new Error('没有可纠错的转写文本')
+    const custom = options.custom ?? null
+    const terms = Array.isArray(options.terms) ? options.terms : []
+    const instruction = [
+      '你是中文会议转写的校对员。请只修正错别字、同音字、专有名词（术语/系统名/人名）与明显断词，',
+      '不要改写句式、不要删减内容、不要总结、不要添加原文没有的信息。',
+      '保持原有的换行与说话人标记（如 S1：、A：）不变。',
+      terms.length > 0 ? '优先使用这些术语的正确写法：' + terms.join('、') : '',
+      '只输出校对后的全文，不要解释。',
+    ].filter((line) => line !== '').join('\n')
+    const messages = [{ role: 'user', content: [{ type: 'text', text: buildUserPrompt({ ...meeting, transcript: raw }) }] }]
+    const result = custom !== null
+      ? await callCustomModel(messages, instruction, custom, options.signal)
+      : await callModel(messages, instruction, options.signal, options.selection ?? null)
+    const text = String(result?.text ?? '').trim()
+    if (text === '') throw new Error('纠错模型没有返回内容')
+    const ratio = text.length / Math.max(1, raw.length)
+    if (ratio < 0.7 || ratio > 1.3) throw new Error('纠错结果长度异常（' + ratio.toFixed(2) + ' 倍），已保留原文')
+    return text
   }
 
   /** Current model route label for the panel footer. */
@@ -220,5 +251,5 @@ export function createSummarizer(options) {
     }
   }
 
-  return { summarize, describeRoute }
+  return { summarize, describeRoute, correctTranscript }
 }

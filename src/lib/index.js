@@ -28,6 +28,9 @@ import { registerMeetingSkill } from './skill.js'
 import { createLiveMirror } from './live-mirror.js'
 import { createOrbManager, startOrbBridge } from './orb.js'
 import { createDshTodo } from './dsh-todo.js'
+import { createModelManager } from './model-manager.js'
+import { createParaformerEngine } from './paraformer.js'
+import * as cloudAsr from './cloud-asr.js'
 
 /** Loader-facing plugin name. */
 export const name = 'meeting-minutes'
@@ -48,7 +51,23 @@ export function apply(ctx) {
   const liveMirror = createLiveMirror()
   const orb = createOrbManager({ logger: ctx.logger })
   const dshTodo = createDshTodo({ logger: ctx.logger })
-  const deps = { ctx, store, asr, summarizer, calendar, autoIngest, liveMirror, orb, dshTodo, logger: ctx.logger }
+  const modelManager = createModelManager({ logger: ctx.logger })
+  const paraformer = createParaformerEngine({ models: modelManager.paths(), logger: ctx.logger })
+  const deps = {
+    ctx,
+    store,
+    asr,
+    summarizer,
+    calendar,
+    autoIngest,
+    liveMirror,
+    orb,
+    dshTodo,
+    modelManager,
+    paraformer,
+    cloudAsr,
+    logger: ctx.logger,
+  }
 
   ctx.effect(() => registerRoutes(ctx, deps), 'meeting-minutes: http routes')
   ctx.effect(() => autoIngest.start(), 'meeting-minutes: auto ingest poll')
