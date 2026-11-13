@@ -154,15 +154,25 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     .dsm-quick-btn--primary:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-brand-primary) 21%,transparent)}
     .dsm-quick-btn--on{box-shadow:inset 0 0 0 1px rgba(255,255,255,.35),0 0 0 3px rgba(47,107,255,.16)}
     .dsm-quick-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px}
-    .dsm-meeting{display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;text-align:left;border:1px solid transparent;background:transparent;color:inherit;border-radius:8px;padding:6px 8px;font-family:inherit;cursor:pointer;transition:background .12s ease,border-color .12s ease}
+    .dsm-meeting{display:flex;align-items:flex-start;gap:9px;width:100%;box-sizing:border-box;text-align:left;border:1px solid transparent;background:transparent;color:inherit;border-radius:10px;padding:9px 10px;font-family:inherit;cursor:pointer;transition:background .12s ease,border-color .12s ease}
+    .dsm-meeting-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
+    .dsm-meeting-sep{width:2px;height:2px;border-radius:50%;background:var(--dsw-alias-label-secondary);opacity:.7}
+    .dsm-meeting-source{font-size:10.5px;line-height:15px;color:var(--dsw-alias-label-secondary)}
+    .dsm-meeting-status--idle{border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
     .dsm-meeting-icon{flex:0 0 auto;display:inline-flex;color:var(--dsw-alias-label-secondary)}
     .dsm-meeting-time{flex:0 0 auto;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;letter-spacing:.2px}
     .dsm-meeting-status{flex:0 0 auto;font-size:10px;line-height:15px;padding:0 5px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 34%,transparent);color:var(--dsw-alias-brand-primary);white-space:nowrap}
+.dsm-export{position:relative;display:inline-flex}
+.dsm-export-menu{position:absolute;top:calc(100% + 5px);right:0;z-index:30;min-width:168px;padding:5px;display:flex;flex-direction:column;gap:2px;background:var(--dsw-alias-bg-base,#fff);border:1px solid var(--dsw-alias-border-l1);border-radius:10px;box-shadow:0 10px 26px rgba(15,23,42,.16)}
+.dsm-export-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;border:0;background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:12px;line-height:18px;padding:7px 9px;border-radius:7px;cursor:pointer;text-align:left}
+.dsm-export-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-export-ext{font-size:10.5px;color:var(--dsw-alias-label-secondary)}
 .dsm-meeting:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsm-meeting:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 .dsm-meeting--active{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 34%,transparent)}
 .dsm-meeting-top{display:flex;align-items:flex-start;gap:6px}
-.dsm-meeting-title{flex:1 1 auto;min-width:0;font-size:12.5px;font-weight:550;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-meeting-title{font-size:13px;font-weight:600;line-height:19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}
+.dsm-meeting-icon{margin-top:2px}
 .dsm-meeting-check{flex:0 0 auto;color:var(--dsw-alias-state-success-primary);font-size:11px;line-height:18px}
 .dsm-meeting-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary)}
 .dsm-sep{width:2px;height:2px;border-radius:50%;background:var(--dsw-alias-label-secondary);opacity:.7}
@@ -379,6 +389,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-live-queue{font-size:10.5px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dsm-live-stopping{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary);line-height:18px}
 .dsm-icon-live-dot{position:absolute;bottom:-2px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--dsw-alias-state-error-primary);border:1.5px solid var(--dsw-alias-bg-base);animation:dsm-pulse 1.2s ease-in-out infinite}
+.dsm-settings-section{display:flex;flex-direction:column;gap:7px;padding:11px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-l2,#F8FAFE);margin-bottom:2px}
+.dsm-settings-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.dsm-settings-title{font-size:13px;font-weight:650;color:var(--dsw-alias-label-primary)}
+.dsm-settings-desc{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}
+.dsm-settings-section-head{font-size:12px;font-weight:650;color:var(--dsw-alias-label-primary);margin:6px 0 -2px}
 .dsm-auto-toggles{display:flex;flex-direction:column;gap:8px}
 .dsm-auto-toggle{display:flex;align-items:flex-start;gap:9px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 11px;background:var(--dsw-alias-bg-base);cursor:pointer}
 .dsm-auto-toggle input{margin:2px 0 0;accent-color:var(--dsw-alias-button-primary-fill);width:14px;height:14px;flex:0 0 auto}
@@ -1106,15 +1121,43 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     async function exportMeetingFile(meeting, format) {
+      const safeFormat = format === 'md' ? 'md' : format === 'docx' ? 'docx' : 'html'
       const payload = await requestJson(
-        `/meetings/${encodeURIComponent(meeting.id)}/export?format=${format === 'md' ? 'md' : 'html'}`,
+        `/meetings/${encodeURIComponent(meeting.id)}/export?format=${safeFormat}`,
       )
       const filename = typeof payload.filename === 'string' && payload.filename !== ''
         ? payload.filename
-        : safeFilename(meeting.title, format === 'md' ? 'md' : 'html')
-      const mime = format === 'md' ? 'text/markdown;charset=utf-8' : 'text/html;charset=utf-8'
-      downloadTextFile(filename, String(payload.content ?? ''), mime)
+        : safeFilename(meeting.title, safeFormat)
+      if (safeFormat === 'docx') {
+        downloadBinaryFile(
+          filename,
+          String(payload.base64 ?? ''),
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        )
+      } else {
+        const mime = safeFormat === 'md' ? 'text/markdown;charset=utf-8' : 'text/html;charset=utf-8'
+        downloadTextFile(filename, String(payload.content ?? ''), mime)
+      }
       return { ...payload, filename }
+    }
+
+    /** 下载二进制文件（base64 → Blob）。 */
+    function downloadBinaryFile(filename, base64, mime) {
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+      const blob = new Blob([bytes], { type: mime })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      anchor.style.display = 'none'
+      document.body.appendChild(anchor)
+      anchor.click()
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url)
+        anchor.remove()
+      }, 2000)
     }
 
     function downloadTextFile(filename, content, mime) {
@@ -2850,6 +2893,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       folder: ['M2.8 4.2h4l1.2 1.5h5.2v6.8H2.8z'],
       info: ['M8 3a5 5 0 1 0 0 10A5 5 0 0 0 8 3Z', 'M8 7.4v3.4', 'M8 5.2v.2'],
       screen: ['M2.6 3.6h10.8v6.6H2.6z', 'M5.6 12.6h4.8', 'M8 10.2v2.4'],
+      gear: ['M8 5.4a2.6 2.6 0 1 0 0 5.2A2.6 2.6 0 0 0 8 5.4Z', 'M8 2.2v1.2M8 12.6v1.2M2.2 8h1.2M12.6 8h1.2M3.9 3.9l.9.9M11.2 11.2l.9.9M12.1 3.9l-.9.9M4.8 11.2l-.9.9'],
     }
 
     function Icon(props) {
@@ -3192,6 +3236,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [busy, setBusy] = useState(false)
       const [scanning, setScanning] = useState(status?.scanning === true)
       const [error, setError] = useState(null)
+      const [models, setModels] = useState(() => [])
+      const [modelValue, setModelValue] = useState('')
+      const [defaultModelLabel, setDefaultModelLabel] = useState('')
+      const [modelError, setModelError] = useState(null)
       const mountedRef = useRef(true)
       const hydratedRef = useRef(available)
 
@@ -3199,6 +3247,44 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         mountedRef.current = true
         return () => { mountedRef.current = false }
       }, [])
+
+      useEffect(() => {
+        let alive = true
+        void requestJson('/settings').then((payload) => {
+          if (!alive) return
+          const list = Array.isArray(payload?.models) ? payload.models : []
+          setModels(list)
+          const current = payload?.model
+          setModelValue(current !== null && current !== undefined ? `${current.provider}|${current.model}` : '')
+          const fallback = payload?.defaultModel
+          setDefaultModelLabel(fallback !== null && fallback !== undefined && fallback.model !== ''
+            ? `${fallback.model}（${fallback.provider}）`
+            : '')
+        }).catch((error) => {
+          if (alive) setModelError('读取模型列表失败：' + messageOf(error))
+        })
+        return () => { alive = false }
+      }, [])
+
+      /** 保存生成纪要使用的模型（空 = 跟随 DSH 默认模型）。 */
+      async function handleModelChange(value) {
+        setModelValue(value)
+        setModelError(null)
+        const [provider, model] = value === '' ? ['', ''] : value.split('|')
+        try {
+          await requestJson('/settings', { method: 'PATCH', body: { model: value === '' ? null : { provider, model } } })
+          notifySuccess('模型设置已保存', value === '' ? '之后生成纪要将跟随 DSH 默认模型' : `之后生成纪要将使用 ${model}`)
+        } catch (error) {
+          setModelError('保存模型设置失败：' + messageOf(error))
+        }
+      }
+
+      const modelOptions = models
+        .filter((item) => String(item?.id ?? '') !== '')
+        .map((item) => ({
+          value: `${item.provider}|${item.id}`,
+          label: `${item.name}（${item.displayName || item.provider}）`,
+        }))
 
       useEffect(() => {
         // The dialog can open before the first /state response; hydrate the
@@ -3325,8 +3411,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       return h(
         Modal,
         {
-          title: '自动入库设置',
-          subtitle: '自动抓取本机录制文件并生成待整理的会议记录。',
+          title: '设置',
+          subtitle: '生成纪要使用的模型，以及自动入库的开关与扫描。',
           onClose: props.onClose,
           footer: [
             h('button', { key: 'close', type: 'button', className: 'dsm-btn', onClick: props.onClose }, '关闭'),
@@ -3351,6 +3437,29 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               : null,
           ],
         },
+        h(
+          'div',
+          { className: 'dsm-settings-section' },
+          h(
+            'div',
+            { className: 'dsm-settings-head' },
+            h('span', { className: 'dsm-settings-title' }, '模型'),
+            h('span', { className: 'dsm-settings-desc' }, '生成 AI 纪要时使用的模型，可选 DSH 已配置的模型。'),
+          ),
+          h(Select, {
+            value: modelValue,
+            onChange: (value) => { void handleModelChange(value) },
+            options: [
+              { value: '', label: defaultModelLabel === '' ? '跟随 DSH 默认模型' : `跟随 DSH 默认模型（${defaultModelLabel}）` },
+              ...modelOptions,
+            ],
+          }),
+          modelOptions.length === 0 && modelError === null
+            ? h('div', { className: 'dsm-hint' }, '没有读到模型目录：可先「跟随 DSH 默认模型」，或在 DSH 设置里添加模型提供商后重开本窗口。')
+            : null,
+          modelError !== null ? h('div', { className: 'dsm-hint dsm-hint--warn' }, modelError) : null,
+        ),
+        h('div', { className: 'dsm-settings-section-head' }, '自动入库'),
         h(
           'div',
           { className: 'dsm-auto-toggles' },
@@ -4460,10 +4569,22 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 className: `dsm-meeting${item.id === selectedId ? ' dsm-meeting--active' : ''}`,
                 onClick: () => onSelect(item.id),
               },
-              h('span', { className: 'dsm-meeting-icon' }, h(Icon, { name: sourceIcon, size: 12 })),
-              h('span', { className: 'dsm-meeting-title' }, item.title || '未命名会议'),
-              item.hasSummary ? h('span', { className: 'dsm-meeting-status', title: '已生成 AI 纪要' }, '已总结') : null,
-              h('span', { className: 'dsm-meeting-time' }, time),
+              h('span', { className: 'dsm-meeting-icon' }, h(Icon, { name: sourceIcon, size: 13 })),
+              h(
+                'span',
+                { className: 'dsm-meeting-body' },
+                h('span', { className: 'dsm-meeting-title' }, item.title || '未命名会议'),
+                h(
+                  'span',
+                  { className: 'dsm-meeting-meta' },
+                  h('span', { className: 'dsm-meeting-time' }, time),
+                  h('span', { className: 'dsm-meeting-sep' }),
+                  h('span', { className: 'dsm-meeting-source' }, SOURCE_LABELS[item.sourceType] ?? '文本'),
+                  item.hasSummary
+                    ? h('span', { className: 'dsm-meeting-status', title: '已生成 AI 纪要' }, '已总结')
+                    : h('span', { className: 'dsm-meeting-status dsm-meeting-status--idle' }, '未总结'),
+                ),
+              ),
             )
           }),
         ),
@@ -4493,6 +4614,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     function CoverSection(props) {
+      const [exportOpen, setExportOpen] = useState(false)
       const meeting = props.meeting
       const summary = meeting.summary
       const attendees = (Array.isArray(meeting.attendees) && meeting.attendees.length > 0
@@ -4541,34 +4663,42 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               className: 'dsm-btn dsm-btn--sm',
               onClick: props.onEdit,
             }, h(Icon, { name: 'edit', size: 12 }), h('span', null, '编辑信息')),
-            props.onSummarize
-              ? h('button', {
-                type: 'button',
-                className: 'dsm-btn dsm-btn--sm',
-                onClick: props.onSummarize,
-                disabled: props.summarizing === true || props.hasTranscript === false,
-                title: props.hasTranscript === false
-                  ? '请先录音或导入转写文本'
-                  : (props.hasSummary ? '重新生成会覆盖当前 AI 纪要' : '根据转写生成结构化纪要'),
-              }, h(Icon, { name: 'sparkle', size: 12 }), h('span', null, props.summarizing === true ? '生成中…' : 'AI 生成纪要'))
-              : null,
             props.onExport
-              ? h('button', {
-                type: 'button',
-                className: 'dsm-btn dsm-btn--sm',
-                onClick: () => props.onExport('html'),
-                disabled: props.exporting === true,
-                title: '把这场会议导出成独立 HTML 文档',
-              }, h(Icon, { name: 'download', size: 12 }), h('span', null, '导出 HTML'))
-              : null,
-            props.onExport
-              ? h('button', {
-                type: 'button',
-                className: 'dsm-btn dsm-btn--sm',
-                onClick: () => props.onExport('md'),
-                disabled: props.exporting === true,
-                title: '把这场会议导出成 Markdown',
-              }, h(Icon, { name: 'download', size: 12 }), h('span', null, '导出 Markdown'))
+              ? h(
+                'div',
+                { className: 'dsm-export' + (exportOpen ? ' dsm-export--open' : '') },
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  onClick: () => setExportOpen((open) => open !== true),
+                  disabled: props.exporting === true,
+                  title: '导出为 HTML / Markdown / Word',
+                },
+                h(Icon, { name: 'download', size: 12 }),
+                h('span', null, props.exporting === true ? '导出中…' : '导出'),
+                h(Icon, { name: 'chevron', size: 12 })),
+                exportOpen
+                  ? h(
+                    'div',
+                    { className: 'dsm-export-menu' },
+                    h('button', {
+                      type: 'button',
+                      className: 'dsm-export-item',
+                      onClick: () => { setExportOpen(false); props.onExport('html') },
+                    }, h('span', { className: 'dsm-export-label' }, 'HTML 网页'), h('span', { className: 'dsm-export-ext' }, '.html')),
+                    h('button', {
+                      type: 'button',
+                      className: 'dsm-export-item',
+                      onClick: () => { setExportOpen(false); props.onExport('md') },
+                    }, h('span', { className: 'dsm-export-label' }, 'Markdown 文档'), h('span', { className: 'dsm-export-ext' }, '.md')),
+                    h('button', {
+                      type: 'button',
+                      className: 'dsm-export-item',
+                      onClick: () => { setExportOpen(false); props.onExport('docx') },
+                    }, h('span', { className: 'dsm-export-label' }, 'Word 文档'), h('span', { className: 'dsm-export-ext' }, '.docx')),
+                  )
+                  : null,
+              )
               : null,
             props.onDelete
               ? h('button', {
@@ -5295,7 +5425,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           'div',
           { className: 'dsm-brand' },
           h('span', { className: 'dsm-brand-title' }, '会议纪要'),
-          h('span', { className: 'dsm-brand-sub' }, `${state.meetings.length} 场会议`),
         ),
         h(
           'div',
@@ -5303,12 +5432,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           // 新建 / 录音 / 导入 已移到左侧会议列表上方（更大更好点）
           // 四个按会议走的操作（AI 生成 / 导出 / 删除）已移入会议记录封面区
           h(ToolbarButton, {
-            icon: 'folder',
-            label: autoIngestSummaryLabel(state.data?.autoIngest),
-            onClick: handlers.autoIngest,
-            title: state.data?.autoIngest?.lastError
-              ? `自动入库最近错误：${state.data.autoIngest.lastError}`
-              : '自动入库设置、状态与立即扫描',
+            icon: 'gear',
+            label: '设置',
+            onClick: handlers.settings,
+            title: '设置：生成纪要用哪个模型、自动入库开关与扫描',
           }),
         ),
         h('span', { className: 'dsm-spacer' }),
@@ -5496,8 +5623,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         commit({ exporting: format })
         try {
           const payload = await exportMeetingFile(selected, format)
+          const formatLabel = format === 'docx' ? 'Word 文档' : format === 'md' ? 'Markdown' : 'HTML'
           notifySuccess(
-            format === 'html' ? 'HTML 导出完成' : 'Markdown 导出完成',
+            `${formatLabel} 导出完成`,
             payload.path ? `已保存到 ${payload.path}` : payload.filename,
           )
         } catch (caught) {
@@ -5567,7 +5695,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         summarize: () => { void openSummarize(selected?.id, Boolean(selected?.summary)) },
         export: (format) => { void openExport(format) },
         delete: () => setDeleteOpen(true),
-        autoIngest: () => setDialog('auto'),
+        settings: () => setDialog('auto'),
         refresh: () => { void refreshAll() },
       }
 

@@ -254,25 +254,40 @@ function walk(node, visit) {
   walk(node.props?.children, visit);
 }
 const itemButtons = [];
-let legacyMetaNodes = 0;
+let metaNodes = 0;
+let statusNodes = 0;
 walk(listElement, (element) => {
   const className = typeof element.props?.className === 'string' ? element.props.className : '';
   if (element.type === 'button' && className.includes('dsm-meeting')) itemButtons.push(element);
-  if (className.includes('dsm-meeting-meta') || className.includes('dsm-meeting-badges') || className.includes('dsm-meeting-top')) {
-    legacyMetaNodes += 1;
-  }
+  if (className.includes('dsm-meeting-meta')) metaNodes += 1;
+  if (className.includes('dsm-meeting-status')) statusNodes += 1;
 });
 check('列表项渲染出 2 条会议', itemButtons.length === 2, String(itemButtons.length));
-check('列表项没有第二行元信息（旧的多行块已移除）', legacyMetaNodes === 0, `legacy=${legacyMetaNodes}`);
+check('每条会议都是两行结构（标题行 + 元信息行）', metaNodes === 2, `meta=${metaNodes}`);
+check('状态标签渲染在第二行（每条一个）', statusNodes === 2, `status=${statusNodes}`);
 const childClasses = itemButtons.map((item) => {
   const children = Array.isArray(item.props.children) ? item.props.children : [item.props.children];
   return children.filter((child) => child && child.isElement === true)
     .map((child) => String(child.props?.className ?? ''));
 });
-check('列表项为单行结构（图标 / 标题 / 时间）', childClasses.every((classes) => classes.includes('dsm-meeting-icon')
-  && classes.includes('dsm-meeting-title') && classes.includes('dsm-meeting-time')
-  && !classes.some((name) => name.includes('dsm-meeting-meta'))), JSON.stringify(childClasses));
-check('已总结的会议在单行里带小标记', childClasses[1].includes('dsm-meeting-status'), JSON.stringify(childClasses[1]));
+check('列表项外层只有图标 + 两行内容块', childClasses.every((classes) => classes.includes('dsm-meeting-icon')
+  && classes.includes('dsm-meeting-body') && classes.length === 2), JSON.stringify(childClasses));
+const bodyChildren = itemButtons.map((item) => {
+  const children = Array.isArray(item.props.children) ? item.props.children : [item.props.children];
+  const body = children.find((child) => child && child.isElement === true && String(child.props?.className ?? '').includes('dsm-meeting-body'));
+  const inner = Array.isArray(body?.props?.children) ? body.props.children : [body?.props?.children];
+  return inner.filter((child) => child && child.isElement === true).map((child) => String(child.props?.className ?? ''));
+});
+check('内容块第一行是标题、第二行是元信息', bodyChildren.every((classes) => classes[0].includes('dsm-meeting-title')
+  && classes[1].includes('dsm-meeting-meta')), JSON.stringify(bodyChildren));
+let firstStatusInMeta = false;
+walk(itemButtons[1], (element) => {
+  const className = typeof element.props?.className === 'string' ? element.props.className : '';
+  if (className.includes('dsm-meeting-status')) {
+    firstStatusInMeta = true;
+  }
+});
+check('已总结的会议在第二行带状态标签', firstStatusInMeta, '');
 
 /* 9. 三个主动作已移到列表上方（新建 / 录音 / 导入），且录音为主色大按钮 */
 const quickButtons = [];
@@ -307,9 +322,8 @@ walk(coverElement, (element) => {
   const label = parts.join('');
   if (label !== '') coverButtonLabels.push(label);
 });
-check('会议记录里带 AI 生成纪要', coverButtonLabels.includes('AI 生成纪要'), JSON.stringify(coverButtonLabels));
-check('会议记录里带导出 HTML', coverButtonLabels.includes('导出 HTML'), JSON.stringify(coverButtonLabels));
-check('会议记录里带导出 Markdown', coverButtonLabels.includes('导出 Markdown'), JSON.stringify(coverButtonLabels));
+check('会议记录里不再有 AI 生成纪要按钮', !coverButtonLabels.includes('AI 生成纪要'), JSON.stringify(coverButtonLabels));
+check('会议记录里只有一个「导出」下拉', coverButtonLabels.filter((label) => label.includes('导出')).length === 1, JSON.stringify(coverButtonLabels));
 check('会议记录里带删除', coverButtonLabels.includes('删除'), JSON.stringify(coverButtonLabels));
 
 /* 11. 快捷入口已拆成「实时录音 / 录音转写 / 导入纪要」（不再有新建会议） */

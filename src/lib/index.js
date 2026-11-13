@@ -48,7 +48,7 @@ export function apply(ctx) {
   const liveMirror = createLiveMirror()
   const orb = createOrbManager({ logger: ctx.logger })
   const dshTodo = createDshTodo({ logger: ctx.logger })
-  const deps = { store, asr, summarizer, calendar, autoIngest, liveMirror, orb, dshTodo, logger: ctx.logger }
+  const deps = { ctx, store, asr, summarizer, calendar, autoIngest, liveMirror, orb, dshTodo, logger: ctx.logger }
 
   ctx.effect(() => registerRoutes(ctx, deps), 'meeting-minutes: http routes')
   ctx.effect(() => autoIngest.start(), 'meeting-minutes: auto ingest poll')

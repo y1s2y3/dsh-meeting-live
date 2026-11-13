@@ -36,7 +36,7 @@ export function safeFileName(text, fallback = '会议纪要') {
 }
 
 /** File extension per format. */
-const EXTENSION = { md: 'md', html: 'html' }
+const EXTENSION = { md: 'md', html: 'html', docx: 'docx' }
 
 /** One Markdown bullet list, or nothing. */
 function bullets(items, empty = '（无）') {
@@ -266,6 +266,249 @@ export function buildHtml(meeting) {
   return parts.join('\n')
 }
 
+/* ─────────────────────────── Word (.docx) ─────────────────────────── */
+
+/** CRC32 table for the stored-ZIP writer below. */
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256)
+  for (let index = 0; index < 256; index += 1) {
+    let value = index
+    for (let bit = 0; bit < 8; bit += 1) value = (value & 1) === 1 ? (0xEDB88320 ^ (value >>> 1)) : (value >>> 1)
+    table[index] = value >>> 0
+  }
+  return table
+})()
+
+/** CRC32 of a buffer (ZIP entries need it even when stored uncompressed). */
+function crc32(buffer) {
+  let value = 0xFFFFFFFF
+  for (let index = 0; index < buffer.length; index += 1) {
+    value = CRC_TABLE[(value ^ buffer[index]) & 0xFF] ^ (value >>> 8)
+  }
+  return (value ^ 0xFFFFFFFF) >>> 0
+}
+
+/**
+ * Minimal ZIP writer (store method, no compression).
+ * Word accepts stored entries, and this avoids a zip dependency in the host half.
+ */
+function zipStore(entries) {
+  const locals = []
+  const centrals = []
+  let offset = 0
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, 'utf8')
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data), 'utf8')
+    const crc = crc32(data)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034B50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0x0800, 6) // UTF-8 names
+    local.writeUInt16LE(0, 8) // stored
+    local.writeUInt16LE(0, 10)
+    local.writeUInt16LE(0, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    local.writeUInt16LE(0, 28)
+    locals.push(local, name, data)
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014B50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0x0800, 8)
+    central.writeUInt16LE(0, 10)
+    central.writeUInt16LE(0, 12)
+    central.writeUInt16LE(0, 14)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(name.length, 28)
+    central.writeUInt16LE(0, 30)
+    central.writeUInt16LE(0, 32)
+    central.writeUInt16LE(0, 34)
+    central.writeUInt16LE(0, 36)
+    central.writeUInt32LE(0, 38)
+    central.writeUInt32LE(offset, 42)
+    centrals.push(central, name)
+    offset += 30 + name.length + data.length
+  }
+  const centralBuffer = Buffer.concat(centrals)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054B50, 0)
+  end.writeUInt16LE(0, 4)
+  end.writeUInt16LE(0, 6)
+  end.writeUInt16LE(entries.length, 8)
+  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt32LE(centralBuffer.length, 12)
+  end.writeUInt32LE(offset, 16)
+  end.writeUInt16LE(0, 20)
+  return Buffer.concat([...locals, centralBuffer, end])
+}
+
+/** Escape text for OOXML text nodes. */
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+/** One run with explicit Chinese/ASCII fonts (Word otherwise substitutes). */
+function docxRun(textValue, options = {}) {
+  const size = Number(options.size ?? 21)
+  const rPr = [
+    '<w:rPr>',
+    '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/>',
+    options.bold === true ? '<w:b/>' : '',
+    options.color !== undefined ? '<w:color w:val="' + String(options.color) + '"/>' : '',
+    '<w:sz w:val="' + String(Math.round(size * 2)) + '"/>',
+    '<w:szCs w:val="' + String(Math.round(size * 2)) + '"/>',
+    '</w:rPr>',
+  ].join('')
+  return '<w:r>' + rPr + '<w:t xml:space="preserve">' + xmlEscape(textValue) + '</w:t></w:r>'
+}
+
+/** One paragraph; options.align is left/center/right. */
+function docxParagraph(textValue, options = {}) {
+  const props = [
+    '<w:pPr>',
+    options.heading === true ? '<w:keepNext/>' : '',
+    '<w:spacing w:before="' + String(options.before ?? 0) + '" w:after="' + String(options.after ?? 120) + '" w:line="' + String(options.line ?? 300) + '" w:lineRule="auto"/>',
+    options.align !== undefined ? '<w:jc w:val="' + String(options.align) + '"/>' : '',
+    options.indent === true ? '<w:ind w:firstLine="480"/>' : '',
+    '</w:pPr>',
+  ].join('')
+  const runs = typeof textValue === 'string' ? docxRun(textValue, options) : textValue
+  return '<w:p>' + props + runs + '</w:p>'
+}
+
+/** A table cell (borders come from the table-level tblBorders). */
+function docxCell(textValue, options = {}) {
+  const width = Number(options.width ?? 2000)
+  return [
+    '<w:tc>',
+    '<w:tcPr><w:tcW w:w="' + String(width) + '" w:type="dxa"/>',
+    options.header === true ? '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>' : '',
+    '<w:vAlign w:val="center"/></w:tcPr>',
+    docxParagraph(textValue, { size: options.size ?? 18, bold: options.header === true, after: 40, line: 260 }),
+    '</w:tc>',
+  ].join('')
+}
+
+/** Build the Word document body for one meeting. */
+function buildDocxBody(meeting) {
+  const attendees = Array.isArray(meeting.attendees) ? meeting.attendees : []
+  const transcript = typeof meeting.transcript === 'string' ? meeting.transcript : ''
+  const summary = meeting.summary ?? null
+  const todos = Array.isArray(summary?.todos) ? summary.todos : []
+  const decisions = Array.isArray(summary?.decisions) ? summary.decisions : []
+  const parts = []
+  parts.push(docxParagraph(meeting.title || '会议纪要', { size: 22, bold: true, align: 'center', after: 120 }))
+  const meta = [
+    '会议日期：' + meeting.date,
+    '来源：' + (meeting.sourceType === 'recording' ? '录音' : meeting.sourceType === 'import' ? '导入文件' : '文本'),
+    '参会人：' + (attendees.length > 0 ? attendees.join('、') : '（未填写）'),
+    '字数：' + String(transcript.length),
+  ].join('　　')
+  parts.push(docxParagraph(meta, { size: 18, align: 'center', after: 240, color: '595959' }))
+  if (summary !== null) {
+    if (summary.oneLine !== '') {
+      parts.push(docxParagraph('一句话结论', { size: 16, bold: true, after: 60 }))
+      parts.push(docxParagraph(summary.oneLine, { size: 21, after: 180 }))
+    }
+    if (summary.overview !== '') {
+      parts.push(docxParagraph('概述', { size: 16, bold: true, after: 60 }))
+      parts.push(docxParagraph(summary.overview, { size: 21, indent: true, after: 180 }))
+    }
+    if (decisions.length > 0) {
+      parts.push(docxParagraph('决策事项', { size: 16, bold: true, after: 60 }))
+      decisions.forEach((item, index) => {
+        const owner = typeof item.owner === 'string' && item.owner !== '' ? '（负责人：' + item.owner + '）' : ''
+        parts.push(docxParagraph(String(index + 1) + '. ' + String(item.text ?? '') + owner, { size: 21, after: 80 }))
+      })
+    }
+  }
+  parts.push(docxParagraph('待办事项', { size: 16, bold: true, after: 60 }))
+  if (todos.length === 0) {
+    parts.push(docxParagraph('（无）', { size: 21, after: 180 }))
+  } else {
+    const rows = [
+      '<w:tr>' + docxCell('序号', { header: true, width: 700 }) + docxCell('待办事项', { header: true, width: 4200 }) + docxCell('负责人', { header: true, width: 1200 }) + docxCell('截止日期', { header: true, width: 1400 }) + '</w:tr>',
+    ]
+    todos.forEach((todo, index) => {
+      rows.push('<w:tr>'
+        + docxCell(String(index + 1), { width: 700 })
+        + docxCell(String(todo.title ?? ''), { width: 4200 })
+        + docxCell(todo.owner === '' ? '--' : String(todo.owner), { width: 1200 })
+        + docxCell(todo.due === '' ? '--' : String(todo.due), { width: 1400 })
+        + '</w:tr>')
+    })
+    parts.push('<w:tbl><w:tblPr><w:tblW w:w="7500" w:type="dxa"/><w:tblBorders>'
+      + '<w:top w:val="single" w:sz="4" w:color="BFBFBF"/><w:left w:val="single" w:sz="4" w:color="BFBFBF"/>'
+      + '<w:bottom w:val="single" w:sz="4" w:color="BFBFBF"/><w:right w:val="single" w:sz="4" w:color="BFBFBF"/>'
+      + '<w:insideH w:val="single" w:sz="4" w:color="BFBFBF"/><w:insideV w:val="single" w:sz="4" w:color="BFBFBF"/>'
+      + '</w:tblBorders></w:tblPr>' + rows.join('') + '</w:tbl>')
+    parts.push(docxParagraph('', { after: 120 }))
+  }
+  if (transcript !== '') {
+    parts.push(docxParagraph('原始转写', { size: 16, bold: true, before: 240, after: 60 }))
+    for (const line of transcript.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (trimmed === '') continue
+      parts.push(docxParagraph(trimmed, { size: 19, after: 60, line: 280 }))
+    }
+  }
+  return parts.join('')
+}
+
+/** Assemble the minimal OOXML package Word opens without repair. */
+export function buildDocx(meeting) {
+  const document = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    + '<w:body>' + buildDocxBody(meeting)
+    + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+    + '<w:pgMar w:top="1247" w:right="1247" w:bottom="1247" w:left="1247" w:header="720" w:footer="720" w:gutter="0"/>'
+    + '</w:sectPr></w:body></w:document>'
+  const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    + '<w:docDefaults><w:rPrDefault><w:rPr>'
+    + '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/>'
+    + '<w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr></w:rPrDefault>'
+    + '<w:pPrDefault><w:pPr><w:spacing w:line="300" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>'
+    + '</w:styles>'
+  return zipStore([
+    {
+      name: '[Content_Types].xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        + '<Default Extension="xml" ContentType="application/xml"/>'
+        + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        + '</Types>',
+    },
+    {
+      name: '_rels/.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        + '</Relationships>',
+    },
+    {
+      name: 'word/_rels/document.xml.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        + '</Relationships>',
+    },
+    { name: 'word/document.xml', data: document },
+    { name: 'word/styles.xml', data: styles },
+  ])
+}
+
 /** Resolve the export directory under the harness home. */
 export function resolveExportDir(home = process.env.DSH_HOME ?? join(homedir(), '.dsh')) {
   return join(home, 'meeting-minutes', 'exports')
@@ -279,12 +522,17 @@ export function resolveExportDir(home = process.env.DSH_HOME ?? join(homedir(), 
  * @returns `{ format, filename, content, path }`.
  */
 export async function exportMeeting(meeting, format = 'html', options = {}) {
-  const kind = format === 'md' ? 'md' : 'html'
-  const content = kind === 'md' ? buildMarkdown(meeting) : buildHtml(meeting)
+  const kind = format === 'md' ? 'md' : format === 'docx' ? 'docx' : 'html'
   const filename = `${meeting.date}-${safeFileName(meeting.title)}.${EXTENSION[kind]}`
   const dir = options.dir ?? resolveExportDir()
   await mkdir(dir, { recursive: true })
   const path = join(dir, filename)
+  if (kind === 'docx') {
+    const buffer = buildDocx(meeting)
+    await writeFile(path, buffer)
+    return { format: kind, filename, path, base64: buffer.toString('base64') }
+  }
+  const content = kind === 'md' ? buildMarkdown(meeting) : buildHtml(meeting)
   await writeFile(path, content, 'utf8')
   return { format: kind, filename, content, path }
 }

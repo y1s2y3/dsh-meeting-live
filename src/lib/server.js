@@ -216,7 +216,7 @@ export async function buildState(deps) {
     clock: formatMoment(),
     autoIngest: auto,
     config: {
-      llm: summarizer.describeRoute(),
+      llm: summarizer.describeRoute(store.summaryModel),
       asr: {
         mode: speech.available ? 'local' : 'unavailable',
         providerId: speech.selection?.providerId ?? null,
@@ -362,6 +362,56 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
+      if (segments.length === 1 && segments[0] === 'settings' && method === 'GET') {
+        const llm = deps.ctx?.get?.('llm')
+        const models = []
+        if (llm !== undefined && llm !== null && typeof llm.listProviders === 'function') {
+          for (const provider of llm.listProviders()) {
+            const providerId = String(provider?.id ?? provider?.provider ?? '')
+            if (providerId === '') continue
+            try {
+              const list = await llm.listModels(providerId)
+              for (const item of Array.isArray(list) ? list : []) {
+                models.push({
+                  provider: providerId,
+                  id: String(item.id ?? ''),
+                  name: String(item.name ?? item.id ?? ''),
+                  displayName: String(provider?.displayName ?? providerId),
+                })
+              }
+            } catch (error) {
+              // 有的适配器不提供模型目录；忽略该 provider，不影响其它模型
+              logger?.debug?.('meeting-minutes: listModels failed for ' + providerId + ': ' + String(error?.message ?? error))
+            }
+          }
+        }
+        let defaultModel = null
+        try {
+          const selection = deps.ctx?.get?.('agentDefaultModel')?.currentSelection?.()
+          if (selection !== null && selection !== undefined) {
+            defaultModel = { provider: String(selection.provider ?? ''), model: String(selection.model ?? '') }
+          }
+        } catch {
+          defaultModel = null
+        }
+        sendJson(res, 200, {
+          ok: true,
+          model: store.summaryModel,
+          defaultModel,
+          models: models.filter((item) => item.id !== ''),
+        })
+        return
+      }
+
+      if (segments.length === 1 && segments[0] === 'settings' && (method === 'PATCH' || method === 'POST')) {
+        const body = await readJsonBody(req)
+        if (body.model !== undefined) {
+          await store.setSummaryModel(body.model)
+        }
+        sendJson(res, 200, { ok: true, model: store.summaryModel })
+        return
+      }
+
       if (segments.length === 2 && segments[0] === 'screen' && segments[1] === 'sources' && method === 'GET') {
         const sources = await listScreenSources()
         sendJson(res, 200, { ok: true, sources })
@@ -447,7 +497,7 @@ export function registerRoutes(ctx, deps) {
         const meeting = requireMeeting(store, id)
         const body = await readJsonBody(req)
         logger?.info?.(`meeting-minutes: summarizing ${id} (${meeting.transcript.length} chars)`)
-        const summary = await summarizer.summarize(meeting)
+        const summary = await summarizer.summarize(meeting, { selection: store.summaryModel })
         const patch = {}
         if (meeting.attendees.length === 0 && summary.attendees.length > 0) {
           patch.attendees = summary.attendees
@@ -651,7 +701,8 @@ export function registerRoutes(ctx, deps) {
 
       if (segments.length === 3 && segments[2] === 'export' && method === 'GET') {
         const meeting = requireMeeting(store, id)
-        const format = url.searchParams.get('format') === 'md' ? 'md' : 'html'
+        const rawFormat = url.searchParams.get('format')
+    const format = rawFormat === 'md' ? 'md' : rawFormat === 'docx' ? 'docx' : 'html'
         const exported = await exportMeeting(meeting, format)
         sendJson(res, 200, { ok: true, ...exported })
         return

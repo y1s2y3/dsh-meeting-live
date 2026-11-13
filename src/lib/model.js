@@ -374,6 +374,16 @@ export function normalizeMeeting(raw, options = {}) {
   }
 }
 
+/** 归一化「生成纪要使用的模型」：`{ provider, model }` 或 null（跟随 DSH 默认）。 */
+export function normalizeSummaryModel(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') return null
+  const provider = typeof value.provider === 'string' ? value.provider.trim() : ''
+  const model = typeof value.model === 'string' ? value.model.trim() : ''
+  if (provider === '' || model === '') return null
+  return { provider: provider.slice(0, 120), model: model.slice(0, 200) }
+}
+
 /** Compact list projection used by the sidebar/list and `GET /state`. */
 export function projectMeeting(meeting) {
   const summary = meeting.summary

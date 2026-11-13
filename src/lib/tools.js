@@ -255,7 +255,7 @@ export function registerTools(ctx, deps) {
     async execute(args) {
       await store.load()
       const meeting = locate(store, args)
-      const summary = await summarizer.summarize(meeting)
+      const summary = await summarizer.summarize(meeting, { selection: store.summaryModel })
       const patch = {}
       if (meeting.attendees.length === 0 && summary.attendees.length > 0) {
         patch.attendees = summary.attendees

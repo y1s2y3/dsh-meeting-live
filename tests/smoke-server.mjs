@@ -90,6 +90,11 @@ function makeStore() {
       if (todo !== undefined) todo.calendarTaskId = calendarTaskId;
       return meeting;
     },
+    summaryModel: null,
+    async setSummaryModel(next) {
+      this.summaryModel = next === null || next === undefined ? null : { provider: String(next.provider), model: String(next.model) };
+      return this.summaryModel;
+    },
     async appendTranscript(id, text, seconds) {
       if (text !== '') meeting.transcript = text;
       meeting.transcriptSeconds += Math.max(0, Number(seconds) || 0);
@@ -114,6 +119,29 @@ async function runRoute(asrImpl, extraDeps = {}) {
     calendar: { status: async () => ({ available: false }) },
     autoIngest: { status: () => ({}) },
     logger: console,
+    ctx: {
+      get: (service) => {
+        if (service === 'llm') {
+          return {
+            listProviders: () => [
+              { id: 'deepseek-official', displayName: 'DeepSeek 官方' },
+              { id: 'pi-ai', displayName: 'Pi AI' },
+            ],
+            listModels: async (provider) => {
+              if (provider === 'pi-ai') throw new Error('该适配器不提供模型目录');
+              return [
+                { provider, id: 'deepseek-flash', name: 'DeepSeek Flash' },
+                { provider, id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+              ];
+            },
+          };
+        }
+        if (service === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }) };
+        }
+        return undefined;
+      },
+    },
     ...extraDeps,
   };
   registerRoutes(ctx, deps);
@@ -279,6 +307,34 @@ check('停止录屏返回 200', stopScreen.status === 200 && JSON.parse(stopScre
 const stopAgain = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/screen/stop', '{}', 'application/json')
 check('没有录屏时停止会如实报错', stopAgain.status === 400, stopAgain.body.slice(0, 140))
 delete process.env.DSH_MEETING_NO_SCREEN
+
+
+/* 19. 设置接口：模型目录 / 默认模型 / 保存选择 */
+const settingsRes = await uploadCase('GET', '/dsh-meeting/settings')
+const settingsPayload = JSON.parse(settingsRes.body)
+const modelIds = (settingsPayload.models || []).map((item) => item.id)
+check('设置接口返回模型目录', settingsRes.status === 200 && modelIds.length === 2 && modelIds.includes('deepseek-flash'), JSON.stringify(modelIds))
+check('设置接口返回 DSH 默认模型', settingsPayload.defaultModel?.provider === 'deepseek-official' && settingsPayload.defaultModel?.model === 'deepseek-flash', JSON.stringify(settingsPayload.defaultModel))
+check('未配置时 model 为 null（跟随默认）', settingsPayload.model === null, JSON.stringify(settingsPayload.model))
+const saveModel = await uploadCase('PATCH', '/dsh-meeting/settings', JSON.stringify({ model: { provider: 'deepseek-official', model: 'deepseek-v4-pro' } }), 'application/json')
+check('保存模型选择返回 200', saveModel.status === 200 && JSON.parse(saveModel.body).model?.model === 'deepseek-v4-pro', saveModel.body.slice(0, 140))
+const settingsAgain = JSON.parse((await uploadCase('GET', '/dsh-meeting/settings')).body)
+check('重新读取仍是已保存的模型', settingsAgain.model?.provider === 'deepseek-official' && settingsAgain.model?.model === 'deepseek-v4-pro', JSON.stringify(settingsAgain.model))
+const clearModel = await uploadCase('PATCH', '/dsh-meeting/settings', JSON.stringify({ model: null }), 'application/json')
+check('可以恢复为跟随默认模型', clearModel.status === 200 && JSON.parse(clearModel.body).model === null, clearModel.body.slice(0, 140))
+
+
+/* 20. 导出：Word (.docx) 生成 */
+const previousHome = process.env.DSH_HOME
+const docxHome = await mediaFs.mkdtemp(mediaPath.join(mediaOs.tmpdir(), 'mm-docx-home-'))
+process.env.DSH_HOME = docxHome
+const docxRes = await uploadCase('GET', '/dsh-meeting/meetings/mt_test/export?format=docx')
+const docxPayload = JSON.parse(docxRes.body)
+const docxBase64 = String(docxPayload.base64 ?? '')
+check('Word 导出返回 base64 与 .docx 文件名', docxRes.status === 200 && docxPayload.format === 'docx' && String(docxPayload.filename).endsWith('.docx') && docxBase64.length > 100, JSON.stringify({ format: docxPayload.format, filename: docxPayload.filename, base64Length: docxBase64.length }))
+check('Word 包以 ZIP 魔数开头（PK）', Buffer.from(docxBase64, 'base64').subarray(0, 2).toString('ascii') === 'PK', '')
+if (previousHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previousHome
+await mediaFs.rm(docxHome, { recursive: true, force: true })
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

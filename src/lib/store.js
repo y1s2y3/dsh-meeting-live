@@ -16,9 +16,9 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { DEFAULT_AUTO_INGEST, normalizeAutoIngestConfig, normalizeMeeting } from './model.js'
+import { DEFAULT_AUTO_INGEST, normalizeAutoIngestConfig, normalizeMeeting, normalizeSummaryModel } from './model.js'
 
-const EMPTY = { version: 1, updatedAt: null, meetings: [], autoIngest: { ...DEFAULT_AUTO_INGEST } }
+const EMPTY = { version: 1, updatedAt: null, meetings: [], autoIngest: { ...DEFAULT_AUTO_INGEST }, summaryModel: null }
 const STORE_FILE = 'meeting-minutes.json'
 
 /** The harness home directory. */
@@ -50,6 +50,7 @@ async function readDocument(file, logger) {
       updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : null,
       meetings,
       autoIngest: normalizeAutoIngestConfig(parsed?.autoIngest),
+      summaryModel: normalizeSummaryModel(parsed?.summaryModel),
     }
   } catch (error) {
     logger?.warn?.(`meeting-minutes: unreadable store ${file}, starting empty (${String(error?.message ?? error)})`)
@@ -102,6 +103,7 @@ export class MeetingStore {
       updatedAt: this.#doc.updatedAt,
       meetings: this.#doc.meetings.map((meeting) => structuredClone(meeting)),
       autoIngest: structuredClone(this.#doc.autoIngest),
+      summaryModel: normalizeSummaryModel(this.#doc.summaryModel),
     }
   }
 
@@ -116,6 +118,20 @@ export class MeetingStore {
       doc.autoIngest = normalizeAutoIngestConfig({ ...doc.autoIngest, ...patch })
     })
     return this.#doc.autoIngest
+  }
+
+  /** 生成纪要使用的模型；null 表示跟随 DSH 默认模型。 */
+  get summaryModel() {
+    return normalizeSummaryModel(this.#doc.summaryModel)
+  }
+
+  /** 保存模型选择（null = 跟随 DSH 默认）。 */
+  async setSummaryModel(next) {
+    const normalized = normalizeSummaryModel(next)
+    await this.update((doc) => {
+      doc.summaryModel = normalized
+    })
+    return this.#doc.summaryModel
   }
 
   /** Record one scan outcome without touching the rest of the config. */

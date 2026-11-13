@@ -130,12 +130,12 @@ export function createSummarizer(options) {
    * @param messages - request messages.
    * @param system - system instruction.
    */
-  async function callModel(messages, system, signal) {
+  async function callModel(messages, system, signal, selection) {
     const llm = ctx.get?.('llm')
     if (llm === undefined || llm === null) {
       throw new Error('本机没有可用的模型服务（llm），无法生成会议纪要。')
     }
-    const route = resolveRoute(ctx, {})
+    const route = resolveRoute(ctx, selection === null || selection === undefined ? {} : { selection })
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new Error('总结超时')), CALL_TIMEOUT_MS)
     const onAbort = () => controller.abort(signal.reason)
@@ -183,7 +183,8 @@ export function createSummarizer(options) {
     }
     const signal = options.signal
     const messages = [{ role: 'user', content: [{ type: 'text', text: buildUserPrompt(meeting) }] }]
-    const first = await callModel(messages, SYSTEM_PROMPT, signal)
+    const selection = options.selection ?? null
+    const first = await callModel(messages, SYSTEM_PROMPT, signal, selection)
     const parsed = parseSummaryJson(first.text)
     if (parsed !== null) {
       return normalizeSummary(parsed, {
@@ -197,7 +198,7 @@ export function createSummarizer(options) {
       role: 'user',
       content: [{ type: 'text', text: buildRepairPrompt(first.text, meeting) }],
     }]
-    const second = await callModel(repairMessages, SYSTEM_PROMPT, signal)
+    const second = await callModel(repairMessages, SYSTEM_PROMPT, signal, selection)
     const repaired = parseSummaryJson(second.text)
     if (repaired === null) {
       throw new Error('模型返回的纪要格式无法解析，请重试一次；若持续失败，可换一个模型再生成。')
@@ -210,9 +211,9 @@ export function createSummarizer(options) {
   }
 
   /** Current model route label for the panel footer. */
-  function describeRoute() {
+  function describeRoute(selection) {
     try {
-      const route = resolveRoute(ctx, {})
+      const route = resolveRoute(ctx, selection === null || selection === undefined ? {} : { selection })
       return { provider: route.provider, model: route.model }
     } catch {
       return { provider: null, model: null }
