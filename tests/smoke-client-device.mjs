@@ -248,6 +248,7 @@ const options = selectElement ? selectElement.props.options : [];
 const labels = options.map((option) => option.label);
 check('下拉含「系统默认」+ 枚举到的设备', labels.length === 2 && labels[0] === '系统默认输入设备' && labels[1] === '麦克风 (Realtek)', JSON.stringify(labels));
 check('提示文案说明设备选择会记住', texts.some((text) => text.includes('选择会记住')));
+check('麦克风卡提供「检测」按钮', texts.some((text) => text === '检测'), JSON.stringify(texts.filter((text) => text.length <= 4)));
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

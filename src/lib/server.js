@@ -18,6 +18,7 @@ import {
   isCapturing,
   listScreenSources,
   muxScreenWithAudio,
+  identifyScreen,
   startScreenCapture,
   stopScreenCapture,
   takePendingVideo,
@@ -409,6 +410,18 @@ export function registerRoutes(ctx, deps) {
           await store.setSummaryModel(body.model)
         }
         sendJson(res, 200, { ok: true, model: store.summaryModel })
+        return
+      }
+
+      if (segments.length === 2 && segments[0] === 'screen' && segments[1] === 'identify' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const identified = await identifyScreen(String(body.source ?? 'desktop'), logger)
+        sendJson(res, identified.ok === true ? 200 : 400, {
+          ok: identified.ok === true,
+          label: identified.label ?? null,
+          bounds: identified.bounds ?? null,
+          error: identified.error ?? null,
+        })
         return
       }
 

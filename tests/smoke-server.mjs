@@ -304,6 +304,8 @@ const startScreen = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/scre
 check('开始录屏返回 200', startScreen.status === 200 && JSON.parse(startScreen.body).ok === true, startScreen.body.slice(0, 140))
 const stopScreen = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/screen/stop', '{}', 'application/json')
 check('停止录屏返回 200', stopScreen.status === 200 && JSON.parse(stopScreen.body).ok === true, stopScreen.body.slice(0, 140))
+const identifyRes = await uploadCase('POST', '/dsh-meeting/screen/identify', JSON.stringify({ source: 'desktop' }), 'application/json')
+check('屏幕识别接口返回 200', identifyRes.status === 200 && JSON.parse(identifyRes.body).ok === true, identifyRes.body.slice(0, 140))
 const stopAgain = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/screen/stop', '{}', 'application/json')
 check('没有录屏时停止会如实报错', stopAgain.status === 400, stopAgain.body.slice(0, 140))
 delete process.env.DSH_MEETING_NO_SCREEN

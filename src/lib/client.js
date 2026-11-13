@@ -165,7 +165,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     .dsm-meeting-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
     .dsm-meeting-sep{width:2px;height:2px;border-radius:50%;background:var(--dsw-alias-label-secondary);opacity:.7}
     .dsm-meeting-source{font-size:10.5px;line-height:15px;color:var(--dsw-alias-label-secondary)}
-    .dsm-meeting-status--idle{border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
+    .dsm-meeting-status{color:#15803D;border-color:#B9E3C9;background:#F2FBF6}
+.dsm-meeting-status--idle{border-color:#F3D6A5;color:#B45309;background:#FFF9F0}
     .dsm-meeting-icon{flex:0 0 auto;display:inline-flex;color:var(--dsw-alias-label-secondary)}
     .dsm-meeting-time{flex:0 0 auto;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;letter-spacing:.2px}
     .dsm-meeting-status{flex:0 0 auto;font-size:10px;line-height:15px;padding:0 5px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 34%,transparent);color:var(--dsw-alias-brand-primary);white-space:nowrap}
@@ -466,6 +467,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-rec-toggle--on{background:#FFFFFF;border-color:#F4C7C7;color:#DC2626}
 .dsm-rec-toggle--on:hover:not(:disabled){background:#FEF2F2;border-color:#F0AFAF}
 .dsm-rec-toggle:disabled{opacity:.55;cursor:not-allowed}
+.dsm-rec-toggle--ghost{background:#FFFFFF;border-color:#E1E7F1;color:#475569}
+.dsm-rec-toggle--ghost:hover:not(:disabled){background:#EEF3FB;border-color:#C7DAFF;color:#2563EB}
+.dsm-mic-meter{display:flex;gap:2px;align-items:stretch;height:14px;margin-top:7px;width:100%}
+.dsm-mic-seg{flex:1 1 0;border-radius:2px;background:#E4E9F2;transition:background .06s ease}
+.dsm-mic-seg--on.dsm-mic-seg--low{background:#22A06B}
+.dsm-mic-seg--on.dsm-mic-seg--mid{background:#2F6BFF}
+.dsm-mic-seg--on.dsm-mic-seg--high{background:#E0574B}
 .dsm-rec-item{display:flex;align-items:center;gap:9px;padding:10px 11px;border:1px solid #E4E9F2;border-radius:12px;background:#F8FAFE}
 .dsm-rec-item-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:#E8F0FF;color:#2563EB}
 .dsm-rec-item-icon--screen{background:#EAF3FF;color:#1D4ED8}
@@ -3819,6 +3827,84 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }, [liveStatus, state.orbActive])
 
       const update = (key) => (value) => setForm((previous) => ({ ...previous, [key]: value }))
+      const [micTesting, setMicTesting] = useState(false)
+      const [micLevel, setMicLevel] = useState(0)
+      const micTestRef = useRef(null)
+
+      /** 停止麦克风检测并释放音频资源。 */
+      const stopMicTest = () => {
+        const handle = micTestRef.current
+        micTestRef.current = null
+        if (handle !== null && handle !== undefined) {
+          try { window.clearInterval(handle.timer) } catch { }
+          try { handle.source.disconnect() } catch { }
+          try { handle.analyser.disconnect() } catch { }
+          try { handle.context.close() } catch { }
+          try { handle.stream.getTracks().forEach((track) => track.stop()) } catch { }
+        }
+        setMicTesting(false)
+        setMicLevel(0)
+      }
+
+      /** 开始麦克风检测：实时读取音量，用横向格子条显示。 */
+      const startMicTest = async () => {
+        if (micTesting) { stopMicTest(); return }
+        try {
+          const audio = inputDeviceId === ''
+            ? { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+            : { deviceId: { exact: inputDeviceId }, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+          const stream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
+          const Ctor = window.AudioContext ?? window.webkitAudioContext
+          if (typeof Ctor !== 'function') throw new Error('当前环境不支持音频检测')
+          const context = new Ctor()
+          const source = context.createMediaStreamSource(stream)
+          const analyser = context.createAnalyser()
+          analyser.fftSize = 512
+          analyser.smoothingTimeConstant = 0.6
+          source.connect(analyser)
+          const data = new Uint8Array(analyser.fftSize)
+          const timer = window.setInterval(() => {
+            analyser.getByteTimeDomainData(data)
+            let sum = 0
+            for (let index = 0; index < data.length; index += 1) {
+              const value = (data[index] - 128) / 128
+              sum += value * value
+            }
+            const rms = Math.sqrt(sum / data.length)
+            // 放大到 0~1：安静时约 0.02，正常说话 0.15~0.5
+            setMicLevel((previous) => {
+              const next = Math.min(1, rms * 3.4)
+              return next > previous ? next : previous * 0.72
+            })
+          }, 70)
+          micTestRef.current = { stream, context, source, analyser, timer }
+          setMicTesting(true)
+          setLocalError(null)
+        } catch (error) {
+          reportError(error, '麦克风检测失败')
+        }
+      }
+
+      useEffect(() => () => {
+        const handle = micTestRef.current
+        if (handle !== null && handle !== undefined) {
+          try { window.clearInterval(handle.timer) } catch { }
+          try { handle.stream.getTracks().forEach((track) => track.stop()) } catch { }
+          try { handle.context.close() } catch { }
+        }
+        micTestRef.current = null
+      }, [])
+
+      /** 在被选中的屏幕上闪一下「当前录制屏幕」。 */
+      async function identifyScreenNow() {
+        try {
+          const payload = await requestJson('/screen/identify', { method: 'POST', body: { source: form.screenSource } })
+          if (payload?.ok !== true) throw new Error(payload?.error ?? '屏幕识别失败')
+        } catch (error) {
+          reportError(error, '屏幕识别失败')
+        }
+      }
+
       /** 状态卡里的「开启/关闭录屏」：开启时按需拉取屏幕列表。 */
       const toggleScreen = () => {
         const next = form.screen !== true
@@ -4211,7 +4297,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 h(
                   'div',
                   { className: 'dsm-rec-item-body' },
-                  h('div', { className: 'dsm-rec-item-label' }, '麦克风（点这里直接切换）'),
+                  h('div', { className: 'dsm-rec-item-label' }, micTesting ? '麦克风（检测中，对着话筒说句话）' : '麦克风（点这里直接切换）'),
                   h(
                     'div',
                     { className: 'dsm-rec-select' },
@@ -4219,6 +4305,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                       compact: true,
                       value: inputDeviceId,
                       onChange: (value) => {
+                        if (micTesting) stopMicTest()
                         setInputDeviceId(value)
                         selectedInputDeviceId = value
                         writePreferredInputDevice(value)
@@ -4229,7 +4316,28 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                       ],
                     }),
                   ),
+                  micTesting
+                    ? h(
+                      'div',
+                      { className: 'dsm-mic-meter', title: '当前麦克风音量' },
+                      ...Array.from({ length: 24 }, (_, index) => {
+                        const active = micLevel >= (index + 1) / 24 * 0.92
+                        const tone = index < 14 ? 'low' : (index < 20 ? 'mid' : 'high')
+                        return h('span', {
+                          key: 'mic-seg-' + String(index),
+                          className: 'dsm-mic-seg dsm-mic-seg--' + tone + (active ? ' dsm-mic-seg--on' : ''),
+                        })
+                      }),
+                    )
+                    : null,
                 ),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-rec-toggle dsm-rec-toggle--ghost' + (micTesting ? ' dsm-rec-toggle--on' : ''),
+                  disabled: liveActive,
+                  title: micTesting ? '停止检测' : '检测麦克风音量（不说话时也应接近 0）',
+                  onClick: () => { void startMicTest() },
+                }, h(Icon, { name: micTesting ? 'stop' : 'mic', size: 12 }), h('span', null, micTesting ? '停止' : '检测')),
               ),
               h(
                 'div',
@@ -4265,6 +4373,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                       )
                     : h('div', { className: 'dsm-rec-item-value' }, '未开启 · 点右侧按钮开启录屏'),
                 ),
+                form.screen === true
+                  ? h('button', {
+                    type: 'button',
+                    className: 'dsm-rec-toggle dsm-rec-toggle--ghost',
+                    title: '在被选中的屏幕上闪一下「当前录制屏幕」',
+                    onClick: () => { void identifyScreenNow() },
+                  }, h(Icon, { name: 'screen', size: 12 }), h('span', null, '识别'))
+                  : null,
                 h(
                   'button',
                   {
