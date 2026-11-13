@@ -4633,6 +4633,27 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
     function CoverSection(props) {
       const [exportOpen, setExportOpen] = useState(false)
+      const exportRef = useRef(null)
+
+      useEffect(() => {
+        if (!exportOpen) return undefined
+        // 点组件外部关闭下拉；Esc 也关闭（详情卡片在面板里可滚动，不能只靠 blur）。
+        const onPointerDown = (event) => {
+          const node = exportRef.current
+          if (node !== null && node !== undefined && typeof node.contains === 'function' && node.contains(event.target)) return
+          setExportOpen(false)
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') setExportOpen(false)
+        }
+        document.addEventListener('pointerdown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown)
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown)
+        }
+      }, [exportOpen])
+
       const meeting = props.meeting
       const summary = meeting.summary
       const attendees = (Array.isArray(meeting.attendees) && meeting.attendees.length > 0
@@ -4684,7 +4705,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             props.onExport
               ? h(
                 'div',
-                { className: 'dsm-export' + (exportOpen ? ' dsm-export--open' : '') },
+                { className: 'dsm-export' + (exportOpen ? ' dsm-export--open' : ''), ref: exportRef },
                 h('button', {
                   type: 'button',
                   className: 'dsm-btn dsm-btn--sm',
