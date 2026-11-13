@@ -146,6 +146,25 @@ function revealMediaPath(target) {
   }
 }
 
+/** 用系统默认关联程序打开文件（Windows 走 start，macOS 走 open，Linux 走 xdg-open）。 */
+function openMediaPath(target) {
+  if (process.env.DSH_MEETING_NO_OPEN === '1') return true
+  try {
+    if (!existsSync(target)) return false
+    if (process.platform === 'win32') {
+      // start 的第一个引号参数是窗口标题位，必须留空，否则带引号的路径会被当成标题。
+      spawn('cmd.exe', ['/c', 'start', '', target], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+    } else if (process.platform === 'darwin') {
+      spawn('open', [target], { detached: true, stdio: 'ignore' }).unref()
+    } else {
+      spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref()
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Read a raw binary body (bounded). */
 async function readRawBody(req, limit = 16 * 1024 * 1024) {
   const chunks = []
@@ -553,6 +572,17 @@ export function registerRoutes(ctx, deps) {
         if (entry === undefined) throw new Error('这场会议还没有生成该类型的文件')
         const revealed = revealMediaPath(entry.path)
         sendJson(res, 200, { ok: true, path: entry.path, revealed })
+        return
+      }
+
+      if (segments.length === 4 && segments[2] === 'media' && segments[3] === 'open' && method === 'POST') {
+        const meeting = requireMeeting(store, id)
+        const body = await readJsonBody(req)
+        const kind = String(body.kind ?? '')
+        const entry = (Array.isArray(meeting.media) ? meeting.media : []).find((item) => item && item.kind === kind)
+        if (entry === undefined) throw new Error('这场会议还没有生成该类型的文件')
+        const opened = openMediaPath(entry.path)
+        sendJson(res, 200, { ok: true, path: entry.path, opened })
         return
       }
 

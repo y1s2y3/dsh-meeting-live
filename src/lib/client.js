@@ -455,6 +455,22 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-transcript-plain{font-size:12px;line-height:20px;color:#334155;white-space:pre-wrap;max-height:220px;overflow:auto;font-family:inherit}
 .dsm-transcript-note{margin-top:8px;font-size:11px;line-height:16px;color:#8A94A6}
 
+/* ── 会议文件（音频/视频）行 ── */
+.dsm-files{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.dsm-file{display:flex;align-items:center;gap:10px;padding:9px 11px;background:#FBFCFE;border:1px solid #E9EEF6;border-radius:12px}
+.dsm-file:hover{background:#F5F8FF;border-color:#C7DAFF}
+.dsm-file-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;background:#E8F0FF;color:#2563EB}
+.dsm-file-icon--audio{background:#E7F6EF;color:#0F8A5F}
+.dsm-file-main{flex:1 1 auto;min-width:0}
+.dsm-file-name{font-size:12.5px;line-height:18px;font-weight:600;color:#0F172A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-file-meta{font-size:11px;line-height:16px;color:#8A94A6;margin-top:1px}
+.dsm-file-actions{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px}
+.dsm-file-action{display:inline-flex;align-items:center;gap:4px;font-family:inherit;font-size:11.5px;line-height:16px;padding:4px 9px;border-radius:8px;border:1px solid #E1E7F1;background:#FFFFFF;color:#5A6474;cursor:pointer}
+.dsm-file-action:hover:not(:disabled){border-color:#C7DAFF;background:#EEF3FB;color:#2563EB}
+.dsm-file-action:disabled{opacity:.5;cursor:not-allowed}
+.dsm-file-action--primary{border-color:#2563EB;background:#2563EB;color:#FFFFFF}
+.dsm-file-action--primary:hover:not(:disabled){border-color:#1D4ED8;background:#1D4ED8;color:#FFFFFF}
+
 /* ── 浅灰底 + 白色/浅蓝主题 ── */
 .dsm-root{--dsm-accent:#2F6BFF;--dsm-accent-strong:#2459E6;--dsm-accent-soft:#EAF1FF;--dsm-accent-line:#C7DAFF;--dsm-canvas:#F4F6FA;--dsm-surface:#FFFFFF;--dsm-line:#E4E9F2;--dsm-ink:#0F172A;--dsm-ink-2:#475569;--dsm-ink-3:#8A94A6;background:var(--dsm-canvas)}
 .dsm-root .dsm-toolbar{background:var(--dsm-surface);border-bottom:1px solid var(--dsm-line)}
@@ -2377,6 +2393,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }
     }
 
+    /** 用电脑默认播放软件打开录制的视频/音频。 */
+    async function openMedia(meetingId, kind) {
+      if (meetingId === null || meetingId === undefined) return
+      try {
+        const payload = await requestJson('/meetings/' + encodeURIComponent(meetingId) + '/media/open', { method: 'POST', body: { kind } })
+        if (payload !== null && payload !== undefined && payload.opened === false) {
+          notify('warn', '文件打不开', '文件可能已被移动或删除，可点「查看目录」确认位置')
+        }
+      } catch (error) {
+        reportError(error, '打开文件失败')
+      }
+    }
+
     function screenRecorderMime() {
       if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return ''
       const candidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
@@ -3880,6 +3909,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   h('button', {
                     type: 'button',
                     className: 'dsm-btn dsm-btn--sm',
+                    disabled: item.converting === true,
+                    title: item.converting === true ? '正在转换 MP4，稍后即可播放' : '用电脑默认播放器打开',
+                    onClick: () => { void openMedia(result.meetingId ?? live.meetingId, item.kind) },
+                  }, '播放'),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsm-btn dsm-btn--sm',
                     onClick: () => { void revealMedia(result.meetingId ?? live.meetingId, item.kind) },
                   }, '在文件夹中显示'),
                 )),
@@ -4407,6 +4443,57 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         ),
         h('h1', { className: 'dsm-cover-title' }, meeting.title || '未命名会议'),
         h('div', { className: 'dsm-meta-chips' }, ...chips),
+        h(MeetingFiles, { meetingId: meeting.id, media: meeting.media }),
+      )
+    }
+
+    /** 会议文件：音频/视频一行一条，icon + 文件名 + 播放/查看目录（参考文件卡片样式）。 */
+    function MeetingFiles(props) {
+      const media = Array.isArray(props.media) ? props.media : []
+      if (media.length === 0) return null
+      return h(
+        'div',
+        { className: 'dsm-files' },
+        ...media.map((item, index) => {
+          const isVideo = item.kind === 'video'
+          const converting = item.converting === true
+          const metaParts = [isVideo ? '视频' : '音频']
+          if (converting) metaParts.push('正在转换 MP4…')
+          if (Number(item.bytes) > 0) metaParts.push(formatBytes(Number(item.bytes)))
+          if (Number(item.seconds) > 0) metaParts.push(formatDuration(Number(item.seconds)))
+          return h(
+            'div',
+            { key: 'file-' + String(index), className: 'dsm-file' },
+            h(
+              'span',
+              { className: 'dsm-file-icon' + (isVideo ? ' dsm-file-icon--video' : ' dsm-file-icon--audio') },
+              h(Icon, { name: isVideo ? 'play' : 'doc', size: 16 }),
+            ),
+            h(
+              'div',
+              { className: 'dsm-file-main' },
+              h('div', { className: 'dsm-file-name', title: String(item.name ?? '') }, String(item.name ?? '')),
+              h('div', { className: 'dsm-file-meta' }, metaParts.join(' · ')),
+            ),
+            h(
+              'div',
+              { className: 'dsm-file-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dsm-file-action dsm-file-action--primary',
+                disabled: converting,
+                title: converting ? '正在转换 MP4，稍后即可播放' : '用电脑默认播放器打开',
+                onClick: () => { void openMedia(props.meetingId, item.kind) },
+              }, h(Icon, { name: 'play', size: 12 }), h('span', null, '播放')),
+              h('button', {
+                type: 'button',
+                className: 'dsm-file-action',
+                title: '在文件夹中显示',
+                onClick: () => { void revealMedia(props.meetingId, item.kind) },
+              }, h(Icon, { name: 'folder', size: 12 }), h('span', null, '查看目录')),
+            ),
+          )
+        }),
       )
     }
 

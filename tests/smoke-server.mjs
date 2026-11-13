@@ -254,6 +254,16 @@ const traversalPayload = JSON.parse(traversalRes.body)
 const traversalPath = String(traversalPayload.entry?.path ?? '')
 check('文件名做了路径穿越清洗', traversalRes.status === 200 && traversalPath.startsWith(mediaHome), traversalPath)
 
+
+/* 17. 用系统默认播放器打开媒体文件（测试环境用 DSH_MEETING_NO_OPEN=1 不真的拉起播放器） */
+process.env.DSH_MEETING_NO_OPEN = '1'
+const openCase = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/media/open', JSON.stringify({ kind: 'audio' }), 'application/json')
+const openPayload = JSON.parse(openCase.body)
+check('播放接口返回 200 且已处理', openCase.status === 200 && openPayload.opened === true && String(openPayload.path).endsWith('.wav'), openCase.body.slice(0, 140))
+const openMissing = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/media/open', JSON.stringify({ kind: 'text' }), 'application/json')
+check('没有该类型文件时如实报错', openMissing.status === 400, openMissing.body.slice(0, 140))
+delete process.env.DSH_MEETING_NO_OPEN
+
 await mediaFs.rm(mediaHome, { recursive: true, force: true })
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
