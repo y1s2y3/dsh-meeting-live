@@ -323,11 +323,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-label{font-size:11px;color:var(--dsw-alias-label-secondary)}
 .dsm-row{display:flex;gap:8px}
 .dsm-row>.dsm-field{flex:1 1 0;min-width:0}
-.dsm-record-mode{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 22%,transparent)}
-    .dsm-record-mode-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 14%,transparent);color:var(--dsw-alias-brand-primary)}
-    .dsm-record-mode-body{min-width:0}
-    .dsm-record-mode-title{font-size:12.5px;font-weight:600;line-height:17px}
-    .dsm-record-mode-text{font-size:11px;line-height:15px;color:var(--dsw-alias-label-secondary)}
+.dsm-record-mode{display:flex;align-items:flex-start;gap:10px;padding:0 2px 10px;border:0;border-bottom:1px dashed #E6ECF5;border-radius:0;background:transparent}
+    .dsm-record-mode-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:#EAF1FF;color:#2563EB}
+    .dsm-record-mode-body{min-width:0;padding-top:1px}
+    .dsm-record-mode-title{font-size:13.5px;font-weight:650;line-height:19px;color:#0F172A}
+    .dsm-record-mode-text{font-size:11.5px;line-height:17px;color:#8A94A6;margin-top:1px}
 .dsm-check{display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:18px;cursor:pointer;color:var(--dsw-alias-label-primary)}
 .dsm-check input{margin:2px 0 0;accent-color:var(--dsw-alias-brand-primary)}
 .dsm-check--off{cursor:not-allowed;opacity:.6}
@@ -579,7 +579,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-root .dsm-tabs{border-bottom-color:var(--dsm-line)}
 .dsm-root .dsm-tab{color:var(--dsm-ink-3)}
 .dsm-root .dsm-tab--active{background:var(--dsm-accent-soft);color:var(--dsm-accent);border-color:var(--dsm-accent-line)}
-.dsm-root .dsm-record-mode{background:var(--dsm-accent-soft);border-color:var(--dsm-accent-line)}
+.dsm-root .dsm-record-mode{background:transparent;border-color:transparent;border-bottom-color:#E6ECF5}
 .dsm-root .dsm-record-mode-icon{background:#DCE8FF;color:var(--dsm-accent)}
 .dsm-root .dsm-record-mode-title{color:var(--dsm-ink)}
 .dsm-root .dsm-hint{color:var(--dsm-ink-3)}
