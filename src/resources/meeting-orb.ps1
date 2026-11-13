@@ -250,27 +250,43 @@ $buttonStyle
         <ScaleTransform x:Name="RippleScale" ScaleX="1" ScaleY="1" />
       </Ellipse.RenderTransform>
     </Ellipse>
+    <Ellipse x:Name="LevelRing" Width="$BALL_CORE" Height="$BALL_CORE" Stroke="#FF7FAEFF" StrokeThickness="2.6"
+             Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+             RenderTransformOrigin="0.5,0.5">
+      <Ellipse.RenderTransform>
+        <ScaleTransform x:Name="LevelRingScale" ScaleX="1" ScaleY="1" />
+      </Ellipse.RenderTransform>
+    </Ellipse>
     <Border x:Name="BallCore" Width="$BALL_CORE" Height="$BALL_CORE" CornerRadius="34"
-            BorderThickness="1" BorderBrush="#59FFFFFF" Background="Transparent"
+            BorderThickness="1" BorderBrush="#73FFFFFF" Background="Transparent"
             HorizontalAlignment="Center" VerticalAlignment="Center">
       <Border.Effect>
         <DropShadowEffect x:Name="BallGlow" Color="#FFE0574B" BlurRadius="20" ShadowDepth="0" Opacity="0.2" />
       </Border.Effect>
       <Grid>
-        <Viewbox x:Name="MicGlyph" Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center"
-                 Margin="0,0,0,10" RenderTransformOrigin="0.5,0.5">
+        <Ellipse x:Name="BallHighlight" Width="46" Height="46" HorizontalAlignment="Left" VerticalAlignment="Top"
+                 Margin="8,7,0,0" IsHitTestVisible="False">
+          <Ellipse.Fill>
+            <RadialGradientBrush GradientOrigin="0.35,0.3" Center="0.4,0.35" RadiusX="0.8" RadiusY="0.8">
+              <GradientStop Color="#40FFFFFF" Offset="0" />
+              <GradientStop Color="#00FFFFFF" Offset="1" />
+            </RadialGradientBrush>
+          </Ellipse.Fill>
+        </Ellipse>
+        <Viewbox x:Name="MicGlyph" Width="32" Height="32" HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Margin="0,0,0,11" RenderTransformOrigin="0.5,0.5">
           <Viewbox.RenderTransform>
             <ScaleTransform x:Name="MicScale" ScaleX="1" ScaleY="1" />
           </Viewbox.RenderTransform>
           <Canvas Width="16" Height="16">
-            <Path Stroke="#FFEDEFF2" StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+            <Path Stroke="#FFF3F6FB" StrokeThickness="1.45" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                   Data="M8,2.6 A2,2 0 0 1 10,4.6 L10,7.8 A2,2 0 0 1 6,7.8 L6,4.6 A2,2 0 0 1 8,2.6 Z M4.2,7.4 L4.2,8 A3.8,3.8 0 0 0 11.8,8 L11.8,7.4 M8,11.9 L8,13.8 M5.9,13.8 L10.1,13.8" />
           </Canvas>
         </Viewbox>
-        <TextBlock x:Name="OrbTimer" Text="00:00" FontSize="10.5" FontFamily="Consolas"
-                   Foreground="#FFC7CEDA" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,7" />
-        <Ellipse x:Name="OrbDot" Width="9" Height="9" Fill="#FFE0574B"
-                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,8,0" />
+        <TextBlock x:Name="OrbTimer" Text="00:00" FontSize="11" FontFamily="Consolas"
+                   Foreground="#FFDCE3ED" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,6" />
+        <Ellipse x:Name="OrbDot" Width="10" Height="10" Fill="#FFE0574B" Stroke="#66FFFFFF" StrokeThickness="1"
+                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,7,7,0" />
       </Grid>
     </Border>
   </Grid>
@@ -356,8 +372,11 @@ if ($Preview -ne '') {
   $ballRoot.FindName('Ripple').Opacity = 0.32
   $ballRoot.FindName('RippleScale').ScaleX = 1.3
   $ballRoot.FindName('RippleScale').ScaleY = 1.3
-  $ballRoot.FindName('MicScale').ScaleX = 1.1
-  $ballRoot.FindName('MicScale').ScaleY = 1.1
+  $ballRoot.FindName('MicScale').ScaleX = 1.2
+  $ballRoot.FindName('MicScale').ScaleY = 1.2
+  $ballRoot.FindName('LevelRing').Opacity = 0.55
+  $ballRoot.FindName('LevelRingScale').ScaleX = 1.12
+  $ballRoot.FindName('LevelRingScale').ScaleY = 1.12
   Save-Preview $ballRoot $BALL_SIZE $BALL_SIZE (Join-Path $Preview 'ball.png')
 
   $ballRoot.FindName('OrbTimer').Text = '01:23:45'
@@ -427,6 +446,8 @@ $orbDot = $root.FindName('OrbDot')
 $ripple = $root.FindName('Ripple')
 $rippleScale = $root.FindName('RippleScale')
 $micScale = $root.FindName('MicScale')
+$levelRing = $root.FindName('LevelRing')
+$levelRingScale = $root.FindName('LevelRingScale')
 $ballGlow = $root.FindName('BallGlow')
 $cardRow = $root.FindName('CardRow')
 $cardHost = $root.FindName('CardHost')
@@ -561,15 +582,23 @@ function Update-Animation {
     $rippleValue = 1.0 + 0.33 * $script:Phase + 0.12 * $smooth
     $rippleScale.ScaleX = $rippleValue
     $rippleScale.ScaleY = $rippleValue
-    $micValue = 1.0 + 0.16 * $smooth
+    $micValue = 1.0 + 0.28 * $smooth
     $micScale.ScaleX = $micValue
     $micScale.ScaleY = $micValue
-    $ballGlow.Opacity = 0.18 + 0.62 * $smooth
-    $ballGlow.BlurRadius = 18 + 14 * $smooth
+    # 音量环：说话越大，外圈越大越亮（没有声音时几乎不可见）
+    $levelRing.Opacity = 0.08 + 0.62 * $smooth
+    $levelRingValue = 1.02 + 0.16 * $smooth
+    $levelRingScale.ScaleX = $levelRingValue
+    $levelRingScale.ScaleY = $levelRingValue
+    $ballGlow.Opacity = 0.2 + 0.62 * $smooth
+    $ballGlow.BlurRadius = 20 + 16 * $smooth
     $window.Opacity = (0.9 + 0.05 * $smooth) - 0.03 * $script:Phase
   } elseif ($status -eq 'paused') {
     $orbDot.Opacity = 0.85
     $ripple.Opacity = 0
+    $levelRing.Opacity = 0
+    $levelRingScale.ScaleX = 1
+    $levelRingScale.ScaleY = 1
     $rippleScale.ScaleX = 1
     $rippleScale.ScaleY = 1
     $micScale.ScaleX = 1
@@ -580,6 +609,9 @@ function Update-Animation {
   } else {
     $orbDot.Opacity = 1
     $ripple.Opacity = 0
+    $levelRing.Opacity = 0
+    $levelRingScale.ScaleX = 1
+    $levelRingScale.ScaleY = 1
     $rippleScale.ScaleX = 1
     $rippleScale.ScaleY = 1
     $micScale.ScaleX = 1

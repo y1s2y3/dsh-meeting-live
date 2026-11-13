@@ -152,7 +152,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     .dsm-quick-btn:disabled{opacity:.45;cursor:not-allowed}
     .dsm-quick-btn--primary{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 13%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 40%,transparent);color:var(--dsw-alias-brand-primary)}
     .dsm-quick-btn--primary:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-brand-primary) 21%,transparent)}
-    .dsm-quick-btn--live{animation:dsm-pulse 1.4s ease-in-out infinite}
+    .dsm-quick-btn--on{box-shadow:inset 0 0 0 1px rgba(255,255,255,.35),0 0 0 3px rgba(47,107,255,.16)}
     .dsm-quick-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px}
     .dsm-meeting{display:flex;align-items:center;gap:7px;width:100%;box-sizing:border-box;text-align:left;border:1px solid transparent;background:transparent;color:inherit;border-radius:8px;padding:6px 8px;font-family:inherit;cursor:pointer;transition:background .12s ease,border-color .12s ease}
     .dsm-meeting-icon{flex:0 0 auto;display:inline-flex;color:var(--dsw-alias-label-secondary)}
@@ -3799,17 +3799,17 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }
 
       const liveTitle = liveStatus === 'preparing'
-        ? '准备实时转写'
+        ? '正在准备会议'
         : liveStatus === 'paused'
-          ? '实时转写已暂停'
+          ? '会议已暂停'
           : liveStatus === 'recording'
-            ? '实时转写中'
+            ? '会议进行中'
           : liveStatus === 'stopping'
-            ? '正在收尾转写'
+            ? '正在结束会议'
             : liveStatus === 'done'
-              ? '实时转写完成'
+              ? '会议已结束'
               : liveStatus === 'error'
-                ? '实时转写中断'
+                ? '会议中断'
                 : (tab === 'file' ? '录音转写' : '实时录音')
       const title = liveStatus !== 'idle'
         ? liveTitle
@@ -3851,7 +3851,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               h('span', null, preparing
                 ? '正在准备语音识别…'
                 : stopping
-                  ? '正在收尾转写…'
+                  ? '正在结束会议…'
                   : liveStatus === 'paused'
                     ? '已暂停录音'
                     : '正在录音'),
@@ -3916,7 +3916,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             'div',
             { key: 'live-done', className: 'dsm-record-stage' },
             h('div', { className: 'dsm-done-icon' }, h(Icon, { name: 'check', size: 24 })),
-            h('div', { className: 'dsm-stage-title' }, '实时转写完成并已保存'),
+            h('div', { className: 'dsm-stage-title' }, '会议已结束并已保存'),
             h('div', { className: 'dsm-stage-text' }, `已识别 ${formatChars(result.chars)}${result.seconds > 0 ? ` · 音频 ${formatDuration(result.seconds)}` : ''} · 共 ${result.sentChunks ?? live.sentChunks} 段。`),
             h('div', { className: 'dsm-hint' }, '接下来可以生成 AI 结构化纪要，或把待办写入DSH 待办。'),
             Array.isArray(live.media) && live.media.length > 0
@@ -4163,7 +4163,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               type: 'button',
               className: 'dsm-btn dsm-btn--primary',
               onClick: () => { void stopLiveRecording('user') },
-            }, h(Icon, { name: 'stop', size: 12 }), h('span', null, '停止并转写')),
+            }, h(Icon, { name: 'stop', size: 12 }), h('span', null, '结束会议')),
           ]
         } else if (liveStatus === 'recording') {
           footer = [
@@ -4179,7 +4179,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               type: 'button',
               className: 'dsm-btn dsm-btn--primary',
               onClick: () => { void stopLiveRecording('user') },
-            }, h(Icon, { name: 'stop', size: 12 }), h('span', null, '停止并转写')),
+            }, h(Icon, { name: 'stop', size: 12 }), h('span', null, '结束会议')),
           ]
         } else {
           footer = [
@@ -4240,7 +4240,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               onClick: startLive,
               disabled: !speechAvailable,
               title: speechAvailable ? undefined : '本机语音识别服务不可用',
-            }, h(Icon, { name: 'mic', size: 13 }), h('span', null, '开始实时转写'))
+            }, h(Icon, { name: 'mic', size: 13 }), h('span', null, '开始会议'))
             : h('button', {
               key: 'pick',
               type: 'button',
@@ -4295,13 +4295,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             { className: 'dsm-quick' },
             h('button', {
               type: 'button',
-              className: 'dsm-quick-btn dsm-quick-btn--primary' + (actions.liveActive ? ' dsm-quick-btn--live' : ''),
+              className: 'dsm-quick-btn dsm-quick-btn--primary' + (actions.liveActive ? ' dsm-quick-btn--on' : ''),
               title: actions.liveActive ? '正在后台录音，点击查看实时转写' : '打开麦克风实时录音，边说边出字',
               onClick: () => { if (typeof actions.record === 'function') actions.record('record') },
               disabled: actions.recordDisabled === true && actions.liveActive !== true,
             },
             h('span', { className: 'dsm-quick-icon' }, h(Icon, { name: 'mic', size: 15 })),
-            h('span', null, actions.liveActive ? '录音中…' : '实时录音/录屏')),
+            h('span', null, actions.liveActive ? '会议中…' : '实时录音/录屏')),
             h('button', {
               type: 'button',
               className: 'dsm-quick-btn',
@@ -5269,7 +5269,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           h(
             'div',
             { className: 'dsm-livebar-title' },
-            h('span', null, preparing ? '正在准备实时转写' : stopping ? '正在收尾转写' : paused ? '已暂停' : '录音中'),
+            h('span', null, preparing ? '正在准备会议' : stopping ? '正在结束会议' : paused ? '已暂停' : '会议中'),
             !preparing && !stopping ? h('span', { className: 'dsm-livebar-timer' }, formatTimer(live.elapsedSeconds)) : null,
             live.meetingTitle !== ''
               ? h('span', { className: 'dsm-hint', style: { fontWeight: 400 } }, live.meetingTitle)
