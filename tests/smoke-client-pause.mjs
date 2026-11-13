@@ -141,6 +141,7 @@ code = code.replace(hookAnchor, `    globalThis.__TEST_HOOKS__ = {
       clearLiveRecording,
       extractVoiceFeature,
       assignLiveSpeaker,
+      relativeStamp,
       resetSpeakers: () => { liveEngine.speakerCentroids = [] },
       liveState: () => snapshot.live,
     }
@@ -429,6 +430,22 @@ const lowAgain = hooks.assignLiveSpeaker(hooks.extractVoiceFeature(tone(122, 2))
 check('相近音色归为同一位说话人', lowAgain === lowLabel, JSON.stringify({ lowLabel, lowAgain }));
 const third = hooks.assignLiveSpeaker(hooks.extractVoiceFeature(tone(175, 2)));
 check('最多扩展到第三位说话人 C', third === 2, JSON.stringify({ third }));
+
+
+/* 15. 列表时间分级展示：今天/昨天/前天/本年/非本年 */
+const nowDate = new Date()
+const iso = (date) => date.toISOString()
+const todayText = hooks.relativeStamp(iso(nowDate))
+check('今天只显示时分秒', /^\d{2}:\d{2}:\d{2}$/.test(todayText), todayText)
+const yesterday = new Date(nowDate.getTime() - 24 * 3600 * 1000)
+check('昨天带「昨天」前缀 + 时分秒', /^昨天 \d{2}:\d{2}:\d{2}$/.test(hooks.relativeStamp(iso(yesterday))), hooks.relativeStamp(iso(yesterday)))
+const beforeYesterday = new Date(nowDate.getTime() - 48 * 3600 * 1000)
+check('前天带「前天」前缀 + 时分秒', /^前天 \d{2}:\d{2}:\d{2}$/.test(hooks.relativeStamp(iso(beforeYesterday))), hooks.relativeStamp(iso(beforeYesterday)))
+const thisYear = new Date(nowDate.getFullYear(), 2, 5, 9, 30, 12)
+check('本年内更早显示月-日 + 时分秒', hooks.relativeStamp(iso(thisYear)) === '03-05 09:30:12', hooks.relativeStamp(iso(thisYear)))
+const lastYear = new Date(nowDate.getFullYear() - 1, 5, 12, 9, 30, 12)
+check('跨年显示年-月-日 + 时分秒', hooks.relativeStamp(iso(lastYear)) === `${nowDate.getFullYear() - 1}-06-12 09:30:12`, hooks.relativeStamp(iso(lastYear)))
+check('空值返回空字符串', hooks.relativeStamp('') === '', '')
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

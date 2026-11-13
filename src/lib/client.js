@@ -695,6 +695,27 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       return `${todayKey(date)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
     }
 
+    /**
+     * 列表时间按新旧分级展示：
+     * 今天 → 14:02:36；昨天/前天 → 昨天 14:02:36 / 前天 14:02:36；
+     * 本年 → 11-05 09:30:12；非本年 → 2025-06-12 09:30:12。
+     */
+    function relativeStamp(value) {
+      if (!value) return ''
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return String(value)
+      const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
+      const now = new Date()
+      const startOfDay = (input) => new Date(input.getFullYear(), input.getMonth(), input.getDate()).getTime()
+      const dayDiff = Math.round((startOfDay(now) - startOfDay(date)) / 86400000)
+      if (dayDiff === 0) return clock
+      if (dayDiff === 1) return `昨天 ${clock}`
+      if (dayDiff === 2) return `前天 ${clock}`
+      const monthDay = `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+      if (date.getFullYear() === now.getFullYear()) return `${monthDay} ${clock}`
+      return `${date.getFullYear()}-${monthDay} ${clock}`
+    }
+
     function humanDate(key) {
       if (!key) return '未定日期'
       const text = String(key).slice(0, 10)
@@ -4555,10 +4576,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             : null,
                     ...meetings.map((item) => {
             // 单行列表：一行 = 一次会议记录（来源图标 + 标题 + 已总结标记 + 时间）
-            const stamp = formatStamp(item.createdAt ?? item.updatedAt ?? '')
-            const time = stamp === ''
-              ? String(item.date ?? '')
-              : (stamp.slice(0, 10) === todayKey() ? stamp.slice(11) : stamp.slice(5, 10))
+            const time = relativeStamp(item.createdAt ?? item.updatedAt ?? '')
             const sourceIcon = item.sourceType === 'recording' ? 'mic' : (item.sourceType === 'import' ? 'upload' : 'doc')
             return h(
               'button',
