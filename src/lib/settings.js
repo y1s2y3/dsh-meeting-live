@@ -124,7 +124,8 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
     },
     terms: typeof termsInput === 'string' ? termsInput.slice(0, 4000) : '',
     correctTranscript: input.correctTranscript === undefined ? baseInput.correctTranscript !== false : input.correctTranscript !== false,
-    diarize: input.diarize === undefined ? baseInput.diarize !== false : input.diarize !== false,
+    // 真说话人分离固定开启：模型就绪就自动做，没装模型时自动跳过
+    diarize: true,
   }
 }
 

@@ -498,6 +498,50 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
+      if (segments.length === 2 && segments[0] === 'settings' && segments[1] === 'summary-test' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const settingsNow = store.settings
+        const custom = body?.custom ?? (settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null)
+        if (custom === null || custom === undefined) {
+          const route = summarizer.describeRoute(store.summaryModel)
+          sendJson(res, 200, { ok: true, message: '当前使用 DSH 模型：' + String(route.model ?? '未配置') })
+          return
+        }
+        const customError = validateSummaryCustom(custom)
+        if (customError !== null) throw new Error(customError)
+        const started = Date.now()
+        const url = String(custom.baseUrl).replace(/\/+$/, '') + '/chat/completions'
+        let payload
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              ...(custom.apiKey === '' ? {} : { authorization: 'Bearer ' + custom.apiKey }),
+            },
+            body: JSON.stringify({
+              model: custom.model,
+              messages: [{ role: 'user', content: '回复"ok"两个字即可' }],
+              max_tokens: 16,
+              stream: false,
+            }),
+          })
+          payload = await response.json().catch(() => null)
+          if (!response.ok) {
+            const message = payload?.error?.message ?? payload?.message ?? ''
+            throw new Error('接口返回 ' + String(response.status) + (message === '' ? '' : '：' + String(message)))
+          }
+        } catch (networkError) {
+          throw new Error('连不上接口：' + (networkError instanceof Error ? networkError.message : String(networkError)))
+        }
+        const sample = String(payload?.choices?.[0]?.message?.content ?? '').slice(0, 40)
+        sendJson(res, 200, {
+          ok: true,
+          message: '接口可用（' + String(Date.now() - started) + 'ms）' + (sample === '' ? '' : '，返回：' + sample),
+        })
+        return
+      }
+
       if (segments.length >= 2 && segments[0] === 'models') {
         const manager = deps.modelManager
         if (manager === undefined || manager === null) throw new Error('模型管理不可用')

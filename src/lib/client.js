@@ -318,6 +318,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-settings-btn:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 36%,transparent);color:var(--dsw-alias-brand-primary)}
 .dsm-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-family:inherit;padding:0}
 .dsm-iconbtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsm-iconbtn:disabled{opacity:.6;cursor:default}
 .dsm-modal-body{padding:4px 18px 14px;overflow:auto;display:flex;flex-direction:column;gap:10px}
 .dsm-modal-foot{display:flex;align-items:center;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:11px 18px;border-top:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 3%,transparent)}
 .dsm-field{display:flex;flex-direction:column;gap:4px}
@@ -3646,19 +3647,29 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                     type: 'button',
                     className: 'dsm-set-tab' + (cloudTab === key ? ' dsm-set-tab--on' : ''),
                     onClick: () => {
-                  setCloudTab(key)
-                  if (transcribeMode === 'cloud') updateTranscribe({ provider: 'cloud-' + key })
-                },
+                      setCloudTab(key)
+                      if (transcribeMode === 'cloud') updateTranscribe({ provider: 'cloud-' + key })
+                    },
                   },
-                  label,
+                  h('span', { className: 'dsm-set-dot' + (cloudConfigured(key) ? ' dsm-set-dot--on' : '') }),
+                  h('span', null, label),
                 )),
               ),
-              radioRow(
-                transcribeProvider === 'cloud-' + cloudTab,
-                () => { if (transcribeProvider !== 'cloud-' + cloudTab) updateTranscribe({ provider: 'cloud-' + cloudTab }) },
-                '使用' + (cloudTab === 'iflytek' ? '讯飞' : cloudTab === 'tencent' ? '腾讯云' : '阿里云') + '语音识别',
-                '需要填写下方凭据；音频会离开本机',
-                null,
+              h('div', { className: 'dsm-set-cloud-actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                  disabled: transcribeProvider === 'cloud-' + cloudTab,
+                  onClick: () => setAsTranscribeEngine(cloudTab),
+                }, transcribeProvider === 'cloud-' + cloudTab ? '当前使用中' : '设为转写引擎'),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  onClick: () => { void testCloud(cloudTab) },
+                }, '校验配置'),
+                cloudConfigured(cloudTab)
+                  ? h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已填写凭据')
+                  : h('span', { className: 'dsm-set-badge' }, '未填写凭据'),
               ),
               cloudTab === 'iflytek'
                 ? h('div', { className: 'dsm-set-grid' },
@@ -5856,10 +5867,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         h('button', {
           type: 'button',
           className: 'dsm-iconbtn',
-          onClick: handlers.refresh,
-          title: '刷新',
+          onClick: () => { if (typeof handlers.refresh === 'function') handlers.refresh() },
+          disabled: refreshing === true,
+          title: refreshing === true ? '正在刷新…' : '刷新（重新拉取会议列表与当前详情）',
           'aria-label': '刷新',
-        }, h(Icon, { name: 'refresh', size: 14 })),
+        }, refreshing === true ? h('span', { className: 'dsm-spin' }) : h(Icon, { name: 'refresh', size: 14 })),
         h(ToolbarButton, {
           icon: 'sliders',
           iconSize: 14,
@@ -5989,6 +6001,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [dialog, setDialog] = useState(null)
       const [recordTab, setRecordTab] = useState('record')
       const [deleteOpen, setDeleteOpen] = useState(false)
+      const [refreshing, setRefreshing] = useState(false)
 
       useEffect(() => {
         ensureStyle()
@@ -6130,7 +6143,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         export: (format) => { void openExport(format) },
         delete: () => setDeleteOpen(true),
         settings: () => setDialog('auto'),
-        refresh: () => { void refreshAll() },
+        refresh: () => {
+          if (refreshing === true) return
+          setRefreshing(true)
+          void refreshAll()
+            .then(() => { notifySuccess('已刷新', '会议列表与当前会议详情已重新拉取') })
+            .catch(() => {})
+            .finally(() => { setRefreshing(false) })
+        },
       }
 
       const closeDialog = () => setDialog(null)
