@@ -428,6 +428,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-set-model-name{font-size:12px;line-height:17px;color:#0F172A}
 .dsm-set-model-size{font-size:10.5px;line-height:15px;color:#8A94A6}
 .dsm-set-model-progress{font-size:11px;color:#2563EB}
+.dsm-set-model-actions{display:flex;gap:6px;align-items:center}
 .dsm-set-inline{display:flex;align-items:center;gap:10px}
 .dsm-set-tabs{display:flex;gap:4px}
 .dsm-set-tab{border:1px solid #E4E9F2;background:#FFFFFF;color:#475569;font-family:inherit;font-size:11.5px;line-height:16px;padding:4px 10px;border-radius:999px;cursor:pointer}
@@ -3333,6 +3334,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [cloudTab, setCloudTab] = useState('iflytek')
       const [summarySelection, setSummarySelection] = useState('')
       const [localSummaryMode, setLocalSummaryMode] = useState(null)
+      const [localTranscribeMode, setLocalTranscribeMode] = useState(null)
       const [termsText, setTermsText] = useState('')
       const [termsSaving, setTermsSaving] = useState(false)
       const termsTouchedRef = useRef(false)
@@ -3436,10 +3438,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
-      const downloadModel = async (kind) => {
+      const downloadModel = async (kind, force) => {
         setDownloading(kind)
         setError(null)
         try {
+          if (force === true) {
+            await requestJson('/models/' + kind, { method: 'DELETE' }).catch(() => {})
+          }
           await requestJson('/models/' + kind + '/download', { method: 'POST' })
           notifySuccess('模型下载完成', kind === 'paraformer' ? 'Paraformer 中文识别模型已就绪' : (kind === 'segmentation' ? '说话人分段模型已就绪' : '声纹模型已就绪'))
         } catch (caught) {
@@ -3518,7 +3523,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
       const transcribeProvider = settings.transcribe.provider
       const cloudConfig = settings.transcribe.cloud ?? {}
-      const transcribeMode = transcribeProvider.startsWith('cloud-') ? 'cloud' : 'local'
+      const transcribeMode = localTranscribeMode ?? (transcribeProvider.startsWith('cloud-') ? 'cloud' : 'local')
 
       const modelPage = h(
         'div',
@@ -3533,13 +3538,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               key: 'mode-local',
               type: 'button',
               className: 'dsm-set-tab' + (transcribeMode === 'local' ? ' dsm-set-tab--on' : ''),
-              onClick: () => { if (transcribeMode !== 'local') updateTranscribe({ provider: 'paraformer-local' }) },
+              onClick: () => { setLocalTranscribeMode('local'); updateTranscribe({ provider: 'paraformer-local' }) },
             }, '本地模型'),
             h('button', {
               key: 'mode-cloud',
               type: 'button',
               className: 'dsm-set-tab' + (transcribeMode === 'cloud' ? ' dsm-set-tab--on' : ''),
-              onClick: () => { if (transcribeMode !== 'cloud') updateTranscribe({ provider: 'cloud-' + cloudTab }) },
+              onClick: () => { setLocalTranscribeMode('cloud'); updateTranscribe({ provider: 'cloud-' + cloudTab }) },
             }, '云端模型'),
           ),
           transcribeMode === 'local'
@@ -3568,7 +3573,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               downloadingState !== null && downloadingState.kind === kind
                 ? h('span', { className: 'dsm-set-model-progress' }, '下载中 ' + String(percent) + '%')
                 : (modelReady(kind)
-                  ? h('button', { type: 'button', className: 'dsm-btn dsm-btn--sm', onClick: () => { void removeModel(kind) } }, '删除')
+                  ? h('div', { className: 'dsm-set-model-actions' },
+                    h('button', {
+                      type: 'button',
+                      className: 'dsm-btn dsm-btn--sm',
+                      disabled: downloading !== '',
+                      onClick: () => { void downloadModel(kind, true) },
+                    }, '重装'),
+                    h('button', {
+                      type: 'button',
+                      className: 'dsm-btn dsm-btn--sm dsm-btn--danger',
+                      onClick: () => { void removeModel(kind) },
+                    }, '卸载'),
+                  )
                   : h('button', {
                     type: 'button',
                     className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
@@ -3601,7 +3618,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                     key: 'cloud-tab-' + key,
                     type: 'button',
                     className: 'dsm-set-tab' + (cloudTab === key ? ' dsm-set-tab--on' : ''),
-                    onClick: () => setCloudTab(key),
+                    onClick: () => {
+                  setCloudTab(key)
+                  if (transcribeMode === 'cloud') updateTranscribe({ provider: 'cloud-' + key })
+                },
                   },
                   label,
                 )),
