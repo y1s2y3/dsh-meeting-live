@@ -444,6 +444,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-set-model-size{font-size:10.5px;line-height:15px;color:#8A94A6}
 .dsm-set-model-progress{font-size:11px;color:#2563EB}
 .dsm-set-model-actions{display:flex;gap:6px;align-items:center}
+.dsm-set-dot{width:6px;height:6px;border-radius:50%;background:#CBD5E1;display:inline-block;margin-right:4px}
+.dsm-set-dot--on{background:#22A06B}
+.dsm-set-cloud-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:2px}
+.dsm-set-cloud{border:1px dashed #D9E2F0;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;background:#FFFFFF}
 .dsm-set-inline{display:flex;align-items:center;gap:10px}
 .dsm-set-tabs{display:flex;gap:4px}
 .dsm-set-tab{border:1px solid #E4E9F2;background:#FFFFFF;color:#475569;font-family:inherit;font-size:11.5px;line-height:16px;padding:4px 10px;border-radius:999px;cursor:pointer}
@@ -3446,6 +3450,38 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const updateTranscribe = (patch) => {
         void patchSettings({ transcribe: { ...settings.transcribe, ...patch } })
       }
+      const cloudConfigured = (key) => {
+        const item = settings.transcribe.cloud?.[key] ?? {}
+        if (key === 'iflytek') return Boolean(item.appId && item.apiKey && item.apiSecret)
+        if (key === 'tencent') return Boolean(item.secretId && item.secretKey)
+        return Boolean(item.appKey && item.accessKeyId && item.accessKeySecret)
+      }
+      const setAsTranscribeEngine = (key) => {
+        setLocalTranscribeMode('cloud')
+        setCloudTab(key)
+        updateTranscribe({ provider: 'cloud-' + key })
+      }
+      const testCloud = async (key) => {
+        setError(null)
+        try {
+          const payload = await requestJson('/settings/cloud-test', { method: 'POST', body: { provider: 'cloud-' + key, cloud: settings.transcribe.cloud } })
+          notifySuccess('配置格式校验通过', String(payload?.message ?? ''))
+        } catch (caught) {
+          setError(messageOf(caught))
+        }
+      }
+      const testSummaryModel = async () => {
+        setError(null)
+        try {
+          const payload = await requestJson('/settings/summary-test', {
+            method: 'POST',
+            body: { custom: summaryMode === 'custom' ? settings.summary.custom : null },
+          })
+          notifySuccess('总结模型可用', String(payload?.message ?? ''))
+        } catch (caught) {
+          setError(messageOf(caught))
+        }
+      }
       const updateCloud = (key, field, value) => {
         const cloud = { ...(settings.transcribe.cloud ?? {}) }
         cloud[key] = { ...(cloud[key] ?? {}), [field]: value }
@@ -3649,16 +3685,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           )
             : null,
           transcribeMode === 'local'
-            ? h('div', { className: 'dsm-set-inline' },
-              h('label', { className: 'dsm-check' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: settings.diarize === true,
-                  onChange: (event) => { void patchSettings({ diarize: event.target.checked }) },
-                }),
-                h('span', null, '启用真说话人分离（需三个模型就绪）'),
-              ),
-            )
+            ? h('div', { className: 'dsm-hint' }, '真说话人分离已默认开启：三个模型就绪后，录音结束会自动输出 S1/S2 与时间轴。')
             : null,
           transcribeMode === 'cloud'
             ? h(
@@ -3762,6 +3789,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               h(Field, { label: '温度' }, h(TextInput, { value: String(settings.summary.custom?.temperature ?? 0.3), onChange: (value) => updateSummaryCustom('temperature', Number(value) || 0.3) })),
             )
             : null,
+          h('div', { className: 'dsm-set-cloud-actions' },
+            h('button', { type: 'button', className: 'dsm-btn dsm-btn--sm', onClick: () => { void testSummaryModel() } }, '测试连接'),
+            h('span', { className: 'dsm-hint' }, summaryMode === 'custom'
+              ? '使用手动配置的接口生成纪要（OpenAI 兼容 /chat/completions）'
+              : '使用 DSH 模型列表里选中的模型生成纪要'),
+          ),
         ),
         h('div', { className: 'dsm-set-section' },
           h('div', { className: 'dsm-set-section-head' },

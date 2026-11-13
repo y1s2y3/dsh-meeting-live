@@ -67,7 +67,17 @@ globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {}, 
 globalThis.fetch = async (url) => {
   const text = String(url);
   let body = statePayload;
-  if (text.includes('/settings')) body = { ok: true, settings, terms: [], models: [], model: null, modelsState, transcribeProviders: [], cloudProviders: [] };
+  if (text.includes('/settings')) {
+    const useCloud = globalThis.__SETTINGS_MODE__ === 'cloud';
+    const settingsPayload = useCloud
+      ? {
+        ...settings,
+        transcribe: { provider: 'cloud-iflytek', cloud: { iflytek: { appId: 'app', apiKey: 'key', apiSecret: 'secret' }, tencent: {}, aliyun: {} } },
+        summary: { mode: 'custom', custom: { baseUrl: 'https://api.example.com/v1', apiKey: 'sk-x', model: 'demo', temperature: 0.3, maxTokens: 4000 } },
+      }
+      : settings;
+    body = { ok: true, settings: settingsPayload, terms: [], models: [], model: null, modelsState, transcribeProviders: [], cloudProviders: [] };
+  }
   else if (text.includes('/models/status')) body = { ok: true, state: modelsState };
   return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
 };
@@ -123,6 +133,8 @@ const cases = [
   ['SpeechChip', hooks.SpeechChip, {}],
 ];
 
+const sleep = (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+
 let failures = 0;
 for (const [name, component, props] of cases) {
   hookIndex = 0;
@@ -137,5 +149,21 @@ for (const [name, component, props] of cases) {
     console.log((error?.stack ?? '').split('\n').slice(1, 5).join('\n'));
   }
 }
+/* 云端 + 手动总结分支：先渲染一次触发加载，等设置回来后复用 hook 状态再渲染 */
+globalThis.__SETTINGS_MODE__ = 'cloud';
+hookIndex = 0;
+hookStates.length = 0;
+try {
+  hooks.SettingsModal({ status: statePayload.autoIngest, onClose() {}, onSelectMeeting() {} });
+  await sleep(120);
+  const cloudElement = hooks.SettingsModal({ status: statePayload.autoIngest, onClose() {}, onSelectMeeting() {} });
+  deepRender(cloudElement, 0, 'SettingsModal(cloud)');
+  console.log('[OK] SettingsModal(cloud+custom)');
+} catch (error) {
+  failures += 1;
+  console.log('[FAIL] SettingsModal(cloud+custom) →', error?.message);
+  console.log((error?.stack ?? '').split('\n').slice(1, 5).join('\n'));
+}
+
 console.log(failures === 0 ? '\nDEEP RENDER ALL PASSED (执行组件 ' + executed + ' 次)' : '\n' + failures + ' 个组件渲染失败');
 process.exit(failures === 0 ? 0 : 1);
