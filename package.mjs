@@ -4,7 +4,7 @@
  *
  * 用法：
  *   node package.mjs                                    # 用 src/package.json 的名字和版本
- *   node package.mjs --name dsh-plugin-meeting-minutes-pro --version 1.2.0
+ *   node package.mjs --name dsh-meeting-live-pro --version 1.2.0
  *   node package.mjs --out D:\dist                      # 指定输出目录（默认 ./dist）
  *
  * 产物：dist/<包名>-<版本>.tgz（内含 <包名>/ 目录，可直接被 npm/pnpm 安装）
@@ -47,6 +47,8 @@ function copyTree(source, target) {
 
 function readmeFor(name, version) {
   return `# ${name} v${version}
+
+> 自研版本 · 维护者：DinosaurYSL · 许可：MIT（授权文本见包内 \`LICENSE\`）
 
 ## 这是什么
 

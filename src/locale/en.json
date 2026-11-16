@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Meeting Minutes",
-    "description": "Transcribe recordings or import Tencent Meeting notes, let AI write a visual minutes document, and push confirmed action items into the task calendar."
+    "description": "Transcribe recordings, import Tencent Meeting notes, and let AI write structured minutes; push confirmed action items into DSH todos and export Word / HTML / Markdown."
   }
 }

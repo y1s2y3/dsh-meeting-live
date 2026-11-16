@@ -7,7 +7,7 @@
  * does not pre-validate arguments, so every `execute` validates its own input
  * and throws a Chinese, model-readable error.
  *
- * @module dsh-plugin-meeting-minutes/tools
+ * @module dsh-meeting-live/tools
  */
 
 import { basename } from 'node:path'
@@ -46,12 +46,24 @@ function locate(store, args) {
   return meeting
 }
 
+/** 追加原始文本（全文或字数提示）。 */
+function appendTranscript(lines, meeting, options) {
+  const transcript = typeof meeting.transcript === 'string' ? meeting.transcript : ''
+  if (options.includeTranscript === true) {
+    const excerpt = transcript.length > 6000 ? `${transcript.slice(0, 6000)}…（共 ${transcript.length} 字）` : transcript
+    lines.push('原始文本：', excerpt === '' ? '（空）' : excerpt)
+  } else if (transcript !== '') {
+    lines.push(`原始文本：${transcript.length} 字（需要全文请传 includeTranscript: true）`)
+  }
+}
+
 /** Human-readable block for one summarized meeting. */
 export function describeMeeting(meeting, options = {}) {
   const lines = [meetingLine(meeting)]
   const summary = meeting.summary
   if (summary === null) {
     lines.push('（还没有生成纪要）')
+    appendTranscript(lines, meeting, options)
     return lines.join('\n')
   }
   if (summary.oneLine !== '') lines.push(`结论：${summary.oneLine}`)
@@ -79,13 +91,7 @@ export function describeMeeting(meeting, options = {}) {
       lines.push(`- [${todo.id}] ${todo.title} · ${owner} · ${due} · ${todo.priority} · ${status}`)
     }
   }
-  if (options.includeTranscript === true) {
-    const transcript = meeting.transcript
-    const excerpt = transcript.length > 6000 ? `${transcript.slice(0, 6000)}…（共 ${transcript.length} 字）` : transcript
-    lines.push('原始文本：', excerpt === '' ? '（空）' : excerpt)
-  } else if (meeting.transcript !== '') {
-    lines.push(`原始文本：${meeting.transcript.length} 字（需要全文请传 includeTranscript: true）`)
-  }
+  appendTranscript(lines, meeting, options)
   return lines.join('\n')
 }
 
@@ -195,8 +201,8 @@ export function registerTools(ctx, deps) {
   disposers.push(ctx.tools.register({
     name: 'meeting_transcribe',
     description: [
-      '把本机一段录音/视频文件转成文字，并自动新建会议记录（本机 SenseVoice 离线识别，16kHz 单声道 WAV，长音频自动切片）。',
-      '支持 wav/mp3/m4a/mp4/aac 等；非 16kHz WAV 会先用 macOS afconvert 转换。',
+      '把本机一段录音/视频文件转成文字，并自动新建会议记录（本机 Paraformer 离线识别，16kHz 单声道 WAV，长音频自动切片）。',
+      '支持 wav/mp3/m4a/mp4/aac 等；非 16kHz WAV 会先自动转码（Windows / Linux 用 ffmpeg，macOS 用 afconvert）。',
       '典型用法：用户说“把这个会议录音转成纪要”，你先找到文件绝对路径，再调用本工具；随后调用 meeting_summarize。',
     ].join(''),
     parameters: {
@@ -302,7 +308,7 @@ export function registerTools(ctx, deps) {
       await dshTodo.ready()
       if (dshTodo.status().available !== true) fail(new Error('DSH 待办不可用：未找到待办存储（~/.dsh/memories）'))
       const wanted = todoIds === undefined ? null : new Set(todoIds)
-      const targets = (meeting.todos ?? []).filter((todo) => wanted === null || wanted.has(todo.id))
+      const targets = (meeting.summary?.todos ?? []).filter((todo) => wanted === null || wanted.has(todo.id))
       const created = []
       for (const todo of targets) {
         const title = String(todo.title ?? '').trim()
@@ -352,39 +358,52 @@ export function registerTools(ctx, deps) {
   disposers.push(ctx.tools.register({
     name: 'meeting_auto_ingest',
     description: [
-      '管理会议自动入库：腾讯会议结束后，本机录制完成后自动转成文字并存进会议纪要库（标记为待整理）。',
-      'action=status 查看状态（是否启用、腾讯本地录制数据库是否可用、扫描时间、已自动导入数量）；',
-      'action=enable / disable 开关；action=scan 立即扫描一次；action=set_dirs 设置额外监控目录（audio/video/txt/md/docx 文件会被自动导入）。',
+      '管理会议自动识别：腾讯会议结束后，本机录制完成后自动转成文字并存进会议纪要库（标记为待整理）。',
+      'action=status 查看状态（是否启用、腾讯会议录制目录/数据库、扫描时间、已自动导入数量）；',
+      'action=enable / disable 开关；action=scan 立即扫描一次；action=set_dirs 设置额外监控目录（audio/video/txt/md/docx 文件会被自动导入）；',
+      'action=set_tencent_dir 手动指定腾讯会议本地录制目录（Windows 常用；传 dir，空字符串=恢复自动探测）。',
       '说明：腾讯会议云端“智能纪要”没有个人 API，本工具抓的是本机录制文件；若没有本地录制，可把导出的纪要文件放进监控目录，或使用企业版 API。',
     ].join(''),
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        action: { type: 'string', enum: ['status', 'enable', 'disable', 'scan', 'set_dirs'], description: '操作' },
+        action: { type: 'string', enum: ['status', 'enable', 'disable', 'scan', 'set_dirs', 'set_tencent_dir'], description: '操作' },
         dirs: { type: 'array', items: { type: 'string' }, description: 'action=set_dirs 时的目录列表（绝对路径或 ~ 开头）' },
+        dir: { type: 'string', description: 'action=set_tencent_dir 时的腾讯会议录制目录（绝对路径或 ~ 开头；空字符串=自动探测）' },
       },
       required: ['action'],
     },
     output: TEXT_OUTPUT,
     async execute(args) {
-      if (autoIngest === undefined) throw new Error('自动入库不可用')
+      if (autoIngest === undefined) throw new Error('自动识别不可用')
       const action = args?.action
       if (action === 'enable') await autoIngest.setConfig({ enabled: true })
       else if (action === 'disable') await autoIngest.setConfig({ enabled: false })
       else if (action === 'set_dirs') {
         if (!Array.isArray(args?.dirs)) throw new Error('action=set_dirs 需要传 dirs 数组')
         await autoIngest.setConfig({ dirs: args.dirs })
+      } else if (action === 'set_tencent_dir') {
+        if (typeof args?.dir !== 'string') throw new Error('action=set_tencent_dir 需要传 dir 字符串（空字符串=自动探测）')
+        await autoIngest.setConfig({ tencentDir: args.dir })
       } else if (action === 'scan') {
         void autoIngest.scanNow().catch(() => {})
       } else if (action !== 'status' && action !== undefined) {
         throw new Error(`未知 action：${String(action)}`)
       }
       const status = autoIngest.status()
+      const tencentSource = status.tencentMode === 'directory'
+        ? `目录（${status.tencentDirSource === 'config' ? '手动选择' : '自动探测'}）：${status.tencentDirPath}`
+        : (status.tencentMode === 'database' ? `本地数据库：${status.tencentDbPath}` : '未找到')
+      const tencentLine = status.tencentAvailable
+        ? `- 腾讯会议本地录制：可用（${status.tencentRecords} 个来源）`
+        : `- 腾讯会议本地录制：不可用（${status.tencentError ?? '未找到'}）`
       const lines = [
-        `自动入库：${status.enabled ? '开启' : '关闭'}${status.scanning ? '（扫描中）' : ''}`,
-        `- 腾讯会议本地录制：${status.tencentAvailable ? `可用（识别到 ${status.tencentRecords} 条已完成录制）` : `不可用（${status.tencentError ?? '未找到数据库'}）`}`,
-        status.tencentDbPath === null ? '' : `- 数据库：${status.tencentDbPath}`,
+        `自动识别：${(status.tencent !== false || status.dirsEnabled !== false) ? '开启' : '关闭'}${status.scanning ? '（扫描中）' : ''}`,
+        `- 腾讯会议解析：${status.tencent !== false ? '已启用' : '已关闭'}`,
+        tencentLine,
+        `- 腾讯会议来源：${tencentSource}`,
+        `- 自定义监控目录：${status.dirsEnabled === false ? '已关闭' : '已启用'}`,
         `- 监控目录：${status.dirs.length === 0 ? '（未设置）' : status.dirs.join('、')}`,
         `- 上次扫描：${status.lastScanAt ?? '尚未扫描'} · 已自动导入 ${status.importedCount} 场 · 失败 ${status.failedCount} 个来源`,
         status.lastError === null ? '' : `- 最近错误：${status.lastError}`,
@@ -396,3 +415,4 @@ export function registerTools(ctx, deps) {
 
   return disposers
 }
+

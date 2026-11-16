@@ -9,7 +9,7 @@
  * sherpa-onnx-node 随 DSH 桌面端安装（app/node_modules），插件通过
  * createRequire 从应用目录解析，避免额外依赖。
  *
- * @module dsh-plugin-meeting-minutes/paraformer
+ * @module dsh-meeting-live/paraformer
  */
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync } from 'node:fs'
@@ -42,7 +42,12 @@ function loadSherpa() {
 
 /** 解析 16k 单声道 PCM16 WAV → Float32Array（[-1,1]）。 */
 export function decodeWavToSamples(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 44) throw new Error('音频数据无效')
+  // 兼容 Uint8Array：HTTP 路由历史上有返回 Uint8Array 的情况，不能只认 Buffer。
+  const wav = Buffer.isBuffer(buffer)
+    ? buffer
+    : (buffer instanceof Uint8Array ? Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength) : null)
+  if (!wav || wav.length < 44) throw new Error('音频数据无效')
+  buffer = wav
   if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
     throw new Error('音频数据不是 WAV 格式')
   }

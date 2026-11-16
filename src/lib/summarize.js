@@ -7,7 +7,7 @@
  * `model.js`. A malformed reply gets one repair attempt; both attempts failing
  * raises a Chinese, user-readable error.
  *
- * @module dsh-plugin-meeting-minutes/summarize
+ * @module dsh-meeting-live/summarize
  */
 
 import { normalizeSummary, parseSummaryJson } from './model.js'
@@ -31,7 +31,8 @@ export const SYSTEM_PROMPT = [
   '1. 只输出一个 JSON 对象，不要输出 Markdown 代码围栏、解释、前言或后记。',
   '2. 严格使用下面给出的字段名和类型，不要增删字段、不要改字段名。',
   '3. 只依据提供的文本，不要编造事实、人名、数字或日期；文本没提到的信息留空字符串或空数组。',
-  '4. 待办只提取“有明确交付物 + 有负责人或明确截止时间”的行动项；泛泛而谈的“加强沟通”不算待办。',
+  '4. 待办优先提取“有明确交付物 + 有负责人或明确截止时间”的行动项；若讨论明确了下一步要做什么、但没提到谁做或何时做，也要生成待办（owner/due 留空），不要因为信息不全就整场不输出待办。',
+  '4.1 转写可能由 5 秒分片拼接而成、有断句和错字，请按语义合并理解，不要因为文本碎片就忽略行动项；todos 通常 3-8 条，确实没有任何行动信息时才给空数组。',
   '5. 相对时间（“下周三”“本周五前”“月底”）必须换算成具体日期：日期用 YYYY-MM-DD，带时刻用 YYYY-MM-DD HH:mm；无法确定就留空字符串。',
   '6. 使用参会文本本身的语言；中文会议就用中文。',
   '7. oneLine 不超过 60 个汉字；overview 不超过 300 个汉字；keyPoints 3-8 条；sections 按议题分节，每节 2-8 条要点。',
@@ -50,6 +51,40 @@ export const SYSTEM_PROMPT = [
   '  "todos": [{"title": "交付物", "owner": "负责人或空", "due": "截止时间或空", "priority": "high|normal|low", "notes": "验收标准或补充信息"}]',
   '}',
 ].join('\n')
+
+/**
+ * 单独的「行动项抽取」指令：首次纪要没产出待办时再补一次。
+ * 比主 prompt 宽松：没写负责人/截止时间也允许生成，避免整场 0 待办。
+ */
+export const TODO_EXTRACT_PROMPT = [
+  '你是会议行动项抽取器，只输出一个 JSON 对象，不要输出解释、Markdown 或多余文字。',
+  '从会议文本里找出「接下来要做的具体事情」：哪怕没提负责人、没提截止时间，也要抽成待办，owner/due 留空即可。',
+  '转写可能由分片拼接而成、有断句和错字，请按语义合并理解，不要把同一件事拆成多条。',
+  'title 用动词开头的交付物（不超过 40 字）；priority 取 high|normal|low。',
+  '只有整场会议确实没有任何行动信息时，才输出空数组。',
+  '输出形状：{"todos":[{"title":"交付物","owner":"","due":"","priority":"normal","notes":""}]}',
+].join('\n')
+
+/** 行动项抽取的用户消息：会议信息 + 已识别决策/风险 + 转写全文。 */
+export function buildTodoExtractPrompt(meeting, summary = {}) {
+  const decisions = Array.isArray(summary?.decisions) ? summary.decisions.map((item) => (typeof item === 'string' ? item : String(item?.text ?? ''))).filter(Boolean) : []
+  const risks = Array.isArray(summary?.risks) ? summary.risks.map((item) => (typeof item === 'string' ? item : String(item?.text ?? ''))).filter(Boolean) : []
+  const lines = [
+    `会议标题：${meeting?.title ?? ''}`,
+    `会议日期：${meeting?.date ?? ''}`,
+    `参会人：${Array.isArray(meeting?.attendees) && meeting.attendees.length > 0 ? meeting.attendees.join('、') : '（未提供）'}`,
+    decisions.length > 0 ? '已识别的决策事项：\n' + decisions.map((item) => '- ' + item).join('\n') : '',
+    risks.length > 0 ? '已识别的风险/待确认事项：\n' + risks.map((item) => '- ' + item).join('\n') : '',
+    '',
+    '会议文本如下：',
+    '----- 会议文本开始 -----',
+    clampTranscript(String(meeting?.transcript ?? '')),
+    '----- 会议文本结束 -----',
+    '',
+    '请输出 {"todos": [...]}。',
+  ].filter((line) => line !== '')
+  return lines.join('\n')
+}
 
 /** Keep a long transcript under the request budget without losing the ending. */
 export function clampTranscript(text, limit = MAX_TRANSCRIPT_CHARS) {
@@ -89,6 +124,91 @@ export function buildRepairPrompt(previousText, meeting) {
     '',
     '请重新输出：只输出一个 JSON 对象，字段与类型必须完全符合要求，不要代码围栏或任何解释。',
   ].join('\n')
+}
+
+/**
+ * 把内部消息形状（content 为 block 数组）压平成 OpenAI 兼容接口要的字符串。
+ * @param messages - `[{ role, content: [{ type:'text', text }] }]`。
+ */
+function flattenMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    const content = Array.isArray(message?.content)
+      ? message.content.map((block) => (typeof block?.text === 'string' ? block.text : '')).join('')
+      : String(message?.content ?? '')
+    return { role: message?.role === 'assistant' ? 'assistant' : 'user', content }
+  })
+}
+
+/**
+ * 调用用户在设置里手动配置的 OpenAI 兼容接口（/chat/completions）。
+ *
+ * 与 DSH 路由的区别：这里不走 `ctx.llm`，直接用本机 fetch 发 HTTP 请求；
+ * 只做一次性（非流式）调用，返回完整的纪要文本。
+ *
+ * @param messages - 对话消息（内部 block 形状）。
+ * @param system - system 指令。
+ * @param custom - `{ baseUrl, apiKey, model, temperature, maxTokens }`。
+ * @param signal - 可选的 AbortSignal。
+ * @returns `{ text, route: { provider: 'custom', model } }`。
+ */
+async function callCustomModel(messages, system, custom, signal) {
+  const baseUrl = String(custom?.baseUrl ?? '').trim().replace(/\/+$/, '')
+  const model = String(custom?.model ?? '').trim()
+  if (baseUrl === '' || model === '') {
+    throw new Error('手动配置总结模型需要填写接口地址与模型名（API Key 视服务是否必需）')
+  }
+  const url = /\/chat\/completions$/.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`
+  const apiKey = String(custom?.apiKey ?? '').trim()
+  const temperature = Number(custom?.temperature)
+  const maxTokens = Number(custom?.maxTokens)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new Error('总结超时')), CALL_TIMEOUT_MS)
+  const onAbort = () => controller.abort(signal?.reason)
+  if (signal !== undefined) {
+    if (signal.aborted) controller.abort(signal.reason)
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(apiKey === '' ? {} : { authorization: 'Bearer ' + apiKey }),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: String(system ?? '') }, ...flattenMessages(messages)],
+        temperature: Number.isFinite(temperature) ? temperature : 0.3,
+        max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? Math.round(maxTokens) : MAX_TOKENS,
+        stream: false,
+      }),
+      signal: controller.signal,
+    })
+    const raw = await response.text()
+    let payload = null
+    try {
+      payload = raw === '' ? null : JSON.parse(raw)
+    } catch {
+      payload = null
+    }
+    if (!response.ok) {
+      const message = payload?.error?.message ?? payload?.message ?? (raw.slice(0, 300) || '')
+      throw new Error('总结接口返回 ' + String(response.status) + (message === '' ? '' : '：' + String(message)))
+    }
+    const content = payload?.choices?.[0]?.message?.content
+    const text = Array.isArray(content)
+      ? content.map((part) => (typeof part?.text === 'string' ? part.text : '')).join('')
+      : (typeof content === 'string' ? content : '')
+    if (text.trim() === '') throw new Error('总结接口没有返回内容（检查模型名与接口是否兼容 OpenAI Chat Completions）')
+    return { text, route: { provider: 'custom', model } }
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('总结已取消：调用被中断')
+    if (error instanceof TypeError) throw new Error('连不上总结接口：' + String(error.message))
+    throw error
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener?.('abort', onAbort)
+  }
 }
 
 /** One assistant reply assembled from the streamed chunks. */
@@ -172,6 +292,31 @@ export function createSummarizer(options) {
   }
 
   /**
+   * 首次纪要没有待办时，再做一次「只抽行动项」的补抽。
+   * 安静/碎片化转写容易让主 prompt 判定“没有明确交付物”而整场 0 待办。
+   */
+  async function ensureTodos(parsed, meeting, callModelFn) {
+    const existing = Array.isArray(parsed?.todos)
+      ? parsed.todos.filter((item) => item && typeof item === 'object' && String(item.title ?? '').trim() !== '')
+      : []
+    if (existing.length > 0) return parsed
+    const transcript = typeof meeting?.transcript === 'string' ? meeting.transcript.trim() : ''
+    if (transcript.length < 80) return parsed
+    try {
+      const messages = [{ role: 'user', content: [{ type: 'text', text: buildTodoExtractPrompt(meeting, parsed) }] }]
+      const result = await callModelFn(messages, TODO_EXTRACT_PROMPT)
+      const extra = parseSummaryJson(result.text)
+      const todos = Array.isArray(extra?.todos) ? extra.todos : []
+      if (todos.length === 0) return parsed
+      logger?.info?.(`meeting-minutes: todo fallback extracted ${todos.length} item(s)`)
+      return { ...parsed, todos }
+    } catch (error) {
+      logger?.warn?.(`meeting-minutes: todo fallback failed: ${error instanceof Error ? error.message : String(error)}`)
+      return parsed
+    }
+  }
+
+  /**
    * Summarize one meeting.
    * @param meeting - canonical meeting with non-empty transcript.
    * @param options - `signal` (AbortSignal).
@@ -191,7 +336,8 @@ export function createSummarizer(options) {
     const first = await callModelFn(messages, SYSTEM_PROMPT)
     const parsed = parseSummaryJson(first.text)
     if (parsed !== null) {
-      return normalizeSummary(parsed, {
+      const withTodos = await ensureTodos(parsed, meeting, callModelFn)
+      return normalizeSummary(withTodos, {
         previous: meeting.summary,
         now: new Date(),
         model: `${first.route.provider}/${first.route.model}`,
@@ -207,7 +353,8 @@ export function createSummarizer(options) {
     if (repaired === null) {
       throw new Error('模型返回的纪要格式无法解析，请重试一次；若持续失败，可换一个模型再生成。')
     }
-    return normalizeSummary(repaired, {
+    const repairedWithTodos = await ensureTodos(repaired, meeting, callModelFn)
+    return normalizeSummary(repairedWithTodos, {
       previous: meeting.summary,
       now: new Date(),
       model: `${second.route.provider}/${second.route.model}`,
@@ -242,6 +389,32 @@ export function createSummarizer(options) {
     return text
   }
 
+  /**
+   * 只重新生成待办（不动纪要其它字段）。
+   * @param meeting - canonical meeting with transcript.
+   * @param options - `selection` / `custom` / `signal`。
+   * @returns 模型给出的待办原始数组（未分配 id）。
+   */
+  async function extractTodos(meeting, options = {}) {
+    const signal = options.signal
+    const custom = options.custom ?? null
+    const callModelFn = async (messages, system) => {
+      if (custom !== null) return callCustomModel(messages, system, custom, signal)
+      return callModel(messages, system, signal, options.selection ?? null)
+    }
+    const transcript = typeof meeting?.transcript === 'string' ? meeting.transcript.trim() : ''
+    if (transcript === '') throw new Error('这场会议还没有文本内容，无法重新生成待办。')
+    const messages = [{
+      role: 'user',
+      content: [{ type: 'text', text: buildTodoExtractPrompt(meeting, meeting.summary ?? {}) }],
+    }]
+    const result = await callModelFn(messages, TODO_EXTRACT_PROMPT)
+    const parsed = parseSummaryJson(result.text)
+    const todos = Array.isArray(parsed?.todos) ? parsed.todos : []
+    logger?.info?.(`meeting-minutes: extracted ${todos.length} replacement todo(s)`)
+    return todos
+  }
+
   /** Current model route label for the panel footer. */
   function describeRoute(selection) {
     try {
@@ -252,5 +425,5 @@ export function createSummarizer(options) {
     }
   }
 
-  return { summarize, describeRoute, correctTranscript }
+  return { summarize, describeRoute, correctTranscript, extractTodos }
 }

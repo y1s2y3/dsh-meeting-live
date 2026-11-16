@@ -1,8 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const file = path.join(process.env.USERPROFILE, 'Desktop', 'dsh-meeting-minutes-src', 'src', 'lib', 'client.js');
+const file = path.join(process.env.USERPROFILE, 'Desktop', 'dsh-meeting-live-src', 'src', 'lib', 'client.js');
 let code = fs.readFileSync(file, 'utf8');
+
+/* 反馈页图片交互回归：必须走页内灯箱，不能 window.open 跳浏览器新标签 */
+{
+  const hasLightbox = code.includes('dsm-lightbox') && code.includes('openLightbox')
+  const opensNewTab = /window\.open\(\s*API \+ '\/assets/.test(code)
+  if (hasLightbox && !opensNewTab) {
+    console.log('[OK] 反馈页图片使用页内灯箱（不跳浏览器）')
+  } else {
+    console.log('[FAIL] 反馈页图片仍会跳浏览器或缺少灯箱:', JSON.stringify({ hasLightbox, opensNewTab }))
+    process.exitCode = 1
+  }
+}
 
 /* 最小 React 垫片 */
 const hookStates = [];
@@ -73,14 +85,53 @@ function renderWithEffects(component, props) {
   return component(props);
 }
 
+function check(name, passed, detail) {
+  if (passed) {
+    console.log('[OK] ' + name);
+  } else {
+    process.exitCode = 1;
+    console.log('[FAIL] ' + name + (detail === undefined ? '' : ' → ' + JSON.stringify(detail)));
+  }
+}
+
+/** 收集元素树里的文字（不需要执行子组件：这些文案都在 children 里）。 */
+function collectText(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node) + ' ';
+  if (Array.isArray(node)) return node.map(collectText).join('');
+  if (typeof node !== 'object') return '';
+  return collectText(node.props?.children);
+}
+
 try {
-  const element = renderWithEffects(hooks.SettingsModal, {
+  const modalProps = {
     status: { enabled: true, tencent: true, dirs: [], scanning: false, importedCount: 0, failedCount: 0 },
     onClose() {},
     onSelectMeeting() {},
-  });
+  };
+  const element = renderWithEffects(hooks.SettingsModal, modalProps);
   console.log('渲染成功，根元素:', element?.type, Object.keys(element?.props ?? {}).join(','));
+
+  /* 回归：设置弹窗三页统一宽度（跟随「问题反馈」页的 xwide），切页时不再忽宽忽窄 */
+  check('设置弹窗使用 xwide 统一宽度', element?.props?.extraWide === true, element?.props?.extraWide);
+  check('设置弹窗不再走 660px 的 wide 宽度', element?.props?.wide === undefined, element?.props?.wide);
+  // 宽度不能跟着当前页变：把 page 状态依次改成 auto / feedback 再渲染，宽度必须保持
+  let feedbackElement = null
+  for (const pageKey of ['auto', 'feedback']) {
+    hookStates[0] = pageKey;
+    hookIndex = 0;
+    const pageElement = hooks.SettingsModal(modalProps);
+    if (pageKey === 'feedback') feedbackElement = pageElement
+    check('切到「' + pageKey + '」页后宽度仍是 xwide', pageElement?.props?.extraWide === true, pageElement?.props?.extraWide);
+  }
+  check('源码不再把宽度绑在当前页上', !code.includes("extraWide: page === 'feedback'"));
+
+  /* 回归：会议室收音设备这件事必须写在「问题反馈」页的常见问题里 */
+  const feedbackText = collectText(feedbackElement)
+  check('问题反馈页写着会议室要连接收音设备', feedbackText.includes('收音设备'));
+  check('问题反馈页给了具体设备建议（USB 全向麦 / line-out）', feedbackText.includes('USB 全向会议麦克风') && feedbackText.includes('line-out'));
 } catch (error) {
+  process.exitCode = 1;
   console.log('渲染抛错:', error?.message);
   console.log((error?.stack ?? '').split('\n').slice(0, 6).join('\n'));
 }

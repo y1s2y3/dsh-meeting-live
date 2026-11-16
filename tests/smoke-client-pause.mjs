@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 const pluginDir = process.argv[2] ?? path.join(
-  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-plugin-meeting-minutes',
+  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-meeting-live',
 );
 const file = path.join(pluginDir, 'lib', 'client.js');
 

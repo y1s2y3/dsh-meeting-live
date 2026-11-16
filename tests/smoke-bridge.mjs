@@ -10,7 +10,7 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 const pluginDir = process.argv[2] ?? path.join(
-  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-plugin-meeting-minutes',
+  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-meeting-live',
 );
 const { createLiveMirror } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'live-mirror.js')).href);
 const { startOrbBridge } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'orb.js')).href);
@@ -53,12 +53,16 @@ check('会话开始后启动浮窗进程', events.includes('start'), events.join
 const firstFrame = frames[frames.length - 1];
 check('状态帧带状态/标题/中文标签', firstFrame?.status === 'preparing' && firstFrame?.title === '周会'
   && firstFrame?.labels?.pause === '暂停' && firstFrame?.labels?.recording === '录音中', JSON.stringify(firstFrame?.labels ?? null));
+check('停止按钮加载态文案已下发浮窗', firstFrame?.labels?.stoppingAction === '停止中…', JSON.stringify(firstFrame?.labels?.stoppingAction ?? null));
 check('状态帧转写只带尾部 6000 字', typeof firstFrame?.transcript === 'string'
   && firstFrame.transcript.length === 6000 && firstFrame.transcript === longTranscript.slice(-6000),
   `len=${firstFrame?.transcript?.length}`);
 
 /* 2. 录音中 -> 时长/字数/最近一句跟随 */
-liveMirror.setStatus({ status: 'recording', meetingId: 'mt_1', title: '周会', elapsedSeconds: 42, chars: 186, lastText: '最近一句' });
+liveMirror.setStatus({
+  status: 'recording', meetingId: 'mt_1', title: '周会', elapsedSeconds: 42, chars: 186, lastText: '最近一句',
+  devices: [{ id: 'mic-a', label: '麦克风 A' }, { id: 'mic-b', label: '麦克风 B' }], deviceId: 'mic-a',
+});
 await sleep(620);
 const recordingFrame = frames[frames.length - 1];
 check('录音中帧带时长与字数', recordingFrame?.status === 'recording' && recordingFrame?.chars === 186
@@ -68,6 +72,15 @@ check('录音中帧带时长与字数', recordingFrame?.status === 'recording' &
 queuedCommands.push('pause');
 await sleep(320);
 check('浮窗指令被转发给浏览器侧', liveMirror.takeCommand() === 'pause');
+
+/* 3.1 浮窗切换输入设备 -> 命令带 deviceId 转发 */
+check('帧里带输入设备列表与当前选择', recordingFrame?.devices?.length === 2
+  && recordingFrame?.devices?.[1]?.label === '麦克风 B' && recordingFrame?.deviceId === 'mic-a',
+  JSON.stringify({ devices: recordingFrame?.devices, deviceId: recordingFrame?.deviceId }));
+queuedCommands.push('switch-input:mic-b');
+await sleep(320);
+check('切换输入设备指令被转发给浏览器侧', liveMirror.takeCommand() === 'switch-input:mic-b');
+check('空 deviceId 的切换命令被拒绝', liveMirror.queueCommand('switch-input:') === false);
 
 /* 4. 暂停 -> 计时冻结，会话仍活跃（浮窗不消失） */
 liveMirror.setStatus({ status: 'paused', elapsedSeconds: 42 });

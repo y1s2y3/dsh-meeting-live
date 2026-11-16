@@ -1,8 +1,8 @@
 {
-  "name": "dsh-plugin-meeting-minutes",
+  "name": "dsh-meeting-live",
   "version": "1.1.0",
   "private": false,
-  "description": "会议纪要：录音转文字、腾讯会议纪要导入、AI 总结、可视化纪要与待办写入任务日历",
+  "description": "把会议变成能执行的纪要：录音/录屏自动转写，AI 整理结论、决策与待办，核对后直接进待办清单",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -29,16 +29,13 @@
   "files": [
     "lib/**/*.js",
     "resources/**/*.ps1",
+    "resources/**/*.png",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/zhangguitao666/meeting-suite.git",
-    "directory": "dsh-plugin-meeting-minutes"
-  },
-  "homepage": "https://github.com/zhangguitao666/meeting-suite/tree/main/dsh-plugin-meeting-minutes"
+  "author": "DinosaurYSL"
 }

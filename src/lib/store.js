@@ -9,7 +9,7 @@
  * The store deliberately has no dependency on the harness storage service: the
  * plugin is installed as a local package and must load with zero bare imports.
  *
- * @module dsh-plugin-meeting-minutes/store
+ * @module dsh-meeting-live/store
  */
 
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -92,6 +92,13 @@ export class MeetingStore {
       this.#ready = (async () => {
         const current = await readDocument(this.#file, this.#logger)
         this.#doc = current ?? { ...EMPTY, meetings: [] }
+        // 自愈：说话人分离的整段重转写曾把长转写覆盖成几个碎片；分段还在的话先恢复出来。
+        const repaired = repairTruncatedTranscripts(this.#doc.meetings)
+        if (repaired > 0) {
+          this.#logger?.warn?.(`meeting-minutes: repaired ${repaired} truncated transcript(s) from stored speaker segments`)
+          this.#doc.updatedAt = new Date().toISOString()
+          await this.#persist()
+        }
         return this.#doc
       })()
     }
@@ -285,6 +292,12 @@ export class MeetingStore {
       for (const key of ['title', 'owner', 'due', 'priority', 'notes']) {
         if (patch?.[key] !== undefined) todo[key] = String(patch[key]).trim()
       }
+      if (typeof patch?.dropped === 'boolean') {
+        todo.dropped = patch.dropped
+        todo.droppedAt = patch.dropped
+          ? (typeof patch.droppedAt === 'string' && patch.droppedAt !== '' ? patch.droppedAt : now.toISOString())
+          : null
+      }
       if (!['high', 'normal', 'low'].includes(todo.priority)) todo.priority = 'normal'
       meeting.updatedAt = now.toISOString()
       updated = meeting
@@ -352,6 +365,35 @@ export class MeetingStore {
     })
     return updated
   }
+}
+
+/**
+ * 自愈历史数据：说话人分离整段重转写可能把长转写覆盖成 1~2 行碎片，
+ * 但按段保存的 transcriptSegments 还在。若转写明显短于分段文字总和，
+ * 就用分段重建转写（保留说话人标记），避免用户看到「内容缺失」。
+ * @returns 修复的会议数量
+ */
+export function repairTruncatedTranscripts(meetings) {
+  let repaired = 0
+  for (const meeting of Array.isArray(meetings) ? meetings : []) {
+    if (!meeting || typeof meeting !== 'object') continue
+    const segments = Array.isArray(meeting.transcriptSegments) ? meeting.transcriptSegments : []
+    const rows = segments
+      .map((segment) => ({
+        speaker: typeof segment?.speaker === 'string' ? segment.speaker : '',
+        text: String(segment?.text ?? '').trim(),
+      }))
+      .filter((row) => row.text !== '')
+    if (rows.length < 3) continue
+    const segmentChars = rows.map((row) => row.text).join('').replace(/\s+/g, '').length
+    if (segmentChars < 200) continue
+    const currentChars = String(meeting.transcript ?? '').replace(/\s+/g, '').length
+    if (currentChars >= Math.max(40, Math.round(segmentChars * 0.5))) continue
+    meeting.transcript = rows.map((row) => (row.speaker === '' ? row.text : `${row.speaker}：${row.text}`)).join('\n')
+    meeting.updatedAt = new Date().toISOString()
+    repaired += 1
+  }
+  return repaired
 }
 
 /** Sort meetings newest first for the list projection. */

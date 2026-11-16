@@ -18,7 +18,7 @@
  *   The live recorder lives at module scope and survives modal/panel unmounts.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-plugin-meeting-minutes',
+  id: 'dsh-meeting-live',
   factory: (require) => {
     const module = { exports: {} }
     const exports = module.exports
@@ -31,6 +31,7 @@ window.__ModuleLoader__.load({
     const API = '/dsh-meeting'
     const TARGET_RATE = 16000
     const SLICE_SECONDS = 90
+    const CLOUD_SLICE_SECONDS = 55
     const SPEECH_POLL_MS = 1200
     const SPEECH_TIMEOUT_MS = 10 * 60 * 1000
     const TOAST_TTL_MS = 7000
@@ -40,6 +41,8 @@ window.__ModuleLoader__.load({
     // 原逻辑固定用系统默认输入设备；本机存在多个采集端（实体麦克风 / 阵列 /
     // 虚拟降噪输入）时容易录到静音。这里允许显式选设备，选择存 localStorage。
     const INPUT_DEVICE_STORAGE_KEY = 'dsh-meeting-minutes:input-device'
+    /** 首次使用引导是否已看过（本地记录，不涉及账号）。 */
+    const ONBOARDING_STORAGE_KEY = 'dsh-meeting-minutes:onboarding-v1'
     let selectedInputDeviceId = ''
     function readPreferredInputDevice() {
       try {
@@ -76,6 +79,17 @@ window.__ModuleLoader__.load({
 
     const PRIORITY_LABELS = { high: '高', normal: '中', low: '低' }
     const SOURCE_LABELS = { recording: '录音', text: '文本', import: '导入' }
+    /** 转写引擎的人话名称：设置页与录音弹窗都显示，避免用户不知道当前用哪个。 */
+    const TRANSCRIBE_ENGINE_LABELS = {
+      'paraformer-local': '本地 · Paraformer-zh',
+      'sensevoice-local': '本地 · SenseVoice',
+      'cloud-iflytek': '云端 · 科大讯飞',
+      'cloud-tencent': '云端 · 腾讯云',
+      'cloud-aliyun': '云端 · 阿里云',
+    }
+    function transcribeEngineLabel(provider) {
+      return TRANSCRIBE_ENGINE_LABELS[provider] ?? '本地 · Paraformer-zh'
+    }
     const RISK_LABELS = { high: '高风险', medium: '待确认', low: '提示' }
     const PHASE_LABELS = {
       ready: '就绪',
@@ -196,6 +210,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:100%;min-height:200px;color:var(--dsw-alias-label-secondary);font-size:12px}
 .dsm-spin{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 26%,transparent);border-top-color:var(--dsw-alias-brand-primary);animation:dsm-spin .8s linear infinite;display:inline-block;flex:0 0 auto}
 .dsm-spin--lg{width:26px;height:26px;border-width:3px}
+    .dsm-spin--inline{width:10px;height:10px;border-width:1.5px}
 @keyframes dsm-spin{to{transform:rotate(360deg)}}
 .dsm-service-error{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;height:100%;padding:32px;text-align:center}
 .dsm-service-title{font-size:16px;font-weight:600}
@@ -214,10 +229,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-empty-note{font-size:11px;color:var(--dsw-alias-label-secondary);text-align:center}
 .dsm-doc{max-width:960px;margin:0 auto;padding:20px 26px 64px;box-sizing:border-box}
 .dsm-cover{display:flex;flex-direction:column;gap:12px;border:1px solid var(--dsw-alias-border-l1);border-radius:16px;padding:20px 22px;background:linear-gradient(135deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,var(--dsw-alias-bg-layer-1)),var(--dsw-alias-bg-layer-1) 58%)}
-.dsm-cover-top{display:flex;align-items:flex-start;gap:10px}
-.dsm-eyebrow{flex:1 1 auto;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dsw-alias-brand-primary);font-weight:600}
-.dsm-cover-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
-.dsm-cover-title{margin:0;font-size:25px;line-height:34px;font-weight:680;letter-spacing:.2px;word-break:break-word}
+.dsm-cover-head{display:flex;align-items:center;gap:14px}
+.dsm-cover-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;flex:0 0 auto;margin-left:auto}
+.dsm-cover-title{flex:1 1 auto;min-width:0;margin:0;font-size:25px;line-height:34px;font-weight:680;letter-spacing:.2px;word-break:break-word}
 .dsm-meta-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .dsm-meta-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsw-alias-bg-base) 55%,transparent);font-size:11px;line-height:17px;color:var(--dsw-alias-label-secondary);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-meta-chip--brand{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent)}
@@ -235,12 +249,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-point{display:flex;gap:9px;border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px}
 .dsm-point-num{flex:0 0 auto;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--dsw-alias-brand-primary);line-height:19px;min-width:16px}
 .dsm-point-text{font-size:12.5px;line-height:19px;word-break:break-word}
-.dsm-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px}
-.dsm-decision{display:flex;gap:8px;align-items:flex-start;border:1px solid color-mix(in srgb,var(--dsw-alias-state-success-primary) 32%,var(--dsw-alias-border-l1));border-radius:11px;background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 7%,var(--dsw-alias-bg-layer-1));padding:10px 11px}
-.dsm-decision-check{flex:0 0 auto;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent);color:var(--dsw-alias-state-success-primary)}
-.dsm-decision-body{flex:1 1 auto;min-width:0}
-.dsm-decision-text{font-size:12.5px;line-height:19px;word-break:break-word}
-.dsm-owner{margin-top:4px;font-size:11px;color:var(--dsw-alias-label-secondary)}
 .dsm-risk{display:flex;gap:8px;align-items:flex-start;border-radius:11px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);padding:10px 11px}
 .dsm-risk--medium{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 38%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warn-tertiary) 55%,var(--dsw-alias-bg-layer-1))}
 .dsm-risk--high{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 45%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 9%,var(--dsw-alias-bg-layer-1))}
@@ -277,11 +285,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-todo-title{font-weight:500;word-break:break-word}
 .dsm-todo-note{margin-top:3px;font-size:11px;line-height:17px;color:var(--dsw-alias-label-secondary);word-break:break-word;white-space:pre-wrap}
 .dsm-todo--pushed .dsm-todo-title{color:var(--dsw-alias-label-secondary)}
+.dsm-todo--dropped{opacity:.62}
+.dsm-todo--dropped .dsm-todo-title{color:var(--dsw-alias-label-secondary);text-decoration:line-through}
 .dsm-prio{display:inline-flex;padding:0 6px;border-radius:999px;font-size:10.5px;line-height:17px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dsm-prio--high{color:var(--dsw-alias-label-error);border-color:color-mix(in srgb,var(--dsw-alias-label-error) 45%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
 .dsm-prio--low{color:var(--dsw-alias-label-secondary)}
 .dsm-status{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dsm-status--ok{color:var(--dsw-alias-state-success-primary)}
+.dsm-status--warn{color:var(--dsw-alias-state-warn-label)}
 .dsm-cal-id{display:inline-block;margin-top:2px;font-size:10px;color:var(--dsw-alias-label-secondary);max-width:100%;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .dsm-row-actions{display:flex;gap:4px;flex-wrap:wrap}
 .dsm-todo-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 3%,transparent)}
@@ -308,6 +319,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-modal-mask{position:absolute;inset:0;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(1px)}
 .dsm-modal{position:relative;display:flex;flex-direction:column;width:min(560px,94vw);max-height:86vh;background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);border-radius:14px;box-shadow:0 18px 52px color-mix(in srgb,var(--dsw-alias-label-primary) 20%,transparent);overflow:hidden}
 .dsm-modal--wide{width:min(660px,94vw)}
+.dsm-modal--xwide{width:min(940px,94vw)}
 .dsm-modal-head{display:flex;align-items:flex-start;gap:10px;padding:16px 18px 10px}
 .dsm-modal-heading{flex:1 1 auto;min-width:0}
 .dsm-modal-title{font-size:15px;font-weight:650}
@@ -321,6 +333,18 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-iconbtn:disabled{opacity:.6;cursor:default}
 .dsm-modal-body{padding:4px 18px 14px;overflow:auto;display:flex;flex-direction:column;gap:10px}
 .dsm-modal-foot{display:flex;align-items:center;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:11px 18px;border-top:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 3%,transparent)}
+/* 首次使用引导 */
+.dsm-onboard{display:flex;flex-direction:column;gap:10px}
+.dsm-onboard-step{display:flex;gap:10px;padding:12px 13px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 3%,var(--dsw-alias-bg-layer-1))}
+.dsm-onboard-index{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--dsw-alias-brand-primary);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.dsm-onboard-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:6px}
+.dsm-onboard-title{font-size:13px;font-weight:650;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsm-onboard-text{font-size:11.5px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dsm-onboard-hint{font-size:11px;line-height:17px;color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 5%,transparent);border-radius:8px;padding:6px 8px}
+.dsm-onboard-actions{display:flex;gap:8px;flex-wrap:wrap;padding-top:2px}
+.dsm-onboard-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;line-height:16px;padding:0 7px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
+.dsm-onboard-badge--ok{color:var(--dsw-alias-state-success-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 8%,transparent)}
+.dsm-onboard-badge--warn{color:var(--dsw-alias-state-warn-label);border-color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warn-label) 8%,transparent)}
 .dsm-field{display:flex;flex-direction:column;gap:4px}
 .dsm-label{font-size:11px;color:var(--dsw-alias-label-secondary)}
 .dsm-row{display:flex;gap:8px}
@@ -333,9 +357,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-check{display:flex;align-items:flex-start;gap:7px;font-size:12px;line-height:18px;cursor:pointer;color:var(--dsw-alias-label-primary)}
 .dsm-check input{margin:2px 0 0;accent-color:var(--dsw-alias-brand-primary)}
 .dsm-check--off{cursor:not-allowed;opacity:.6}
-.dsm-media-list{display:flex;flex-direction:column;gap:6px;width:100%;margin-top:6px;padding:10px 11px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}
-.dsm-media-title{font-size:11.5px;font-weight:600}
-.dsm-media-row{display:flex;align-items:center;gap:8px;font-size:11.5px}
+.dsm-media-list{display:flex;flex-flow:row wrap;gap:6px;width:100%;margin-top:6px;padding:10px 11px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}
+.dsm-media-title{flex:1 0 100%;font-size:11.5px;font-weight:600}
+.dsm-media-row{display:flex;align-items:center;flex:1 1 220px;min-width:0;gap:8px;font-size:11.5px}
 .dsm-media-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-media-size{flex:0 0 auto;color:var(--dsw-alias-label-secondary)}
 .dsm-tabs{display:flex;gap:4px;border-bottom:1px solid var(--dsw-alias-border-l1);padding-bottom:6px;margin-bottom:2px}
@@ -453,10 +477,65 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-set-tab{border:1px solid #E4E9F2;background:#FFFFFF;color:#475569;font-family:inherit;font-size:11.5px;line-height:16px;padding:4px 10px;border-radius:999px;cursor:pointer}
 .dsm-set-tab--on{border-color:#9FBDFF;background:#EAF1FF;color:#2563EB;font-weight:600}
 .dsm-set-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.dsm-cover-btn{height:32px;padding:0 13px;font-size:12.5px;font-weight:650;border-radius:9px;gap:6px;box-shadow:0 1px 2px rgba(15,23,42,.05)}
+.dsm-cover-btn:hover:not(:disabled){box-shadow:0 4px 12px rgba(37,99,235,.16);transform:translateY(-1px)}
+.dsm-root .dsm-cover-btn.dsm-btn--primary{color:#FFFFFF}
+.dsm-set-choice{display:flex;flex-direction:column;gap:8px;padding:8px;border:1px solid #E4E9F2;border-radius:12px;background:#FFFFFF;transition:border-color .15s ease,background .15s ease}
+.dsm-set-choice:hover{border-color:#D7E2F5}
+.dsm-set-choice--on{border-color:#CFE0FB;background:#F7FAFF;box-shadow:0 1px 2px rgba(37,99,235,.05)}
+.dsm-set-choice .dsm-set-option{border:0;background:transparent;padding:5px 3px;border-radius:8px}
+.dsm-set-choice .dsm-set-option:hover{background:transparent;border:0}
+.dsm-set-choice .dsm-set-option--on{background:transparent;border:0}
+.dsm-set-choice .dsm-set-grid{padding:2px 4px 2px 30px}
+.dsm-set-subhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dsm-switch{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:11.5px;color:#475569;flex:0 0 auto;padding-top:2px}
+.dsm-switch input{appearance:none;-webkit-appearance:none;width:34px;height:20px;border-radius:999px;background:#E2E8F0;position:relative;cursor:pointer;transition:background .15s ease;margin:0;flex:0 0 auto}
+.dsm-switch input:checked{background:#5B8DEF}
+.dsm-switch input::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#FFFFFF;transition:transform .15s ease;box-shadow:0 1px 2px rgba(15,23,42,.25)}
+.dsm-switch input:checked::after{transform:translateX(14px)}
+.dsm-switch input:disabled{opacity:.5;cursor:not-allowed}
 .dsm-set-grid--cards{grid-template-columns:repeat(3,minmax(0,1fr))}
 .dsm-set-card{border:1px solid #E4E9F2;border-radius:10px;padding:8px 10px;background:#FFFFFF}
 .dsm-set-card-k{font-size:10.5px;color:#8A94A6;line-height:15px}
 .dsm-set-card-v{font-size:12.5px;font-weight:600;line-height:18px;color:#0F172A;margin-top:1px}
+/* ── 问题反馈页 ─────────────────────────────────────────────── */
+.dsm-fb-hero{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border:1px solid #E4E9F2;border-radius:14px;background:linear-gradient(135deg,#F7FAFF 0%,#EDF4FF 100%)}
+.dsm-fb-hero-icon{flex:0 0 auto;width:36px;height:36px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:#E3EEFF;color:#2563EB}
+.dsm-fb-hero-body{min-width:0}
+.dsm-fb-hero-title{font-size:14px;font-weight:700;color:#0F172A;line-height:20px}
+.dsm-fb-hero-text{font-size:11.5px;line-height:18px;color:#5B6B84;margin-top:4px}
+.dsm-fb-qr{display:flex;gap:16px;align-items:flex-start;padding:14px 16px;border:1px solid #E4E9F2;border-radius:14px;background:#FFFFFF}
+.dsm-fb-qr-box{flex:0 0 auto;width:152px;height:152px;border-radius:12px;border:1px dashed #C9D8F0;background:#F8FBFF;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.dsm-fb-qr-box img{width:100%;height:100%;object-fit:contain;background:#FFFFFF;cursor:zoom-in}
+.dsm-fb-qr-empty{display:flex;flex-direction:column;align-items:center;gap:6px;color:#94A3B8;font-size:11px;text-align:center;padding:10px;line-height:16px}
+.dsm-fb-qr-placeholder{opacity:.95;cursor:pointer}
+.dsm-fb-qr--banner{flex-direction:column;align-items:stretch;gap:12px}
+.dsm-fb-banner{display:flex;align-items:center;justify-content:center;padding:8px 10px;border:1px solid #E8EEF8;border-radius:12px;background:#FBFDFF}
+.dsm-fb-banner img{display:block;max-width:100%;max-height:238px;object-fit:contain;cursor:zoom-in}
+.dsm-fb-banner img.dsm-fb-banner-placeholder{max-height:148px}
+.dsm-fb-steps{margin-top:2px;font-size:11px;line-height:18px;color:#8A94A6}
+/* 图片灯箱：点击指引图 / 二维码在页面内放大，不再跳浏览器新标签 */
+.dsm-lightbox{position:fixed;inset:0;z-index:260;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.74);backdrop-filter:blur(2px)}
+.dsm-lightbox-figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:10px;max-width:94vw;max-height:88vh}
+.dsm-lightbox-img{display:block;max-width:100%;max-height:80vh;object-fit:contain;border-radius:12px;background:#FFFFFF;box-shadow:0 24px 70px rgba(0,0,0,.45);cursor:zoom-out}
+.dsm-lightbox-cap{font-size:12px;line-height:18px;color:#E2E8F0;text-align:center;max-width:80vw}
+.dsm-lightbox-close{position:absolute;top:18px;right:20px;width:34px;height:34px;border-radius:9px;border:1px solid rgba(255,255,255,.35);background:rgba(15,23,42,.55);color:#FFFFFF;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.dsm-lightbox-close:hover{background:rgba(15,23,42,.85)}
+.dsm-fb-qr-body{flex:1 1 auto;min-width:0}
+.dsm-fb-qr-title{font-size:13px;font-weight:650;color:#0F172A;line-height:19px}
+.dsm-fb-qr-text{font-size:11.5px;line-height:18px;color:#5B6B84;margin-top:4px}
+.dsm-fb-qr-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.dsm-fb-guides{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.dsm-fb-guide{border:1px solid #E4E9F2;border-radius:12px;overflow:hidden;background:#FFFFFF;cursor:zoom-in;transition:box-shadow .15s ease,transform .15s ease}
+.dsm-fb-guide:hover{box-shadow:0 8px 20px rgba(28,48,92,.10);transform:translateY(-1px)}
+.dsm-fb-guide img{display:block;width:100%;height:auto;background:#F6F9FE}
+.dsm-fb-guide-cap{padding:8px 10px 9px;font-size:11.5px;font-weight:650;color:#334155;line-height:17px}
+.dsm-fb-guide-cap span{display:block;font-weight:400;color:#8A94A6;margin-top:1px}
+.dsm-fb-faq{display:flex;flex-direction:column;gap:8px}
+.dsm-fb-faq-item{display:flex;gap:9px;align-items:flex-start;padding:10px 12px;border:1px solid #E9EEF6;border-radius:11px;background:#FBFCFE}
+.dsm-fb-faq-icon{flex:0 0 auto;color:#2563EB;margin-top:1px}
+.dsm-fb-faq-q{font-size:12px;font-weight:650;color:#0F172A;line-height:18px}
+.dsm-fb-faq-a{font-size:11.5px;line-height:18px;color:#5B6B84;margin-top:2px}
 .dsm-settings-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .dsm-settings-title{font-size:13px;font-weight:650;color:var(--dsw-alias-label-primary)}
 .dsm-settings-desc{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}
@@ -484,7 +563,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-auto-recent-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-auto-recent-time{flex:0 0 auto;font-size:10.5px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dsm-auto-empty{font-size:11px;color:var(--dsw-alias-label-secondary);padding:4px 0}
-@media (max-width:900px){.dsm-side{width:250px}.dsm-doc{padding:16px 16px 48px}.dsm-entries{grid-template-columns:1fr 1fr}.dsm-cover-title{font-size:21px;line-height:29px}}
+@media (max-width:560px){.dsm-cover-head{flex-wrap:wrap}}
+    @media (max-width:900px){.dsm-side{width:250px}.dsm-doc{padding:16px 16px 48px}.dsm-entries{grid-template-columns:1fr 1fr}.dsm-cover-title{font-size:21px;line-height:29px}}
 @media (max-width:720px){.dsm-body{flex-direction:column}.dsm-side{width:auto;max-height:250px;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-entries{grid-template-columns:1fr}.dsm-toolbar{padding:8px 10px}.dsm-errorbar{margin:8px 10px 0}}
 /* ── AI 会议纪要卡片（浅灰底 + 白卡片 + 浅蓝主题） ── */
 .dsm-minutes{margin-top:14px;background:#FFFFFF;border:1px solid #E3E9F2;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.05);overflow:hidden}
@@ -580,13 +660,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-transcript-plain{font-size:12px;line-height:20px;color:#334155;white-space:pre-wrap;max-height:220px;overflow:auto;font-family:inherit}
 .dsm-transcript-note{margin-top:8px;font-size:11px;line-height:16px;color:#8A94A6}
 
-/* ── 会议文件（音频/视频）行 ── */
-.dsm-files{margin-top:12px;display:flex;flex-direction:column;gap:8px}
-.dsm-file{display:flex;align-items:center;gap:10px;padding:9px 11px;background:#FBFCFE;border:1px solid #E9EEF6;border-radius:12px}
+/* ── 会议文件（音频/视频）行：录音与录屏并排展示，窄屏自动换行 ── */
+.dsm-files{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px}
+.dsm-file{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-width:0;padding:9px 11px;background:#FBFCFE;border:1px solid #E9EEF6;border-radius:12px}
 .dsm-file:hover{background:#F5F8FF;border-color:#C7DAFF}
 .dsm-file-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;background:#E8F0FF;color:#2563EB}
 .dsm-file-icon--audio{background:#E7F6EF;color:#0F8A5F}
-.dsm-file-main{flex:1 1 auto;min-width:0}
+.dsm-file-main{flex:1 1 140px;min-width:0}
 .dsm-file-name{font-size:12.5px;line-height:18px;font-weight:600;color:#0F172A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-file-meta{font-size:11px;line-height:16px;color:#8A94A6;margin-top:1px}
 .dsm-file-actions{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px}
@@ -623,7 +703,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-root .dsm-detail-empty{color:var(--dsm-ink-3)}
 .dsm-root .dsm-doc{padding:18px 20px 40px}
 .dsm-root .dsm-cover{background:var(--dsm-surface);border:1px solid var(--dsm-line);border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.05);padding:16px 18px}
-.dsm-root .dsm-eyebrow{color:var(--dsm-ink-3)}
 .dsm-root .dsm-cover-title{color:var(--dsm-ink)}
 .dsm-root .dsm-meta-chip{background:#F7F9FC;border-color:var(--dsm-line);color:var(--dsm-ink-2)}
 .dsm-root .dsm-meta-chip--brand{background:var(--dsm-accent-soft);border-color:var(--dsm-accent-line);color:var(--dsm-accent)}
@@ -664,13 +743,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 
 `
 
-    const STYLE_TAG_ID = 'dsh-plugin-meeting-minutes/client.css'
+    const STYLE_TAG_ID = 'dsh-meeting-live/client.css'
 
     function ensureStyle() {
       if (typeof document === 'undefined') return
       if (document.querySelector(`style[data-plugin-css=${JSON.stringify(STYLE_TAG_ID)}]`) !== null) return
       const style = document.createElement('style')
-      style.dataset.plugin = 'dsh-plugin-meeting-minutes'
+      style.dataset.plugin = 'dsh-meeting-live'
       style.dataset.pluginCss = STYLE_TAG_ID
       style.textContent = CSS
       document.head.appendChild(style)
@@ -729,6 +808,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     function notify(level, title, body) {
+      // 同一条提示正在显示时不重复堆叠（连续重试、双事件源等场景）
+      if (snapshot.toasts.some((toast) => toast.level === level && toast.title === title && toast.body === body)) return
       const id = ++toastSeq
       commit({ toasts: [...snapshot.toasts, { id, level, title, body }] })
       window.setTimeout(() => {
@@ -1322,9 +1403,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     function autoIngestSummaryLabel(status) {
-      if (!status || typeof status !== 'object') return '自动入库'
-      if (status.scanning === true) return '自动入库 · 扫描中'
-      return status.enabled === false ? '自动入库 · 关' : '自动入库 · 开'
+      if (!status || typeof status !== 'object') return '自动识别'
+      if (status.scanning === true) return '自动识别 · 扫描中'
+      const active = status.tencent === true || status.dirsEnabled === true
+      return active ? '自动识别 · 开' : '自动识别 · 关'
     }
 
     async function saveAutoIngestSettings(patch) {
@@ -1348,7 +1430,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
      */
     async function scanAutoIngestAndWait() {
       let status = await triggerAutoIngestScanNow()
-      if (status === null) throw new Error('自动入库不可用')
+      if (status === null) throw new Error('自动识别不可用')
       if (status.scanning !== true) return status
       const deadline = Date.now() + 60_000
       while (Date.now() < deadline) {
@@ -1360,7 +1442,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           return status
         }
       }
-      throw new Error('扫描超时（超过 60 秒），请稍后查看自动入库状态')
+      throw new Error('扫描超时（超过 60 秒），请稍后查看自动识别状态')
     }
 
     // ─────────────────────────── speech service ───────────────────────────
@@ -1449,7 +1531,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     async function prepareSpeechManually() {
       try {
         await waitForSpeechReady()
-        notifySuccess('语音识别已就绪', '现在可以录音，或导入音频文件转写')
       } catch (error) {
         reportError(error, '语音识别启动失败')
       }
@@ -1609,7 +1690,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       if (!decoded || decoded.length === 0) throw new Error('音频为空，无法转写')
       if (decoded.duration < 0.3) throw new Error('音频太短，无法识别')
       const samples = await resampleTo16k(decoded)
-      const samplesPerSlice = TARGET_RATE * SLICE_SECONDS
+      // 云端一句话识别单次上限 60 秒（腾讯 60s/3MB、阿里 60s/2MB），切片必须留在 55 秒内；
+      // 本地引擎仍用 90 秒切片，减少请求次数。
+      const provider = String(snapshot.data?.settings?.transcribe?.provider ?? '')
+      const sliceSeconds = provider.startsWith('cloud-') ? CLOUD_SLICE_SECONDS : SLICE_SECONDS
+      const samplesPerSlice = TARGET_RATE * sliceSeconds
       const chunks = []
       for (let start = 0; start < samples.length; start += samplesPerSlice) {
         const end = Math.min(samples.length, start + samplesPerSlice)
@@ -1895,6 +1980,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       heartbeat: null,
       chunkFailures: 0,
       level: 0,
+      devices: [],
       sentChunks: 0,
       startToken: 0,
       sessionId: 0,
@@ -1903,6 +1989,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       captureLost: false,
       emptyChunks: 0,
       orbWarned: false,
+      lowLevelTicks: 0,
+      lowLevelWarned: false,
       pcmParts: [],
       screenStream: null,
       videoRecorder: null,
@@ -1994,6 +2082,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             lastText: live.lastText,
             level: Number.isFinite(live.level) ? live.level : 0,
             startedAt: live.startedAt,
+            // 桌面浮窗要展示可切换的输入设备列表；label 只在拿到麦克风权限后才有值。
+            devices: Array.isArray(liveEngine.devices) ? liveEngine.devices : [],
+            deviceId: selectedInputDeviceId,
           },
         })
         if (payload?.orb === true || payload?.orb === false) commit({ orbActive: payload.orb === true })
@@ -2006,6 +2097,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         if (command === 'pause') await pauseLiveRecording()
         else if (command === 'resume') await resumeLiveRecording()
         else if (command === 'stop') await stopLiveRecording('user', { fromOrb: true })
+        else if (typeof command === 'string' && command.startsWith('switch-input:')) {
+          await switchLiveInput(command.slice('switch-input:'.length))
+        }
       } catch {
         // 宿主可能在重启：下一次心跳重试即可。
       }
@@ -2040,7 +2134,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const elapsedSeconds = snapshot.live.elapsedSeconds
       publishLive({ status: 'paused', level: 0, elapsedSeconds })
       publishLiveQueue()
-      notify('info', '已暂停录音', '点浮窗或页面上的「继续」接着录，同一场会议')
       return true
     }
 
@@ -2057,6 +2150,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         liveEngine.resampler = capture.resampler
         capture.processor.onaudioprocess = onLiveAudioProcess
         watchLiveCapture(capture)
+        refreshLiveInputDevices()
         const elapsed = snapshot.live.elapsedSeconds
         publishLive({
           status: 'recording',
@@ -2069,6 +2163,65 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       } catch (error) {
         publishLive({ status: 'error', error: messageOf(error) })
         reportError(error, '继续录音失败')
+        return false
+      }
+    }
+
+    /** 重新枚举输入设备（桌面浮窗要展示可切换列表）。 */
+    function refreshLiveInputDevices() {
+      void listAudioInputDevices().then((devices) => {
+        liveEngine.devices = devices
+      }).catch(() => {})
+    }
+
+    /** 把一套采集资源挂到引擎上（开始 / 继续 / 切换设备共用）。 */
+    function adoptLiveCapture(capture) {
+      liveEngine.stream = capture.stream
+      liveEngine.context = capture.context
+      liveEngine.source = capture.source
+      liveEngine.processor = capture.processor
+      liveEngine.sink = capture.sink
+      liveEngine.resampler = capture.resampler
+      capture.processor.onaudioprocess = onLiveAudioProcess
+      watchLiveCapture(capture)
+      refreshLiveInputDevices()
+    }
+
+    /**
+     * 浮窗切换音频输入设备：只换采集源，会议 / 计时 / 转写队列都不动。
+     * 暂停中切换只记录选择，继续录音时生效。
+     */
+    async function switchLiveInput(deviceId) {
+      const nextId = String(deviceId ?? '').trim()
+      if (nextId === '') return false
+      const status = snapshot.live.status
+      if (status !== 'recording' && status !== 'paused') return false
+      if (nextId === String(selectedInputDeviceId)) return true
+      const previousId = selectedInputDeviceId
+      selectedInputDeviceId = nextId
+      writePreferredInputDevice(nextId)
+      if (status === 'paused') return true
+      // 先把已采集的片段冲进队列，再换设备重开采集；队列里的识别照常发送。
+      flushLiveSamples(true)
+      stopLiveCapture()
+      try {
+        adoptLiveCapture(await openLiveCapture(nextId))
+        // 浏览器可能因设备被占用而回退到默认设备，以实际轨道为准同步选择。
+        const actual = liveEngine.stream?.getAudioTracks?.()[0]?.getSettings?.().deviceId
+        if (typeof actual === 'string' && actual !== '') {
+          selectedInputDeviceId = actual
+          writePreferredInputDevice(actual)
+        }
+        return true
+      } catch (error) {
+        selectedInputDeviceId = previousId
+        writePreferredInputDevice(previousId)
+        try {
+          adoptLiveCapture(await openLiveCapture(previousId === '' ? undefined : previousId))
+        } catch {
+          // 换不回来时保持现状：报错提示用户，录音仍按当前状态继续。
+        }
+        reportError(error, '切换麦克风失败')
         return false
       }
     }
@@ -2091,7 +2244,17 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         if (status !== 'recording' && status !== 'stopping') return
         const startedAt = snapshot.live.startedAt
         const elapsed = startedAt > 0 ? Math.floor((Date.now() - startedAt) / 1000) : 0
-        publishLive({ elapsedSeconds: elapsed, level: liveEngine.level })
+        const level = liveEngine.level
+        // 录音电平长期过低时提示一次：远场/小音量是转写准确率下降的头号原因。
+        if (status === 'recording' && liveEngine.lowLevelWarned !== true) {
+          if (level > 0 && level < 0.04) liveEngine.lowLevelTicks += 1
+          else if (level >= 0.04) liveEngine.lowLevelTicks = 0
+          if (liveEngine.lowLevelTicks >= 30) {
+            liveEngine.lowLevelWarned = true
+            notify('warn', '麦克风声音偏小', '识别准确率会明显下降：请靠近麦克风，或在系统声音设置里调高输入音量；远程会议建议用立体声混音/回环录音')
+          }
+        }
+        publishLive({ elapsedSeconds: elapsed, level })
       }, 500)
     }
 
@@ -2136,13 +2299,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }
     }
 
-    async function openLiveCapture() {
+    async function openLiveCapture(deviceIdOverride) {
       if (typeof navigator === 'undefined' || !navigator.mediaDevices
         || typeof navigator.mediaDevices.getUserMedia !== 'function') {
         throw new Error('当前浏览器不支持实时录音，请改用音频文件导入或文本导入')
       }
       let stream = null
-      const preferredDeviceId = selectedInputDeviceId
+      const explicitDevice = deviceIdOverride !== undefined && deviceIdOverride !== null
+      const preferredDeviceId = explicitDevice ? String(deviceIdOverride) : selectedInputDeviceId
       const baseAudio = {
         channelCount: 1,
         echoCancellation: true,
@@ -2161,8 +2325,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         // 选中的设备可能已拔出 / 被占用：回退系统默认设备并告知用户。
         const fallbackNames = ['OverconstrainedError', 'NotFoundError', 'NotReadableError', 'TypeError']
         if (preferredDeviceId !== '' && error && fallbackNames.includes(error.name)) {
-          selectedInputDeviceId = ''
-          writePreferredInputDevice('')
+          // 主动切换设备时不要清掉用户选择：失败由调用方回滚到上一台。
+          if (!explicitDevice) {
+            selectedInputDeviceId = ''
+            writePreferredInputDevice('')
+          }
           notify('warn', '所选麦克风不可用', '已回退到系统默认输入设备')
         }
         try {
@@ -2382,6 +2549,15 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       // 音色分组在录音线程里算好，跟着这段文本一起入库（只用于展示 A/B/C/D）。
       const speakerIndex = assignLiveSpeaker(extractVoiceFeature(samples))
       try {
+        // 太短的碎片（刚点录音 / 暂停恢复瞬间 / 采集回调抖动）不送识别：
+        // 44 字节的空 WAV 会让识别服务按「音频数据无效」报错，连续两次就中断整场录音。
+        if (!samples || samples.length < TARGET_RATE * 0.2) {
+          if (liveEngine.sessionId === session) {
+            liveEngine.chunkFailures = 0
+            applyLiveChunk({ text: '' }, speakerIndex)
+          }
+          return
+        }
         if (meetingId === null) throw new Error('录制的会议不存在，无法转写')
         // 单段转写失败自动重试一次：网络抖动 / 识别服务短暂忙都常见，
         // 不该让一整场录音因为一次失败而中断。
@@ -2712,6 +2888,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       liveEngine.sentChunks = 0
       liveEngine.chunkFailures = 0
       liveEngine.orbWarned = false
+      liveEngine.lowLevelTicks = 0
+      liveEngine.lowLevelWarned = false
       liveEngine.pcmParts = []
       liveEngine.speakerCentroids = []
       liveEngine.segments = []
@@ -2752,6 +2930,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         liveEngine.sink = capture.sink
         liveEngine.resampler = capture.resampler
         capture.processor.onaudioprocess = onLiveAudioProcess
+        refreshLiveInputDevices()
         if (input?.screen === true) {
           // 录屏由宿主 ffmpeg 采集（桌面端 Electron 没有实现屏幕采集处理器，浏览器拿不到画面）。
           try {
@@ -2761,7 +2940,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             })
             if (screenPayload?.ok !== true) throw new Error(screenPayload?.error ?? '录屏启动失败')
             liveEngine.screenActive = true
-            notifySuccess('已开始录屏', String(screenPayload?.label ?? '整个桌面'))
           } catch (error) {
             liveEngine.screenActive = false
             notify('warn', '录屏未开始', '已改为只录音频；' + messageOf(error))
@@ -2912,7 +3090,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         result: { meetingId, chars, seconds, sentChunks: liveEngine.sentChunks },
       })
       updateLiveBeforeUnload()
-      notifySuccess('实时转写完成', `已识别 ${formatChars(chars)}，可以生成 AI 纪要或写入DSH 待办`)
     }
 
     async function cancelLiveRecording() {
@@ -3041,10 +3218,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const size = props?.size ?? 18
       const active = props?.active === true
       const state = useSnapshot()
-      const pending = (state.meetings ?? []).reduce(
-        (sum, item) => sum + (Number(item.pendingTodoCount) || 0),
-        0,
-      )
       const recording = liveIsActive(state.live)
       const stroke = active ? 1.6 : 1.3
       const glyph = h(
@@ -3056,13 +3229,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         h('path', { d: 'M10.7 3.3h3.1M10.7 6h3.1M10.7 8.7h2.1', stroke: 'currentColor', strokeWidth: stroke, strokeLinecap: 'round' }),
         h('path', { d: 'M10.7 11.4h3.1', stroke: 'currentColor', strokeWidth: stroke, strokeLinecap: 'round', opacity: 0.55 }),
       )
-      if (pending <= 0 && !recording) return glyph
+      // 标题栏只保留图标与录音状态点；不再显示待办数字（用户要求）。
+      if (!recording) return glyph
       return h(
         'span',
         { className: 'dsm-icon-badge' },
         glyph,
-        pending > 0 ? h('span', { className: 'dsm-icon-dot' }, pending > 99 ? '99+' : String(pending)) : null,
-        recording ? h('span', { className: 'dsm-icon-live-dot', title: '正在录音' }) : null,
+        h('span', { className: 'dsm-icon-live-dot', title: '正在录音' }),
       )
     }
 
@@ -3170,7 +3343,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }),
         h(
           'div',
-          { className: `dsm-modal${props.wide ? ' dsm-modal--wide' : ''}` },
+          { className: `dsm-modal${props.wide ? ' dsm-modal--wide' : ''}${props.extraWide ? ' dsm-modal--xwide' : ''}` },
           h(
             'div',
             { className: 'dsm-modal-head' },
@@ -3203,7 +3376,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           { className: 'dsm-section-band' },
           h('span', { className: 'dsm-section-icon' }, h(Icon, { name: props.icon ?? 'list', size: 13 })),
           h('h2', { className: 'dsm-section-title' }, props.title),
-          props.count !== undefined ? h('span', { className: 'dsm-section-count' }, `（${props.count}）`) : null,
+          props.count !== undefined
+            ? h('span', { className: 'dsm-section-count', title: props.countTitle ?? undefined }, `（${props.count}${props.countSuffix ?? ''}）`)
+            : null,
           props.sub ? h('span', { className: 'dsm-section-sub' }, props.sub) : null,
           props.actions ? h('span', { className: 'dsm-section-actions' }, props.actions) : null,
         ),
@@ -3212,6 +3387,79 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     // ────────────────────────────── dialogs ───────────────────────────────
+
+    /** 首次使用引导：转写模型 + DSH 待办插件，两步都能直接跳去设置。 */
+    function OnboardingModal(props) {
+      const modelReady = props.modelReady === true
+      const todoReady = props.todoReady === true
+      const openSettings = () => { if (typeof props.onOpenSettings === 'function') props.onOpenSettings() }
+      const footer = [
+        h('button', {
+          key: 'later',
+          type: 'button',
+          className: 'dsm-btn',
+          onClick: () => { if (typeof props.onClose === 'function') props.onClose() },
+        }, '稍后'),
+        h('button', {
+          key: 'settings',
+          type: 'button',
+          className: 'dsm-btn dsm-btn--primary',
+          onClick: openSettings,
+        }, '去设置'),
+      ]
+      return h(
+        Modal,
+        {
+          title: '欢迎使用会议纪要',
+          subtitle: '两步准备，会议纪要和待办就能自动跑起来',
+          onClose: props.onClose,
+          footer,
+        },
+        h(
+          'div',
+          { className: 'dsm-onboard' },
+          h(
+            'div',
+            { className: 'dsm-onboard-step' },
+            h('span', { className: 'dsm-onboard-index' }, '1'),
+            h(
+              'div',
+              { className: 'dsm-onboard-body' },
+              h('div', { className: 'dsm-onboard-title' },
+                h('span', null, '准备语音转写模型'),
+                h('span', { className: 'dsm-onboard-badge' + (modelReady ? ' dsm-onboard-badge--ok' : ' dsm-onboard-badge--warn') }, modelReady ? '已就绪' : '未就绪'),
+              ),
+              h('div', { className: 'dsm-onboard-text' },
+                '本地 Paraformer 模型免费、离线，首次使用需下载约 230MB；也可以填讯飞 / 腾讯云 / 阿里云的密钥走云端识别（远场更稳，但需要联网，音频会上传到对应厂商）。'),
+              h('div', { className: 'dsm-onboard-hint' },
+                '在「模型配置」里可以直接下载本地模型；也可以展开「云端转写」填写密钥，两种方式都支持。'),
+              h('div', { className: 'dsm-onboard-actions' },
+                h('button', { type: 'button', className: 'dsm-btn dsm-btn--primary', onClick: openSettings }, modelReady ? '查看模型配置' : '去下载 / 配置模型'),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'dsm-onboard-step' },
+            h('span', { className: 'dsm-onboard-index' }, '2'),
+            h(
+              'div',
+              { className: 'dsm-onboard-body' },
+              h('div', { className: 'dsm-onboard-title' },
+                h('span', null, '安装 DSH 待办插件（可选）'),
+                h('span', { className: 'dsm-onboard-badge' + (todoReady ? ' dsm-onboard-badge--ok' : ' dsm-onboard-badge--warn') }, todoReady ? '已安装' : '未安装'),
+              ),
+              h('div', { className: 'dsm-onboard-text' },
+                '安装并启用 dsh-memory-evolve 插件后，会议里勾选的待办可以一键写入 DSH 待办（工作轨），在 DSH「待办」面板就能看到；不装也不影响录音、转写和生成纪要。'),
+              todoReady
+                ? null
+                : h('div', { className: 'dsm-onboard-hint' },
+                  '安装方式：DSH 设置 → 插件 → 搜索 dsh-memory-evolve 安装并启用，然后重启 Desktop。'),
+            ),
+          ),
+        ),
+      )
+    }
 
     function NewMeetingModal(props) {
       const [title, setTitle] = useState('')
@@ -3230,7 +3478,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             attendees: splitAttendees(attendees),
             notes: notes.trim(),
           })
-          notifySuccess('已创建会议', meeting.title)
           props.onClose()
         } catch (caught) {
           setError(messageOf(caught))
@@ -3306,7 +3553,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             attendees: splitAttendees(form.attendees),
             notes: form.notes,
           })
-          notifySuccess('会议信息已更新', form.title.trim())
           props.onClose()
         } catch (caught) {
           setError(messageOf(caught))
@@ -3347,15 +3593,21 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     /**
-     * 设置弹窗（两页）：模型配置（语音转写 / 会议总结）+ 自动入库。
+     * 设置弹窗（三页）：模型配置（语音转写 / 会议总结）、自动识别、问题反馈。
      * 布局参考 DSH 设置：左侧导航 + 右侧内容卡片。
      */
     function SettingsModal(props) {
       const status = props.status ?? null
       const available = status !== null && typeof status === 'object'
       const [page, setPage] = useState('model')
-      const [enabled, setEnabled] = useState(status?.enabled !== false)
-      const [tencent, setTencent] = useState(status?.tencent !== false)
+      const [tencent, setTencent] = useState(status?.tencent === true)
+      const [dirsEnabled, setDirsEnabled] = useState(status?.dirsEnabled === true)
+      const [tencentDir, setTencentDir] = useState(() => (typeof status?.tencentDir === 'string' ? status.tencentDir : ''))
+      const [pickingDir, setPickingDir] = useState(false)
+      // 公众号二维码是插件内置的静态图；万一文件缺失就退回占位图。
+      const [qrBroken, setQrBroken] = useState(false)
+      // 图片灯箱：{ src, alt, caption }，null 表示关闭。
+      const [lightbox, setLightbox] = useState(null)
       const [dirsText, setDirsText] = useState(() => (Array.isArray(status?.dirs) ? status.dirs.join('\n') : ''))
       const [busy, setBusy] = useState(false)
       const [scanning, setScanning] = useState(status?.scanning === true)
@@ -3379,10 +3631,24 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         return () => { mountedRef.current = false }
       }, [])
 
+      // 灯箱打开时按 Esc 关闭；关闭后移除监听。
+      useEffect(() => {
+        if (lightbox === null) return undefined
+        const onKey = (event) => { if (event.key === 'Escape') setLightbox(null) }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [lightbox])
+
+      const openLightbox = (src, alt, caption) => setLightbox({ src, alt, caption })
+
       const loadSettings = async () => {
         const payload = await requestJson('/settings')
         if (!mountedRef.current) return
-        setSettingsData(payload?.settings ?? null)
+        const nextSettings = payload?.settings ?? null
+        setSettingsData(nextSettings)
+        // 打开设置时把云端 Tab 定位到「当前正在使用的云端引擎」，而不是固定停在讯飞。
+        const currentProvider = String(nextSettings?.transcribe?.provider ?? '')
+        if (currentProvider.startsWith('cloud-')) setCloudTab(currentProvider.slice('cloud-'.length))
         setModelsState(payload?.modelsState ?? null)
         setDshModels(Array.isArray(payload?.models) ? payload.models : [])
         setDefaultModel(payload?.defaultModel ?? null)
@@ -3504,7 +3770,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             await requestJson('/settings', { method: 'PATCH', body: { model: { provider, model } } })
           }
           setSummarySelection(value)
-          notifySuccess('总结模型已更新', value === '' ? '跟随 DSH 默认模型' : value.split('|')[1])
           await loadSettings()
         } catch (caught) {
           setError(messageOf(caught))
@@ -3559,16 +3824,44 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         setError(null)
         try {
           const next = await saveAutoIngestSettings({
-            enabled,
+            enabled: true,
             tencent,
+            tencentDir: String(tencentDir ?? '').trim(),
+            dirsEnabled,
             dirs: parseAutoIngestDirs(dirsText),
           })
           if (next !== null) applyAutoIngestStatus(next)
           setBusy(false)
-          notifySuccess('自动入库设置已保存', '')
         } catch (caught) {
           setBusy(false)
           setError(messageOf(caught))
+        }
+      }
+
+      const pickTencentDir = async () => {
+        setPickingDir(true)
+        setError(null)
+        try {
+          const payload = await requestJson('/dialog/pick-dir', {
+            method: 'POST',
+            body: { title: '选择腾讯会议录制目录（本地录制文件所在文件夹）' },
+          })
+          const picked = typeof payload?.path === 'string' ? payload.path.trim() : ''
+          if (picked !== '') {
+            setTencentDir(picked)
+            setTencent(true)
+            const next = await saveAutoIngestSettings({ tencentDir: picked, tencent: true })
+            if (next !== null) applyAutoIngestStatus(next)
+            // 选完就扫一次，用户能马上看到有没有被识别到
+            void triggerAutoIngestScanNow().then((value) => {
+              if (value !== null) applyAutoIngestStatus(value)
+              void loadState({ detail: false }).catch(() => {})
+            }).catch(() => {})
+          }
+        } catch (caught) {
+          setError(messageOf(caught))
+        } finally {
+          if (mountedRef.current) setPickingDir(false)
         }
       }
 
@@ -3621,6 +3914,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           h('div', { className: 'dsm-set-section-head' },
             h('span', { className: 'dsm-set-section-title' }, '语音转写模型'),
             h('span', { className: 'dsm-set-section-desc' }, '把会议音频转成文字；本地模型离线运行，云端模型需联网与凭据。'),
+            h('span', { className: 'dsm-set-badge dsm-set-badge--ok', title: '当前录音/导入会使用这个转写引擎' }, '当前使用：' + transcribeEngineLabel(transcribeProvider)),
           ),
           h('div', { className: 'dsm-set-tabs' },
             h('button', {
@@ -3633,7 +3927,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               key: 'mode-cloud',
               type: 'button',
               className: 'dsm-set-tab' + (transcribeMode === 'cloud' ? ' dsm-set-tab--on' : ''),
-              onClick: () => { setLocalTranscribeMode('cloud'); updateTranscribe({ provider: 'cloud-' + cloudTab }) },
+              onClick: () => {
+                setLocalTranscribeMode('cloud')
+                // 腾讯云还在开发中，切到云端时不要选中它。
+                updateTranscribe({ provider: 'cloud-' + (cloudTab === 'tencent' ? 'iflytek' : cloudTab) })
+              },
             }, '云端模型'),
           ),
           transcribeMode === 'local'
@@ -3692,28 +3990,30 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               'div',
               { className: 'dsm-set-cloud' },
               h('div', { className: 'dsm-set-tabs' },
-                ...Object.entries({ iflytek: '讯飞', tencent: '腾讯云', aliyun: '阿里云' }).map(([key, label]) => h(
+                ...[['iflytek', '讯飞'], ['aliyun', '阿里云'], ['tencent', '腾讯云']].map(([key, label]) => h(
                   'button',
                   {
                     key: 'cloud-tab-' + key,
                     type: 'button',
                     className: 'dsm-set-tab' + (cloudTab === key ? ' dsm-set-tab--on' : ''),
-                    onClick: () => {
-                      setCloudTab(key)
-                      if (transcribeMode === 'cloud') updateTranscribe({ provider: 'cloud-' + key })
-                    },
+                    onClick: () => setCloudTab(key),
                   },
                   h('span', { className: 'dsm-set-dot' + (cloudConfigured(key) ? ' dsm-set-dot--on' : '') }),
                   h('span', null, label),
+                  key === 'tencent' ? h('span', { className: 'dsm-set-badge' }, '开发中') : null,
+                  transcribeProvider === 'cloud-' + key ? h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '使用中') : null,
                 )),
               ),
               h('div', { className: 'dsm-set-cloud-actions' },
                 h('button', {
                   type: 'button',
                   className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
-                  disabled: transcribeProvider === 'cloud-' + cloudTab,
+                  disabled: cloudTab === 'tencent' || transcribeProvider === 'cloud-' + cloudTab,
+                  title: cloudTab === 'tencent' ? '腾讯云接入开发中，暂不能设为转写引擎' : undefined,
                   onClick: () => setAsTranscribeEngine(cloudTab),
-                }, transcribeProvider === 'cloud-' + cloudTab ? '当前使用中' : '设为转写引擎'),
+                }, cloudTab === 'tencent'
+                  ? '开发中，暂不可用'
+                  : (transcribeProvider === 'cloud-' + cloudTab ? '当前使用中' : '设为转写引擎')),
                 h('button', {
                   type: 'button',
                   className: 'dsm-btn dsm-btn--sm',
@@ -3723,6 +4023,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   ? h('span', { className: 'dsm-set-badge dsm-set-badge--ok' }, '已填写凭据')
                   : h('span', { className: 'dsm-set-badge' }, '未填写凭据'),
               ),
+              h('div', { className: 'dsm-hint' }, '当前转写引擎：' + transcribeEngineLabel(transcribeProvider)),
+              cloudTab === 'tencent'
+                ? h('div', { className: 'dsm-hint' }, '腾讯云一句话识别接入开发中：凭据可以先填，但暂时不能设为转写引擎，录音/导入仍走上面显示的引擎。')
+                : null,
               cloudTab === 'iflytek'
                 ? h('div', { className: 'dsm-set-grid' },
                   h(Field, { label: 'AppID' }, h(TextInput, { value: cloudConfig.iflytek?.appId ?? '', onChange: (value) => updateCloud('iflytek', 'appId', value), placeholder: '讯飞控制台 AppID' })),
@@ -3755,40 +4059,44 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             h('span', { className: 'dsm-set-section-title' }, '会议总结模型'),
             h('span', { className: 'dsm-set-section-desc' }, '把转写整理成结构化纪要（一句话结论/决策/待办）。'),
           ),
-          radioRow(
-            summaryMode === 'dsh',
-            () => { if (summaryMode === 'custom') { setLocalSummaryMode('dsh'); updateSummary({ mode: 'dsh' }) } },
-            '使用 DSH 已配置模型',
-            '与 DSH 设置里的模型一致；也可以在这里单独指定',
-            null,
+          h('div', { className: 'dsm-set-choice' + (summaryMode === 'dsh' ? ' dsm-set-choice--on' : '') },
+            radioRow(
+              summaryMode === 'dsh',
+              () => { if (summaryMode === 'custom') { setLocalSummaryMode('dsh'); updateSummary({ mode: 'dsh' }) } },
+              '使用 DSH 已配置模型',
+              '与 DSH 设置里的模型一致；也可以在这里单独指定',
+              null,
+            ),
+            summaryMode === 'dsh'
+              ? h('div', { className: 'dsm-set-grid' },
+                h(Field, { label: 'DSH 模型' }, h(Select, {
+                  value: summarySelection,
+                  onChange: (value) => { void saveSummarySelection(value) },
+                  options: [
+                    { value: '', label: defaultModelLabel },
+                    ...dshModels.map((item) => ({ value: item.provider + '|' + item.id, label: item.name + '（' + (item.displayName || item.provider) + '）' })),
+                  ],
+                })),
+              )
+              : null,
           ),
-          summaryMode === 'dsh'
-            ? h('div', { className: 'dsm-set-grid' },
-              h(Field, { label: 'DSH 模型' }, h(Select, {
-                value: summarySelection,
-                onChange: (value) => { void saveSummarySelection(value) },
-                options: [
-                  { value: '', label: defaultModelLabel },
-                  ...dshModels.map((item) => ({ value: item.provider + '|' + item.id, label: item.name + '（' + (item.displayName || item.provider) + '）' })),
-                ],
-              })),
-            )
-            : null,
-          radioRow(
-            summaryMode === 'custom',
-            () => { if (summaryMode !== 'custom') { setLocalSummaryMode('custom'); updateSummary({ mode: 'custom' }) } },
-            '手动配置模型接口',
-            '任意 OpenAI 兼容接口（/chat/completions）',
-            null,
+          h('div', { className: 'dsm-set-choice' + (summaryMode === 'custom' ? ' dsm-set-choice--on' : '') },
+            radioRow(
+              summaryMode === 'custom',
+              () => { if (summaryMode !== 'custom') { setLocalSummaryMode('custom'); updateSummary({ mode: 'custom' }) } },
+              '手动配置模型接口',
+              '任意 OpenAI 兼容接口（/chat/completions）',
+              null,
+            ),
+            summaryMode === 'custom'
+              ? h('div', { className: 'dsm-set-grid' },
+                h(Field, { label: '接口地址' }, h(TextInput, { value: settings.summary.custom?.baseUrl ?? '', onChange: (value) => updateSummaryCustom('baseUrl', value), placeholder: 'https://api.example.com/v1' })),
+                h(Field, { label: '模型名' }, h(TextInput, { value: settings.summary.custom?.model ?? '', onChange: (value) => updateSummaryCustom('model', value), placeholder: 'qwen-max' })),
+                h(Field, { label: 'API Key' }, h(TextInput, { value: settings.summary.custom?.apiKey ?? '', onChange: (value) => updateSummaryCustom('apiKey', value), placeholder: '可留空（本地服务）' })),
+                h(Field, { label: '温度' }, h(TextInput, { value: String(settings.summary.custom?.temperature ?? 0.3), onChange: (value) => updateSummaryCustom('temperature', Number(value) || 0.3) })),
+              )
+              : null,
           ),
-          summaryMode === 'custom'
-            ? h('div', { className: 'dsm-set-grid' },
-              h(Field, { label: '接口地址' }, h(TextInput, { value: settings.summary.custom?.baseUrl ?? '', onChange: (value) => updateSummaryCustom('baseUrl', value), placeholder: 'https://api.example.com/v1' })),
-              h(Field, { label: '模型名' }, h(TextInput, { value: settings.summary.custom?.model ?? '', onChange: (value) => updateSummaryCustom('model', value), placeholder: 'qwen-max' })),
-              h(Field, { label: 'API Key' }, h(TextInput, { value: settings.summary.custom?.apiKey ?? '', onChange: (value) => updateSummaryCustom('apiKey', value), placeholder: '可留空（本地服务）' })),
-              h(Field, { label: '温度' }, h(TextInput, { value: String(settings.summary.custom?.temperature ?? 0.3), onChange: (value) => updateSummaryCustom('temperature', Number(value) || 0.3) })),
-            )
-            : null,
           h('div', { className: 'dsm-set-cloud-actions' },
             h('button', { type: 'button', className: 'dsm-btn dsm-btn--sm', onClick: () => { void testSummaryModel() } }, '测试连接'),
             h('span', { className: 'dsm-hint' }, summaryMode === 'custom'
@@ -3825,31 +4133,76 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         'div',
         { className: 'dsm-set-page' },
         h('div', { className: 'dsm-set-section' },
-          h('div', { className: 'dsm-set-section-head' },
-            h('span', { className: 'dsm-set-section-title' }, '自动入库'),
-            h('span', { className: 'dsm-set-section-desc' }, '定时扫描本机录制文件，自动导入成待整理会议。'),
+          h('div', { className: 'dsm-set-subhead' },
+            h('div', { className: 'dsm-set-section-head' },
+              h('span', { className: 'dsm-set-section-title' }, '腾讯会议解析'),
+              h('span', { className: 'dsm-set-section-desc' }, '读取腾讯会议本地录制目录，自动转成文字并入库（mp4 / m4a / aac 等）。'),
+            ),
+            h('label', { className: 'dsm-switch' },
+              h('input', { type: 'checkbox', checked: tencent, disabled: !available, onChange: (event) => setTencent(event.target.checked) }),
+              h('span', null, tencent ? '已启用' : '已关闭'),
+            ),
           ),
-          h('label', { className: 'dsm-check' },
-            h('input', { type: 'checkbox', checked: enabled, disabled: !available, onChange: (event) => setEnabled(event.target.checked) }),
-            h('span', null, '开启自动入库'),
+          h(Field, { label: '腾讯会议录制目录' },
+            h('div', { className: 'dsm-row' },
+              h(TextInput, {
+                value: tencentDir,
+                onChange: (value) => { setTencentDir(value) },
+                placeholder: '留空则自动探测「文档\\TencentMeeting」，也可手动选择',
+              }),
+              h('button', {
+                type: 'button',
+                className: 'dsm-btn',
+                disabled: !available || pickingDir,
+                style: { flex: '0 0 auto', whiteSpace: 'nowrap' },
+                onClick: () => { void pickTencentDir() },
+              }, pickingDir ? '选择中…' : '选择文件夹…'),
+            ),
+            h('div', { className: 'dsm-hint' },
+              status?.tencentDirSource === 'detected' && status?.tencentDirPath
+                ? '已自动探测到：' + status.tencentDirPath
+                : (status?.tencentDirSource === 'config' && status?.tencentDirPath ? '当前使用手动选择的目录：' + status.tencentDirPath : 'Windows 默认在「文档\\TencentMeeting」；手动选择后可覆盖自动探测。'),
+            ),
           ),
-          h('label', { className: 'dsm-check' },
-            h('input', { type: 'checkbox', checked: tencent, disabled: !available, onChange: (event) => setTencent(event.target.checked) }),
-            h('span', null, '读取腾讯会议本地录制'),
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-subhead' },
+            h('div', { className: 'dsm-set-section-head' },
+              h('span', { className: 'dsm-set-section-title' }, '自定义监控目录'),
+              h('span', { className: 'dsm-set-section-desc' }, '监控你指定的文件夹，新文件自动转写 / 导入成待整理会议。'),
+            ),
+            h('label', { className: 'dsm-switch' },
+              h('input', { type: 'checkbox', checked: dirsEnabled, disabled: !available, onChange: (event) => setDirsEnabled(event.target.checked) }),
+              h('span', null, dirsEnabled ? '已启用' : '已关闭'),
+            ),
           ),
-          h(Field, { label: '额外监控目录（一行一个路径）' }, h(TextArea, {
+          h(Field, { label: '监控目录（一行一个路径）' }, h(TextArea, {
             rows: 4,
             value: dirsText,
             onChange: setDirsText,
             placeholder: 'C:\\Users\\me\\Videos\\TencentMeeting\nC:\\Users\\me\\Documents\\会议录音',
           })),
-          h('div', { className: 'dsm-hint' }, '支持 audio / video / txt / md / docx；新文件在下一次扫描时导入。'),
+          h('div', { className: 'dsm-hint' }, '支持 audio / video / txt / md / docx；新文件在下一次扫描时导入。腾讯会议的 mp4/m4a 录制在 Windows 上需要 ffmpeg（winget 装过会自动识别）。'),
         ),
         available
           ? h('div', { className: 'dsm-set-grid dsm-set-grid--cards' },
             h('div', { className: 'dsm-set-card' },
+              h('div', { className: 'dsm-set-card-k' }, '腾讯会议来源'),
+              h('div', { className: 'dsm-set-card-v' },
+                status?.tencentMode === 'directory'
+                  ? '目录 · ' + String(Number(status?.tencentRecords) || 0) + ' 个文件'
+                  : (status?.tencentMode === 'database'
+                    ? '本地数据库 · ' + String(Number(status?.tencentRecords) || 0) + ' 条'
+                    : (status?.tencentError ? '未找到' : '尚未扫描')),
+              ),
+            ),
+            h('div', { className: 'dsm-set-card' },
               h('div', { className: 'dsm-set-card-k' }, '运行状态'),
-              h('div', { className: 'dsm-set-card-v' }, scanning || status?.scanning === true ? '扫描中…' : (status?.enabled === false ? '已停用' : '运行中')),
+              h('div', { className: 'dsm-set-card-v' },
+                scanning || status?.scanning === true
+                  ? '扫描中…'
+                  : ((status?.tencent === false && status?.dirsEnabled === false) ? '两个入口都关闭' : '运行中'),
+              ),
             ),
             h('div', { className: 'dsm-set-card' },
               h('div', { className: 'dsm-set-card-k' }, '已自动导入 / 失败'),
@@ -3860,7 +4213,85 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               h('div', { className: 'dsm-set-card-v' }, status?.lastScanAt ? formatStamp(status.lastScanAt) : '尚未扫描'),
             ),
           )
-          : h('div', { className: 'dsm-hint dsm-hint--warn' }, '宿主未提供自动入库服务，当前无法配置。'),
+          : h('div', { className: 'dsm-hint dsm-hint--warn' }, '宿主未提供自动识别服务，当前无法配置。'),
+        error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
+      )
+
+      const feedbackFaqs = [
+        ['在会议室里开会，需要连接收音设备吗？', '需要。笔记本内置麦克风在 3 人以上、离麦超过 2 米时基本不可用：① 首选 USB 全向会议麦克风，放桌子中央；② 会议室已有会议系统的，从调音台 / 会议主机 line-out 接到电脑的 line-in 或 USB 声卡；③ 临时没条件，可把手机放桌面中央录音，会后用「录音转写」导入。接好后到「实时录音」弹窗选中这个设备，点「检测」确认说话时电平条超过 1/3；外接麦建议在 Windows 声音设置里关掉「音频增强 / 回声消除」，并开启「整段重转写」与「转写纠错」。'],
+        ['转写没反应 / 一直不出字？', '先到「模型配置」确认转写引擎已就绪：本地模型下载完成后才能识别；云转写需要先填好对应厂商的密钥。'],
+        ['「写入待办」按钮是灰的？', '需要安装并启用 dsh-memory-evolve 插件（它与 dtodo 共用同一份待办存储）。'],
+        ['腾讯会议录完，没有自动识别？', '到「自动识别」确认腾讯会议录制目录已选中（Windows 默认在 文档\\TencentMeeting）；只自动导入 14 天内生成的新录制，旧文件请用「录音转写」手动导入。'],
+        ['想看某场会议的完整纪要和原文？', '在会议详情页可以展开原文、导出 HTML / Markdown；也可以在对话里让我读会议记录。'],
+      ]
+
+      // 公众号二维码是插件内置的静态图片（不支持用户上传/替换）。
+      const qrImageUrl = API + '/assets/feedback-qr.png'
+      const feedbackPage = h(
+        'div',
+        { className: 'dsm-set-page' },
+        h('div', { className: 'dsm-fb-hero' },
+          h('div', { className: 'dsm-fb-hero-icon' }, h(Icon, { name: 'info', size: 18 })),
+          h('div', { className: 'dsm-fb-hero-body' },
+            h('div', { className: 'dsm-fb-hero-title' }, '遇到问题，或者有改进建议？'),
+            h('div', { className: 'dsm-fb-hero-text' }, '扫码关注公众号「PM的AI手记」，或微信「搜一搜」公众号名称，关注后直接在对话框里发消息就能找到我们。共性问题会整理进后续版本，感谢你的反馈。'),
+          ),
+        ),
+        h('div', { className: 'dsm-fb-qr dsm-fb-qr--banner' },
+          h('div', { className: 'dsm-fb-banner' },
+            h('img', {
+              src: qrBroken ? API + '/assets/feedback-qr-placeholder.png' : qrImageUrl,
+              alt: '公众号「PM的AI手记」二维码',
+              title: '点击放大查看（微信扫一扫 / 长按识别）',
+              onClick: () => openLightbox(
+                qrBroken ? API + '/assets/feedback-qr-placeholder.png' : qrImageUrl,
+                '公众号「PM的AI手记」二维码',
+                '微信扫一扫 / 长按识别上方二维码，或在微信里「搜一搜」公众号名称',
+              ),
+              onError: () => setQrBroken(true),
+            }),
+          ),
+          h('div', { className: 'dsm-fb-qr-body' },
+            h('div', { className: 'dsm-fb-qr-title' }, '扫码关注公众号「PM的AI手记」'),
+            h('div', { className: 'dsm-fb-qr-text' }, '微信扫一扫 / 长按识别上方二维码，或在微信里「搜一搜」公众号名称；关注后点「发消息」，把问题现象、复现步骤和截图发过来。'),
+            h('div', { className: 'dsm-hint' }, '公众号二维码是插件内置的，无需上传；点图片可查看原图。'),
+          ),
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '关注与对话指引'),
+            h('span', { className: 'dsm-set-section-desc' }, '怎么关注公众号、怎么发消息，两步看图就会；点图片可看大图。'),
+          ),
+          h('div', { className: 'dsm-fb-guides' },
+            ...[
+              ['guide-follow', '① 关注公众号', '微信扫一扫 / 搜一搜「PM的AI手记」→ 点「关注」'],
+              ['guide-chat', '② 在公众号里对话', '点底部「发消息」→ 输入问题/发截图 → 等回复'],
+            ].map(([name, title, desc]) => h('div', {
+              key: name,
+              className: 'dsm-fb-guide',
+              onClick: () => openLightbox(API + '/assets/' + name + '.png', title, desc),
+            },
+              h('img', { src: API + '/assets/' + name + '.png', alt: title, loading: 'lazy' }),
+              h('div', { className: 'dsm-fb-guide-cap' }, title, h('span', null, desc)),
+            )),
+          ),
+          h('div', { className: 'dsm-fb-steps' }, '小提示：一条消息说清「问题现象 + 复现步骤 + 截图」，回复会更快。'),
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '常见问题'),
+            h('span', { className: 'dsm-set-section-desc' }, '先看这里，很多问题一步就能解决。'),
+          ),
+          h('div', { className: 'dsm-fb-faq' },
+            ...feedbackFaqs.map(([question, answer]) => h('div', { key: question, className: 'dsm-fb-faq-item' },
+              h('span', { className: 'dsm-fb-faq-icon' }, h(Icon, { name: 'alert', size: 13 })),
+              h('div', null,
+                h('div', { className: 'dsm-fb-faq-q' }, question),
+                h('div', { className: 'dsm-fb-faq-a' }, answer),
+              ),
+            )),
+          ),
+        ),
         error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
       )
 
@@ -3871,7 +4302,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             key: 'scan',
             type: 'button',
             className: 'dsm-btn',
-            disabled: scanning || !enabled,
+            disabled: scanning || (!tencent && !dirsEnabled),
             onClick: () => { void handleScan() },
           }, scanning ? h('span', { className: 'dsm-spin' }) : h(Icon, { name: 'refresh', size: 13 }), h('span', null, scanning ? '扫描中…' : '立即扫描')),
           h('button', { key: 'save', type: 'button', className: 'dsm-btn dsm-btn--primary', disabled: busy, onClick: () => { void handleSaveAuto() } }, '保存'),
@@ -3882,8 +4313,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         Modal,
         {
           title: '设置',
-          subtitle: '模型与自动入库。改动即时保存。',
-          wide: true,
+          subtitle: '模型、自动识别与问题反馈。改动即时保存。',
+          // 三页统一用「问题反馈」页的宽度（xwide）：切页时弹窗不再忽宽忽窄。
+          extraWide: true,
           onClose: props.onClose,
           footer,
         },
@@ -3904,10 +4336,44 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               type: 'button',
               className: 'dsm-set-nav-item' + (page === 'auto' ? ' dsm-set-nav-item--on' : ''),
               onClick: () => setPage('auto'),
-            }, h(Icon, { name: 'folder', size: 13 }), h('span', null, '自动入库')),
+            }, h(Icon, { name: 'folder', size: 13 }), h('span', null, '自动识别')),
+            h('button', {
+              key: 'nav-feedback',
+              type: 'button',
+              className: 'dsm-set-nav-item' + (page === 'feedback' ? ' dsm-set-nav-item--on' : ''),
+              onClick: () => setPage('feedback'),
+            }, h(Icon, { name: 'info', size: 13 }), h('span', null, '问题反馈')),
           ),
-          h('div', { className: 'dsm-set-content' }, page === 'model' ? modelPage : autoPage),
+          h('div', { className: 'dsm-set-content' },
+            page === 'model' ? modelPage : (page === 'auto' ? autoPage : feedbackPage),
+          ),
         ),
+        lightbox === null
+          ? null
+          : h(
+            'div',
+            {
+              className: 'dsm-lightbox',
+              role: 'dialog',
+              'aria-label': '查看大图',
+              onClick: (event) => { if (event.target === event.currentTarget) setLightbox(null) },
+            },
+            h('button', {
+              type: 'button',
+              className: 'dsm-lightbox-close',
+              'aria-label': '关闭大图',
+              onClick: () => setLightbox(null),
+            }, '×'),
+            h('figure', { className: 'dsm-lightbox-figure' },
+              h('img', {
+                className: 'dsm-lightbox-img',
+                src: lightbox.src,
+                alt: lightbox.alt,
+                onClick: () => setLightbox(null),
+              }),
+              lightbox.caption ? h('figcaption', { className: 'dsm-lightbox-cap' }, lightbox.caption) : null,
+            ),
+          ),
       )
     }
 
@@ -4124,6 +4590,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }))
       const [screenSources, setScreenSources] = useState(() => [])
       const [screenSourceError, setScreenSourceError] = useState(null)
+      const [identifyingScreen, setIdentifyingScreen] = useState(false)
+      const [identifyNote, setIdentifyNote] = useState(null)
       const [localError, setLocalError] = useState(null)
       const [fileStage, setFileStage] = useState('idle')
       const [fileError, setFileError] = useState(null)
@@ -4145,12 +4613,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const fileBusy = fileStage === 'preparing' || fileStage === 'processing'
       const dismissible = liveActive || fileStage !== 'processing'
 
-      // 桌面浮窗接管后自动收起这个白色弹窗（录音中才收，避免误关文件转写进度）
+      // 录音一开始就收起白色弹窗：Windows 由桌面浮窗（球 + 气泡）接管，其它平台用页面底部录音条。
       useEffect(() => {
         if (liveStatus !== 'recording') return
-        if (state.orbActive !== true) return
         props.onClose()
-      }, [liveStatus, state.orbActive])
+      }, [liveStatus])
 
       const update = (key) => (value) => setForm((previous) => ({ ...previous, [key]: value }))
       const [micTesting, setMicTesting] = useState(false)
@@ -4221,17 +4688,22 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         micTestRef.current = null
       }, [])
 
-      /** 在被选中的屏幕上闪一下「当前录制屏幕」。 */
+      /** 在被选中的屏幕上闪一下「当前录制屏幕」：按钮右侧转圈，结果用行内小字提示。 */
       async function identifyScreenNow() {
+        if (identifyingScreen) return
+        setIdentifyingScreen(true)
+        setIdentifyNote(null)
         try {
           const payload = await requestJson('/screen/identify', { method: 'POST', body: { source: form.screenSource } })
           if (payload?.ok !== true) throw new Error(payload?.error ?? '屏幕识别失败')
-          notifySuccess(
-            '已在「' + String(payload?.label ?? '所选屏幕') + '」上显示提示',
-            '约 3 秒后自动消失；若没看到，请确认这块显示器在你当前视野内',
-          )
+          setIdentifyNote(`已在「${String(payload?.label ?? '所选屏幕')}」上显示提示（约 3 秒后消失）`)
+          window.setTimeout(() => {
+            if (mountedRef.current) setIdentifyNote(null)
+          }, 6000)
         } catch (error) {
           reportError(error, '屏幕识别失败')
+        } finally {
+          setIdentifyingScreen(false)
         }
       }
 
@@ -4331,7 +4803,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             chunks: outcome.total,
           })
           setFileStage('done')
-          notifySuccess('音频转写完成', `已识别 ${formatChars(text.length)}，可以生成 AI 纪要`)
         } catch (caught) {
           if (!alive()) return
           setFileStage('error')
@@ -4361,18 +4832,20 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         props.onOpenTextImport()
       }
 
-      function startLive() {
+      async function startLive() {
         // Urgent meeting: start first, name later. An empty title becomes the
         // automatic placeholder and the summarizer proposes a real one later.
         setLocalError(null)
         const wantScreen = form.screen === true
-        void startLiveRecording({
+        const started = await startLiveRecording({
           title: form.title.trim() === '' ? undefined : form.title.trim(),
           date: form.date || todayKey(),
           attendees: splitAttendees(form.attendees),
           screen: wantScreen,
           screenSource: form.screenSource ?? screenSources[0]?.id ?? 'desktop',
         })
+        // 成功开始录音：立刻收起弹窗，只保留桌面浮窗 / 页面录音条。
+        if (started === true) props.onClose()
       }
 
       function finishLiveAndClose() {
@@ -4616,6 +5089,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 : '打开麦克风边说边出字，关闭弹窗后仍在后台录音'),
             ),
           ),
+          h('div', { key: 'engine', className: 'dsm-hint' }, '本次转写引擎：' + transcribeEngineLabel(state.data?.settings?.transcribe?.provider)),
+          h('div', { key: 'consent', className: 'dsm-hint' }, '录音 / 录屏前请先告知参会人并取得同意；涉密会议请只用本地模型，不要切到云端转写。'),
                     tab === 'record'
             ? h(
               'div',
@@ -4708,8 +5183,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                     type: 'button',
                     className: 'dsm-rec-toggle dsm-rec-toggle--ghost',
                     title: '在被选中的屏幕上闪一下「当前录制屏幕」',
+                    disabled: identifyingScreen,
                     onClick: () => { void identifyScreenNow() },
-                  }, h(Icon, { name: 'screen', size: 12 }), h('span', null, '识别'))
+                  },
+                  h(Icon, { name: 'screen', size: 12 }),
+                  h('span', null, '识别'),
+                  identifyingScreen ? h('span', { className: 'dsm-spin dsm-spin--inline' }) : null)
                   : null,
                 h(
                   'button',
@@ -4724,6 +5203,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   h('span', null, form.screen === true ? '关闭' : '开启'),
                 ),
               ),
+              identifyNote !== null ? h('div', { className: 'dsm-hint', style: { gridColumn: '1 / -1' } }, identifyNote) : null,
               screenSourceError !== null ? h('div', { className: 'dsm-hint dsm-hint--warn', style: { gridColumn: '1 / -1' } }, '读取屏幕列表失败：' + screenSourceError) : null,
             )
             : null,
@@ -5156,9 +5636,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         h(MetaChip, {
           key: 'source',
           icon: meeting.autoImported ? 'folder' : 'doc',
-          label: meeting.autoImported ? '来源：自动入库' : `来源：${SOURCE_LABELS[meeting.sourceType] ?? '文本'}`,
+          label: meeting.autoImported ? '来源：自动识别' : `来源：${SOURCE_LABELS[meeting.sourceType] ?? '文本'}`,
           tone: 'brand',
-          title: meeting.autoImported ? '由自动入库从本机录制文件导入' : undefined,
+          title: meeting.autoImported ? '由自动识别从本机录制文件导入' : undefined,
         }),
         h(MetaChip, {
           key: 'attendees',
@@ -5184,30 +5664,30 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         { className: 'dsm-cover' },
         h(
           'div',
-          { className: 'dsm-cover-top' },
-          h('div', { className: 'dsm-eyebrow' }, '会议纪要 · 结构化纪要'),
+          { className: 'dsm-cover-head' },
+          h('h1', { className: 'dsm-cover-title' }, meeting.title || '未命名会议'),
           h(
             'div',
             { className: 'dsm-cover-actions' },
             h('button', {
               type: 'button',
-              className: 'dsm-btn dsm-btn--sm',
+              className: 'dsm-btn dsm-cover-btn',
               onClick: props.onEdit,
-            }, h(Icon, { name: 'edit', size: 12 }), h('span', null, '编辑信息')),
+            }, h(Icon, { name: 'edit', size: 14 }), h('span', null, '编辑信息')),
             props.onExport
               ? h(
                 'div',
                 { className: 'dsm-export' + (exportOpen ? ' dsm-export--open' : ''), ref: exportRef },
                 h('button', {
                   type: 'button',
-                  className: 'dsm-btn dsm-btn--sm',
+                  className: 'dsm-btn dsm-cover-btn',
                   onClick: () => setExportOpen((open) => open !== true),
                   disabled: props.exporting === true,
                   title: '导出为 HTML / Markdown / Word',
                 },
-                h(Icon, { name: 'download', size: 12 }),
+                h(Icon, { name: 'download', size: 14 }),
                 h('span', null, props.exporting === true ? '导出中…' : '导出'),
-                h(Icon, { name: 'chevron', size: 12 })),
+                h(Icon, { name: 'chevron', size: 13 })),
                 exportOpen
                   ? h(
                     'div',
@@ -5234,14 +5714,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             props.onDelete
               ? h('button', {
                 type: 'button',
-                className: 'dsm-btn dsm-btn--sm dsm-btn--danger',
+                className: 'dsm-btn dsm-cover-btn dsm-btn--danger',
                 onClick: props.onDelete,
                 title: '删除这场会议',
-              }, h(Icon, { name: 'trash', size: 12 }), h('span', null, '删除'))
+              }, h(Icon, { name: 'trash', size: 14 }), h('span', null, '删除'))
               : null,
           ),
         ),
-        h('h1', { className: 'dsm-cover-title' }, meeting.title || '未命名会议'),
         h('div', { className: 'dsm-meta-chips' }, ...chips),
         h(MeetingFiles, { meetingId: meeting.id, media: meeting.media }),
       )
@@ -5298,8 +5777,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     function TodoRow(props) {
-      const { todo, selected, onToggle, onPatch, calendarAvailable } = props
+      const { todo, selected, onToggle, onPatch, onDrop, calendarAvailable } = props
       const pushed = isPushed(todo)
+      const dropped = todo.dropped === true
       const [editing, setEditing] = useState(false)
       const [draft, setDraft] = useState(() => ({
         title: todo.title ?? '',
@@ -5381,7 +5861,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }
       return h(
         'tr',
-        { className: pushed ? 'dsm-todo dsm-todo--pushed' : 'dsm-todo' },
+        { className: 'dsm-todo' + (pushed ? ' dsm-todo--pushed' : '') + (dropped ? ' dsm-todo--dropped' : '') },
         h(
           'td',
           { className: 'dsm-col-check' },
@@ -5389,8 +5869,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             className: 'dsm-checkbox',
             type: 'checkbox',
             checked: selected,
-            disabled: pushed || !calendarAvailable,
-            title: pushed ? '已写入待办' : (!calendarAvailable ? 'DSH 待办不可用' : '选择后写入DSH 待办'),
+            disabled: pushed || dropped,
+            title: pushed ? '已写入待办' : (dropped ? '已弃用' : '选择后写入待办或弃用'),
             onChange: () => onToggle(todo.id),
           }),
         ),
@@ -5399,6 +5879,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           null,
           h('div', { className: 'dsm-todo-title' }, todo.title || '未命名待办'),
           todo.notes ? h('div', { className: 'dsm-todo-note' }, todo.notes) : null,
+          dropped ? h('div', { className: 'dsm-todo-note' }, '已弃用 · 可恢复') : null,
         ),
         h('td', null, todo.owner || '—'),
         h('td', null, todo.due || '—'),
@@ -5410,43 +5891,69 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         h(
           'td',
           null,
-          pushed
-            ? h(
-              'div',
-              null,
-              h('span', { className: 'dsm-status dsm-status--ok' }, h(Icon, { name: 'check', size: 11 }), h('span', null, '已写入待办')),
-              todo.calendarTaskId
-                ? h('span', { className: 'dsm-cal-id', title: `日历任务 ID：${todo.calendarTaskId}` }, todo.calendarTaskId)
-                : null,
-            )
-            : h('span', { className: 'dsm-status' }, '未写入'),
+          dropped
+            ? h('span', { className: 'dsm-status dsm-status--warn' }, '已弃用')
+            : (pushed
+              ? h(
+                'div',
+                null,
+                h('span', { className: 'dsm-status dsm-status--ok' }, h(Icon, { name: 'check', size: 11 }), h('span', null, '已写入待办')),
+                todo.calendarTaskId
+                  ? h('span', { className: 'dsm-cal-id', title: `日历任务 ID：${todo.calendarTaskId}` }, todo.calendarTaskId)
+                  : null,
+              )
+              : h('span', { className: 'dsm-status' }, '未写入')),
         ),
         h(
           'td',
           null,
-          h('button', {
-            type: 'button',
-            className: 'dsm-btn dsm-btn--sm dsm-btn--ghost',
-            onClick: begin,
-            title: pushed ? '已写入待办的修改不会同步到待办清单' : '编辑待办',
-          }, h(Icon, { name: 'edit', size: 11 }), h('span', null, '编辑')),
+          dropped
+            ? h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--sm dsm-btn--ghost',
+              onClick: () => { if (typeof onDrop === 'function') onDrop([todo.id], false) },
+              title: '恢复这条待办',
+            }, h(Icon, { name: 'refresh', size: 11 }), h('span', null, '恢复'))
+            : h(
+              'div',
+              { className: 'dsm-row-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dsm-btn dsm-btn--sm dsm-btn--ghost',
+                onClick: begin,
+                title: pushed ? '已写入待办的修改不会同步到待办清单' : '编辑待办',
+              }, h(Icon, { name: 'edit', size: 11 }), h('span', null, '编辑')),
+              pushed ? null : h('button', {
+                type: 'button',
+                className: 'dsm-btn dsm-btn--sm dsm-btn--ghost',
+                onClick: () => { if (typeof onDrop === 'function') onDrop([todo.id], true) },
+                title: '不再需要这条待办（可恢复）',
+              }, h(Icon, { name: 'close', size: 11 }), h('span', null, '弃用')),
+            ),
         ),
       )
     }
 
     function TodoSection(props) {
-      const { meeting, calendarAvailable, calendarError, onPatchTodo, onPushTodos } = props
+      const { meeting, calendarAvailable, calendarError, onPatchTodo, onPushTodos, onDropTodos, onRegenerateTodos } = props
       const summary = meeting.summary
       const todos = summary?.todos ?? []
+      const regenerating = props.todosRegenerating === true
       const [selected, setSelected] = useState(() => new Set())
       const [pushing, setPushing] = useState(false)
-      const pending = useMemo(() => todos.filter((todo) => !isPushed(todo)), [todos])
+      const [dropping, setDropping] = useState(false)
+      const dropped = useMemo(() => todos.filter((todo) => todo.dropped === true), [todos])
+      const pushedCount = todos.filter((todo) => isPushed(todo)).length
+      const pending = useMemo(() => todos.filter((todo) => !isPushed(todo) && todo.dropped !== true), [todos])
+      // 弃用的待办不进列表（底部保留「恢复全部弃用」入口）
+      const visibleTodos = useMemo(() => todos.filter((todo) => todo.dropped !== true), [todos])
       useEffect(() => {
         setSelected(new Set())
       }, [meeting.id])
       const selectedPending = pending.filter((todo) => selected.has(todo.id))
       const targetCount = selectedPending.length > 0 ? selectedPending.length : pending.length
       const allSelected = pending.length > 0 && selected.size === pending.length
+      const hasTranscript = typeof meeting.transcript === 'string' && meeting.transcript.trim() !== ''
       const toggle = (id) => {
         setSelected((previous) => {
           const next = new Set(previous)
@@ -5470,25 +5977,44 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           setPushing(false)
         }
       }
-      const calendarHint = calendarAvailable
-        ? (pending.length > 0
-          ? `已勾选 ${selectedPending.length > 0 ? selectedPending.length : 0} 条；不勾选时写入全部未写入待办（${pending.length} 条）`
-          : '所有待办都已写入待办')
-        : `DSH 待办不可用：${calendarError || '请确认 dsh-memory-evolve 插件已启用'}`
+      const drop = async () => {
+        if (selectedPending.length === 0 || typeof onDropTodos !== 'function') return
+        setDropping(true)
+        try {
+          const ok = await onDropTodos(selectedPending.map((todo) => todo.id), true)
+          if (ok) setSelected(new Set())
+        } finally {
+          setDropping(false)
+        }
+      }
+      const regenerate = () => {
+        if (typeof onRegenerateTodos === 'function' && !regenerating) onRegenerateTodos()
+      }
+      const calendarHint = [
+        pending.length > 0
+          ? `勾选后可写入待办或弃用；未写入 ${pending.length} 条`
+          : '所有待办都已处理',
+        dropped.length > 0 ? `已弃用 ${dropped.length} 条（可恢复）` : '',
+        calendarAvailable ? '' : `DSH 待办不可用：${calendarError || '请确认 dsh-memory-evolve 插件已启用'}（仍可弃用/重新生成）`,
+      ].filter(Boolean).join(' · ')
       return h(
         Section,
         {
           title: '待办事项',
           icon: 'check',
-          count: todos.length,
+          count: visibleTodos.length,
+          countSuffix: ' 条',
+          countTitle: '当前列表里的待办条数（不含已弃用）',
           card: true,
-          sub: summary ? `已写入 ${todos.length - pending.length} / ${todos.length}` : undefined,
+          sub: summary ? `已写入 ${pushedCount} / ${visibleTodos.length}${dropped.length > 0 ? ` · 已弃用 ${dropped.length}` : ''}` : undefined,
         },
         h(
           'div',
           { className: 'dsm-todo-card' },
-          todos.length === 0
-            ? h('div', { className: 'dsm-empty-table' }, 'AI 没有从这场会议中提取到待办事项。')
+          visibleTodos.length === 0
+            ? h('div', { className: 'dsm-empty-table' }, dropped.length > 0
+              ? `待办已全部处理（已弃用 ${dropped.length} 条，可在下方恢复全部）。`
+              : 'AI 没有从这场会议中提取到待办事项。可以点下方「重新生成待办」再试一次（转写较碎时容易漏抽）。')
             : h(
               'div',
               { className: 'dsm-table-wrap' },
@@ -5505,8 +6031,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                       className: 'dsm-checkbox',
                       type: 'checkbox',
                       checked: allSelected,
-                      disabled: pending.length === 0 || !calendarAvailable,
-                      title: '全选未写入的待办',
+                      disabled: pending.length === 0,
+                      title: '全选未写入且未弃用的待办',
                       onChange: toggleAll,
                     })),
                     h('th', null, '标题'),
@@ -5520,12 +6046,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 h(
                   'tbody',
                   null,
-                  ...todos.map((todo) => h(TodoRow, {
+                  ...visibleTodos.map((todo) => h(TodoRow, {
                     key: todo.id,
                     todo,
                     selected: selected.has(todo.id),
                     onToggle: toggle,
                     onPatch: onPatchTodo,
+                    onDrop: (ids, nextDropped) => { if (typeof onDropTodos === 'function') void onDropTodos(ids, nextDropped) },
                     calendarAvailable,
                   })),
                 ),
@@ -5540,6 +6067,31 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               calendarHint,
             ),
             h('span', { className: 'dsm-spacer' }),
+            dropped.length > 0
+              ? h('button', {
+                type: 'button',
+                className: 'dsm-btn dsm-btn--sm dsm-btn--ghost',
+                onClick: () => { if (typeof onDropTodos === 'function') void onDropTodos(dropped.map((todo) => todo.id), false) },
+                title: '把所有已弃用的待办恢复回列表',
+              }, h(Icon, { name: 'refresh', size: 12 }), h('span', null, `恢复全部弃用（${dropped.length}）`))
+              : null,
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--sm',
+              onClick: regenerate,
+              disabled: regenerating || !hasTranscript,
+              title: hasTranscript ? '只重新识别待办（保留已写入/已弃用状态）' : '还没有转写内容，无法重新生成待办',
+            }, regenerating
+              ? h('span', { className: 'dsm-spin', style: { width: 11, height: 11, borderWidth: 1.5 } })
+              : h(Icon, { name: 'refresh', size: 12 }),
+            h('span', null, regenerating ? '重新生成中…' : '重新生成待办')),
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--sm',
+              onClick: () => { void drop() },
+              disabled: selectedPending.length === 0 || dropping,
+              title: '把勾选的待办标记为弃用（不写入待办，可恢复）',
+            }, h(Icon, { name: 'close', size: 12 }), h('span', null, dropping ? '弃用中…' : `弃用（${selectedPending.length}）`)),
             h('button', {
               type: 'button',
               className: 'dsm-btn dsm-btn--primary',
@@ -5568,6 +6120,18 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           return label + String(segment?.text ?? '')
         }).join('\n')
       }
+      const retranscribe = props.retranscribe ?? null
+      const retranscribeRunning = retranscribe !== null && (retranscribe.status === 'running' || retranscribe.status === 'starting')
+      const retranscribeNote = (() => {
+        if (retranscribe === null) return null
+        if (retranscribeRunning) {
+          const total = Number(retranscribe.total) || 0
+          return '整段重转写进行中：' + (Number(retranscribe.done) || 0) + '/' + (total > 0 ? String(total) : '…') + ' 片；完成后自动刷新（录音较长时需要几分钟）'
+        }
+        if (retranscribe.status === 'error' && retranscribe.error) return '整段重转写失败：' + retranscribe.error
+        if (retranscribe.status === 'done' && retranscribe.note) return retranscribe.note
+        return null
+      })()
       const copy = async () => {
         try {
           await copyText(plainOf())
@@ -5594,6 +6158,20 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           onClick: () => setOpen((previous) => !previous),
           title: open ? '收起' : '展开全文',
         }, h('span', null, open ? '收起' : '展开'), h('span', { className: 'dsm-minutes-caret' + (open ? ' dsm-minutes-caret--up' : '') }, '⌄')),
+        props.onRetranscribe && props.hasAudio === true
+          ? h('button', {
+            key: 'retranscribe',
+            type: 'button',
+            className: 'dsm-minutes-action',
+            onClick: () => { if (typeof props.onRetranscribe === 'function') props.onRetranscribe() },
+            disabled: retranscribeRunning,
+            title: '用整场录音按 30 秒切片重新识别（较慢），修复实时 5 秒分片造成的碎片和漏字',
+          },
+          retranscribeRunning
+            ? h('span', { className: 'dsm-spin', style: { width: 11, height: 11, borderWidth: 1.5 } })
+            : h(Icon, { name: 'refresh', size: 12 }),
+          h('span', null, retranscribeRunning ? '重转写中…' : '整段重转写'))
+          : null,
       ]
       return h(
         Section,
@@ -5627,6 +6205,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             : h('div', { className: 'dsm-transcript-plain' }, text === '' ? '（暂无转写文本）' : text),
           speakerCount > 0
             ? h('div', { className: 'dsm-transcript-note' }, 'A/B/C/D 为按音色自动分组的估算结果，仅供参考；导入的音频文件暂不区分说话人。')
+            : null,
+          retranscribeNote !== null
+            ? h('div', { className: 'dsm-transcript-note' }, retranscribeNote)
             : null,
         ),
       )
@@ -5734,11 +6315,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const attendees = Array.isArray(meeting.attendees) ? meeting.attendees : []
       const summaryStartedAt = props.summarizing?.id === meeting.id ? props.summarizing.startedAt : null
       const keyPoints = Array.isArray(summary?.keyPoints) ? summary.keyPoints : []
-      const decisions = Array.isArray(summary?.decisions) ? summary.decisions : []
       const risks = Array.isArray(summary?.risks) ? summary.risks : []
       const sections = Array.isArray(summary?.sections) ? summary.sections : []
       const hasSummary = summary !== null && summary !== undefined
       const hasTranscript = typeof meeting.transcript === 'string' && meeting.transcript.trim() !== ''
+      const hasAudio = Array.isArray(meeting.media) && meeting.media.some((item) => item && item.kind === 'audio')
 
       return h(
         'article',
@@ -5804,27 +6385,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               ),
           )
           : null,
-        decisions.length > 0
-          ? h(
-            Section,
-            { title: '决策清单', icon: 'check', count: decisions.length },
-            h(
-              'div',
-              { className: 'dsm-cards' },
-              ...decisions.map((decision, index) => h(
-                'div',
-                { key: `${index}-${decision.text}`, className: 'dsm-decision' },
-                h('span', { className: 'dsm-decision-check' }, h(Icon, { name: 'check', size: 11, strokeWidth: 1.8 })),
-                h(
-                  'div',
-                  { className: 'dsm-decision-body' },
-                  h('div', { className: 'dsm-decision-text' }, decision.text),
-                  decision.owner ? h('div', { className: 'dsm-owner' }, `负责人：${decision.owner}`) : null,
-                ),
-              )),
-            ),
-          )
-          : null,
         hasSummary && Array.isArray(summary?.todos)
           ? h(TodoSection, {
             meeting,
@@ -5832,6 +6392,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             calendarError: props.calendarError,
             onPatchTodo: props.onPatchTodo,
             onPushTodos: props.onPushTodos,
+            onDropTodos: props.onDropTodos,
+            onRegenerateTodos: props.onRegenerateTodos,
+            todosRegenerating: props.todosRegenerating === true,
           })
           : null,
         typeof meeting.notes === 'string' && meeting.notes.trim() !== ''
@@ -5841,8 +6404,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             h('div', { className: 'dsm-notes' }, meeting.notes),
           )
           : null,
-        hasTranscript
-          ? h(TranscriptSection, { transcript: meeting.transcript, segments: meeting.transcriptSegments })
+        hasTranscript || hasAudio
+          ? h(TranscriptSection, {
+            transcript: meeting.transcript,
+            segments: meeting.transcriptSegments,
+            hasAudio,
+            retranscribe: props.retranscribe,
+            onRetranscribe: props.onRetranscribe,
+          })
           : null,
         attendees.length === 0
           ? null
@@ -5859,8 +6428,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         'div',
         { className: 'dsm-empty' },
         h('div', { className: 'dsm-empty-icon' }, h(Icon, { name: 'mic', size: 30, strokeWidth: 1.3 })),
-        h('div', { className: 'dsm-empty-title' }, '把会议变成可执行的纪要'),
-        h('div', { className: 'dsm-empty-sub' }, '录音或导入转写后，AI 会自动整理会议概述、决策事项与待办；确认后一键写入 DSH 待办。'),
+        h('div', { className: 'dsm-empty-title' }, '开完会，结论就能落地'),
+        h('div', { className: 'dsm-empty-sub' }, '不用边听边记。录音或导入转写，AI 帮你理清：定了什么、谁负责、何时完成；核对一眼，待办就进你的清单。'),
         h(
           'div',
           { className: 'dsm-entries' },
@@ -5974,7 +6543,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           className: 'dsm-settings-btn',
           label: '设置',
           onClick: handlers.settings,
-          title: '设置：生成纪要用哪个模型、自动入库开关与扫描',
+          title: '设置：生成纪要用哪个模型、自动识别开关与扫描',
         }),
       )
     }
@@ -6098,6 +6667,31 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [recordTab, setRecordTab] = useState('record')
       const [deleteOpen, setDeleteOpen] = useState(false)
       const [refreshing, setRefreshing] = useState(false)
+      const [todosRegenerating, setTodosRegenerating] = useState(false)
+      const [onboardingOpen, setOnboardingOpen] = useState(false)
+      const onboardingCheckedRef = useRef(false)
+      const [retranscribe, setRetranscribe] = useState(null)
+      const retranscribeTimer = useRef(null)
+
+      // 首次使用：数据加载完成后弹一次引导（模型 / 待办插件），看过就记住。
+      useEffect(() => {
+        if (onboardingCheckedRef.current) return
+        if (state.data === null || state.data === undefined) return
+        onboardingCheckedRef.current = true
+        try {
+          if (window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === '1') return
+        } catch {
+          // 隐私模式写不了 localStorage：本次照常提示。
+        }
+        setOnboardingOpen(true)
+      }, [state.data])
+
+      const stopRetranscribePolling = () => {
+        if (retranscribeTimer.current !== null) {
+          window.clearInterval(retranscribeTimer.current)
+          retranscribeTimer.current = null
+        }
+      }
 
       useEffect(() => {
         ensureStyle()
@@ -6109,6 +6703,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         return () => {
           window.removeEventListener('focus', onVisible)
           document.removeEventListener('visibilitychange', onVisible)
+          if (retranscribeTimer.current !== null) window.clearInterval(retranscribeTimer.current)
         }
       }, [])
 
@@ -6121,6 +6716,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const calendarError = calendar !== null && calendar.available === false
         ? (typeof calendar.error === 'string' ? calendar.error : 'DSH 待办不可用')
         : ''
+      const transcribeSettings = state.data?.settings?.transcribe ?? null
+      const cloudConfigured = transcribeSettings !== null && (() => {
+        const cloud = transcribeSettings.cloud ?? {}
+        return Object.values(cloud).some((entry) => entry !== null && typeof entry === 'object'
+          && Object.values(entry).some((value) => typeof value === 'string' && value.trim() !== ''))
+      })()
+      const onboardingModelReady = speechAvailable || state.data?.transcribe?.ready === true || cloudConfigured
+      const onboardingTodoReady = calendarAvailable
+      const dismissOnboarding = (openSettings) => {
+        try { window.localStorage.setItem(ONBOARDING_STORAGE_KEY, '1') } catch { /* ignore */ }
+        setOnboardingOpen(false)
+        if (openSettings === true) setDialog('auto')
+      }
 
       const filtered = useMemo(() => {
         const keyword = search.trim().toLowerCase()
@@ -6190,6 +6798,37 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
+      const dropTodos = async (todoIds, dropped) => {
+        if (!selected) return false
+        const ids = Array.isArray(todoIds) ? todoIds.filter((id) => typeof id === 'string' && id !== '') : []
+        if (ids.length === 0) return false
+        try {
+          for (const todoId of ids) await updateMeetingTodo(selected.id, todoId, { dropped })
+          notifySuccess(dropped ? `已弃用 ${ids.length} 条待办` : `已恢复 ${ids.length} 条待办`, '')
+          return true
+        } catch (caught) {
+          reportError(caught, dropped ? '弃用待办失败' : '恢复待办失败')
+          return false
+        }
+      }
+
+      const regenerateTodos = async () => {
+        if (!selected || todosRegenerating) return
+        setTodosRegenerating(true)
+        try {
+          const payload = await requestJson(`/meetings/${encodeURIComponent(selected.id)}/todos/regenerate`, { method: 'POST' })
+          if (payload.meeting) commit({ meeting: payload.meeting, selectedId: selected.id })
+          await refreshList()
+          const added = Number(payload.added) || 0
+          if (added > 0) notifySuccess(`重新生成待办完成`, `新增 ${added} 条；原有待办与已弃用状态都保留`)
+          else notify('info', '没有识别到新的待办', '可先「整段重转写」让文本更完整，再重新生成')
+        } catch (caught) {
+          reportError(caught, '重新生成待办失败')
+        } finally {
+          setTodosRegenerating(false)
+        }
+      }
+
       const pushTodos = async (todoIds) => {
         if (!selected) return null
         try {
@@ -6197,7 +6836,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           const created = Array.isArray(payload.created) ? payload.created : []
           notifySuccess(
             `已写入待办 ${created.length} 条`,
-            created.slice(0, 3).map((item) => `${item.title} → ${item.calendarTaskId}`).join('；') || '待办已同步',
+            `${created.length > 0 ? '写入 DSH「工作」轨；到 DSH「待办」面板切到「全部」或「工作」就能看到。' : '这些待办之前已写入过。'}${
+              created.length > 0 ? ' ' + created.slice(0, 2).map((item) => item.title).join('；') : ''
+            }`,
           )
           return payload
         } catch (caught) {
@@ -6218,13 +6859,60 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
+      /** 整段重转写：POST 启动后台任务，每 1.5 秒查进度；完成后刷新会议详情。 */
+      const startRetranscribe = async () => {
+        const meeting = selected
+        if (!meeting || retranscribe?.status === 'running' || retranscribe?.status === 'starting') return
+        const id = meeting.id
+        setRetranscribe({ meetingId: id, status: 'starting', done: 0, total: 0, error: null, note: null })
+        try {
+          const payload = await requestJson(`/meetings/${encodeURIComponent(id)}/retranscribe`, { method: 'POST' })
+          const job = payload?.job ?? {}
+          setRetranscribe({ meetingId: id, status: 'running', done: Number(job.done) || 0, total: Number(job.total) || 0, error: null, note: null })
+          stopRetranscribePolling()
+          retranscribeTimer.current = window.setInterval(async () => {
+            try {
+              const statusPayload = await requestJson(`/meetings/${encodeURIComponent(id)}/retranscribe`)
+              const current = statusPayload?.job ?? {}
+              const status = typeof current.status === 'string' ? current.status : 'running'
+              setRetranscribe({
+                meetingId: id,
+                status,
+                done: Number(current.done) || 0,
+                total: Number(current.total) || 0,
+                error: typeof current.error === 'string' ? current.error : null,
+                note: typeof current.note === 'string' ? current.note : null,
+              })
+              if (status !== 'running') {
+                stopRetranscribePolling()
+                if (status === 'done') {
+                  await refreshAll()
+                  await loadMeeting(id, { quiet: true }).catch(() => {})
+                } else if (current.error) {
+                  notify('warn', '整段重转写未完成', current.error)
+                }
+              }
+            } catch (error) {
+              stopRetranscribePolling()
+              setRetranscribe((previous) => (previous === null ? previous : { ...previous, status: 'error', error: messageOf(error) }))
+            }
+          }, 1500)
+        } catch (error) {
+          setRetranscribe({ meetingId: id, status: 'error', done: 0, total: 0, error: messageOf(error), note: null })
+          notify('warn', '整段重转写启动失败', messageOf(error))
+        }
+      }
+
       const handlers = {
         newMeeting: () => setDialog('new'),
         record: (mode) => {
           setRecordTab(mode === 'file' ? 'file' : 'record')
           const live = snapshot.live ?? initialLiveState()
           if (liveIsActive(live)) {
-            setDialog('record')
+            // 录音中不再弹白色弹窗：Windows 由桌面浮窗控制，其它平台用页面底部录音条。
+            notify('info', '录音进行中', snapshot.orbActive === true
+              ? '用桌面浮窗（球或气泡）暂停 / 停止；结束后会自动回到纪要'
+              : '用页面底部的录音条暂停 / 停止；结束后会自动回到纪要')
             return
           }
           if (live.status === 'done' || live.status === 'error') clearLiveRecording()
@@ -6243,7 +6931,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           if (refreshing === true) return
           setRefreshing(true)
           void refreshAll()
-            .then(() => { notifySuccess('已刷新', '会议列表与当前会议详情已重新拉取') })
+            .then(() => {})
             .catch(() => {})
             .finally(() => { setRefreshing(false) })
         },
@@ -6302,7 +6990,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               exporting: state.exporting !== null,
               onPatchTodo: patchTodo,
               onPushTodos: pushTodos,
+              onDropTodos: dropTodos,
+              onRegenerateTodos: regenerateTodos,
+              todosRegenerating,
               recordDisabled: !speechAvailable,
+              retranscribe: retranscribe !== null && retranscribe.meetingId === selected.id ? retranscribe : null,
+              onRetranscribe: startRetranscribe,
             })
         content = h(
           'div',
@@ -6349,6 +7042,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         content,
         dialog === 'new'
           ? h(NewMeetingModal, { onClose: closeDialog })
+          : null,
+        onboardingOpen
+          ? h(OnboardingModal, {
+            modelReady: onboardingModelReady,
+            todoReady: onboardingTodoReady,
+            onClose: () => dismissOnboarding(false),
+            onOpenSettings: () => dismissOnboarding(true),
+          })
           : null,
         dialog === 'edit' && selected !== null
           ? h(EditMeetingModal, { meeting: selected, onClose: closeDialog })
@@ -6491,3 +7192,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     return module.exports
   },
 })
+
+
+
+
+
+
+
+
+

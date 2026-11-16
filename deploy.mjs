@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(HERE, 'src');
-const PKG_NAME = 'dsh-plugin-meeting-minutes';
+const PKG_NAME = 'dsh-meeting-live';
 
 function parseArgs(argv) {
   const options = { profile: 'desktop', dir: null, dryRun: false, backup: true };
@@ -52,6 +52,11 @@ function copyTree(source, target) {
     const to = path.join(target, entry.name);
     if (entry.isDirectory()) count += copyTree(from, to);
     else {
+      // 线上文件如果是只读（例如从聊天附件复制进来、继承了 ReadOnly 属性），
+      // 直接 copyFile 会 EPERM；先尽量去掉只读位再覆盖。
+      if (fs.existsSync(to)) {
+        try { fs.chmodSync(to, 0o666); } catch { /* 受系统保护时保持原样，让下面的 copy 报真实错误 */ }
+      }
       fs.copyFileSync(from, to);
       count += 1;
     }

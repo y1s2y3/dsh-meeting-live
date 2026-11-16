@@ -8,7 +8,7 @@
  * and it stores commands the orb sends back until the next heartbeat picks them
  * up.
  *
- * @module dsh-plugin-meeting-minutes/live-mirror
+ * @module dsh-meeting-live/live-mirror
  */
 
 /** Statuses that mean "a recording session is live". */
@@ -29,6 +29,10 @@ export function createLiveMirror() {
   let lastText = ''
   /** 0..1 的实时音量（麦克风电平），用于浮球的说话动效。 */
   let level = 0
+  /** 可切换的音频输入设备：`[{ id, label }]`，由浏览器在心跳里带上。 */
+  let devices = []
+  /** 当前选中的输入设备 id（空串 = 系统默认）。 */
+  let deviceId = ''
   let updatedAt = Date.now()
   /** Only the newest command matters: an older pause must not fire after a stop. */
   let pendingCommand = null
@@ -63,6 +67,13 @@ export function createLiveMirror() {
       if (Number.isFinite(Number(payload.level))) {
         level = Math.min(1, Math.max(0, Number(payload.level)))
       }
+      if (Array.isArray(payload.devices)) {
+        devices = payload.devices
+          .filter((item) => item && typeof item.id === 'string' && item.id !== '')
+          .slice(0, 30)
+          .map((item) => ({ id: item.id, label: typeof item.label === 'string' && item.label !== '' ? item.label : item.id }))
+      }
+      if (typeof payload.deviceId === 'string') deviceId = payload.deviceId
       if (TERMINAL_STATUSES.has(status)) {
         if (status === 'idle') {
           meetingId = null
@@ -72,6 +83,8 @@ export function createLiveMirror() {
           chars = 0
           lastText = ''
           level = 0
+          devices = []
+          deviceId = ''
         }
         // A finished session never keeps an unclaimed command.
         pendingCommand = null
@@ -81,9 +94,16 @@ export function createLiveMirror() {
 
     /** Queue a command from the orb; the browser drains it on its next heartbeat. */
     queueCommand(command) {
-      if (command !== 'pause' && command !== 'resume' && command !== 'stop') return false
-      pendingCommand = command
-      return true
+      if (command === 'pause' || command === 'resume' || command === 'stop') {
+        pendingCommand = command
+        return true
+      }
+      // 浮窗切换输入设备：`switch-input:<deviceId>`（deviceId 允许包含任意字符，只要求非空）
+      if (typeof command === 'string' && command.startsWith('switch-input:') && command.length > 'switch-input:'.length) {
+        pendingCommand = command
+        return true
+      }
+      return false
     },
 
     /** Read and clear the pending command. */
@@ -105,6 +125,8 @@ export function createLiveMirror() {
         chars,
         lastText,
         level,
+        devices,
+        deviceId,
         updatedAt,
       }
     },

@@ -4,7 +4,7 @@
  * 存储位置：meeting-minutes.json 的 `settings` 字段（与会议数据同一个文件）。
  * 这里只做"归一化 + 校验 + 默认值"，读写交给 store。
  *
- * @module dsh-plugin-meeting-minutes/settings
+ * @module dsh-meeting-live/settings
  */
 
 /** 可选的语音转写引擎。 */

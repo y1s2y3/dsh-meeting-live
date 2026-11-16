@@ -7,7 +7,7 @@
  * `fetch`. Everything is loopback-only, same-origin, and JSON in/JSON out — the
  * transcription route is the single binary exception (canonical 16kHz WAV).
  *
- * @module dsh-plugin-meeting-minutes/server
+ * @module dsh-meeting-live/server
  */
 
 import { formatMoment, isGenericTitle, localDay, projectMeeting, todoProgress } from './model.js'
@@ -34,12 +34,74 @@ import { existsSync, readdirSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
+
+const execFileAsync = promisify(execFile)
+
+/** 本文件所在目录；插件资源（示例图等）在其上一级 resources/ 里。 */
+const HERE = dirname(fileURLToPath(import.meta.url))
+const RESOURCES_DIR = join(HERE, '..', 'resources')
 
 /** Registered prefix; the client builds its URLs from the same constant. */
 export const ROUTE_PREFIX = '/dsh-meeting'
 
-/** JSON response helper. */
+/** 把任意文本包成 PowerShell 单引号字符串（内部单引号翻倍）。 */
+function psQuote(text) {
+  return `'${String(text ?? '').replace(/'/g, "''")}'`
+}
+
+/**
+ * 弹系统「选择文件夹」对话框，返回绝对路径；用户取消时返回空字符串。
+ * Windows 用 PowerShell + FolderBrowserDialog（用一个不可见的置顶宿主窗口，
+ * 避免对话框弹到 DSH 窗口后面），macOS 用 osascript 的 choose folder。
+ * @param title - 对话框说明文字。
+ */
+async function pickFolder(title) {
+  const prompt = typeof title === 'string' && title.trim() !== '' ? title.trim() : '选择文件夹'
+  if (process.platform === 'win32') {
+    const script = [
+      'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
+      '$owner = New-Object System.Windows.Forms.Form',
+      '$owner.Text = "选择目录"',
+      '$owner.TopMost = $true',
+      '$owner.ShowInTaskbar = $false',
+      '$owner.MinimizeBox = $false',
+      '$owner.MaximizeBox = $false',
+      '$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen',
+      '$owner.Width = 1',
+      '$owner.Height = 1',
+      '$owner.Opacity = 0',
+      '$owner.Show() | Out-Null',
+      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+      `$dialog.Description = ${psQuote(prompt)}`,
+      '$dialog.ShowNewFolderButton = $false',
+      'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }',
+      '$owner.Close()',
+    ].join('\n')
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { timeout: 300_000, windowsHide: true, maxBuffer: 1024 * 1024 },
+    )
+    return String(stdout ?? '').trim()
+  }
+  if (process.platform === 'darwin') {
+    const script = `POSIX path of (choose folder with prompt ${JSON.stringify(prompt)})`
+    try {
+      const { stdout } = await execFileAsync('osascript', ['-e', script], { timeout: 300_000 })
+      return String(stdout ?? '').trim().replace(/\/+$/, '')
+    } catch (error) {
+      const stderr = String(error?.stderr ?? '')
+      if (/User canceled|-128/.test(stderr)) return ''
+      throw error
+    }
+  }
+  throw new Error('当前系统不支持自动选择目录，请手动输入路径')
+}
+
+/** JSON 响应 helper。 */
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
@@ -81,6 +143,42 @@ function safeMediaName(name, fallback) {
   const text = String(name ?? '').trim()
   const base = text === '' ? fallback : text
   return base.replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 120)
+}
+
+/** 二进制响应（图片等）。 */
+function sendBinary(res, status, bytes, mime) {
+  res.writeHead(status, {
+    'content-type': mime,
+    'cache-control': 'no-store',
+    'content-length': bytes.length,
+  })
+  res.end(bytes)
+}
+
+/**
+ * 按文件头识别图片格式。**不信任扩展名**——用户把 JPEG 存成 .png、
+ * 或系统给出的名字不规范时，也能正确显示（这正是「PNG 提示格式不对」的常见原因）。
+ * @param bytes - Buffer。
+ * @returns `{ mime, ext }` 或 null。
+ */
+export function detectImageType(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 8) return null
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return { mime: 'image/png', ext: 'png' }
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { mime: 'image/jpeg', ext: 'jpg' }
+  }
+  if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
+    return { mime: 'image/webp', ext: 'webp' }
+  }
+  const head6 = bytes.length >= 6 ? bytes.toString('ascii', 0, 6) : ''
+  if (head6 === 'GIF87a' || head6 === 'GIF89a') return { mime: 'image/gif', ext: 'gif' }
+  const head = bytes.toString('utf8', 0, Math.min(400, bytes.length)).trimStart().toLowerCase()
+  if (head.startsWith('<svg') || (head.startsWith('<?xml') && head.includes('<svg'))) {
+    return { mime: 'image/svg+xml', ext: 'svg' }
+  }
+  return null
 }
 
 /** 缓存 ffmpeg 路径：PATH 里优先，其次 winget / 常见安装目录。 */
@@ -191,13 +289,140 @@ async function readRawBody(req, limit = 16 * 1024 * 1024) {
     if (size > limit) throw new Error(`音频片段过大（超过 ${Math.round(limit / 1024 / 1024)}MB），请缩短切片长度。`)
     chunks.push(chunk)
   }
-  return new Uint8Array(Buffer.concat(chunks))
+  // 必须返回 Buffer：本地 Paraformer 引擎（decodeWavToSamples）用 Buffer.isBuffer 判定，
+  // 之前返回 new Uint8Array(...) 会让每个 5 秒分片都报「音频数据无效」，整场录音被打断。
+  return Buffer.concat(chunks)
+}
+
+/**
+ * 录音结束后会整段重跑「说话人分离 + 逐段识别」，但安静/远场录音上它可能只认出
+ * 寥寥几句。**不能**用它直接覆盖已有的流式转写：实测一场 18 分钟会议被 2 行（19 字）
+ * 覆盖掉 174 段已识别内容。只有新结果不显著短于旧转写时才替换。
+ */
+export function shouldUseDiarizedTranscript(currentText, analyzedText) {
+  const current = String(currentText ?? '').trim()
+  const next = String(analyzedText ?? '').trim()
+  if (next === '') return false
+  if (current === '') return true
+  const currentChars = current.replace(/\s+/g, '').length
+  const nextChars = next.replace(/\s+/g, '').length
+  return nextChars >= Math.max(80, Math.round(currentChars * 0.7))
 }
 
 /** Only the loopback interface may reach these routes. */
 function isLoopback(req) {
   const address = req.socket?.remoteAddress ?? ''
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+}
+
+/* ── 整段重转写（把整场录音按 30 秒切片重新识别，修复 5 秒分片的碎片/漏字） ── */
+const RETRANSCRIBE_SLICE_SECONDS = 30
+/** 进行中的整段重转写任务：meetingId → { status, done, total, chars, error, note } */
+const retranscribeJobs = new Map()
+
+/** 按帧数切出整段重转写的分片范围（最后一片可能不足 30 秒）。 */
+export function planRetranscribeSlices(totalFrames, sampleRate = 16000, sliceSeconds = RETRANSCRIBE_SLICE_SECONDS) {
+  const frames = Math.max(0, Math.floor(Number(totalFrames) || 0))
+  const rate = Number(sampleRate) > 0 ? Number(sampleRate) : 16000
+  const step = Math.max(1, Math.round(rate * (Number(sliceSeconds) > 0 ? Number(sliceSeconds) : RETRANSCRIBE_SLICE_SECONDS)))
+  const slices = []
+  for (let start = 0; start < frames; start += step) {
+    slices.push({ startFrame: start, endFrame: Math.min(frames, start + step), at: Math.round(start / rate) })
+  }
+  return slices
+}
+
+/** 把各分片文本合并成整段转写（丢弃空片，一行一片）。 */
+export function mergeRetranscribeTexts(texts) {
+  const lines = []
+  for (const raw of Array.isArray(texts) ? texts : []) {
+    const text = String(raw ?? '').replace(/\s+/g, ' ').trim()
+    if (text !== '') lines.push(text)
+  }
+  return lines.join('\n')
+}
+
+/** Float32（[-1,1]，16k 单声道）→ PCM16 WAV Buffer。 */
+function encodePcm16Wav(samples, sampleRate = 16000) {
+  const data = Buffer.alloc(samples.length * 2)
+  for (let index = 0; index < samples.length; index += 1) {
+    const value = Math.max(-1, Math.min(1, Number(samples[index]) || 0))
+    data.writeInt16LE(Math.round(value < 0 ? value * 0x8000 : value * 0x7fff), index * 2)
+  }
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0, 'ascii')
+  header.writeUInt32LE(36 + data.length, 4)
+  header.write('WAVE', 8, 'ascii')
+  header.write('fmt ', 12, 'ascii')
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(1, 22)
+  header.writeUInt32LE(sampleRate, 24)
+  header.writeUInt32LE(sampleRate * 2, 28)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write('data', 36, 'ascii')
+  header.writeUInt32LE(data.length, 40)
+  return Buffer.concat([header, data])
+}
+
+/** 后台跑完一整场录音的重转写：逐片识别，再决定是否替换现有转写。 */
+async function runRetranscribeJob({ deps, store, meetingId, audioPath, logger }) {
+  const job = retranscribeJobs.get(meetingId)
+  if (job === undefined) return
+  try {
+    const bytes = await readFile(audioPath)
+    const decoded = deps.paraformer.decodeWavToSamples(bytes)
+    const rate = Number(decoded?.sampleRate) > 0 ? Number(decoded.sampleRate) : 16000
+    const samples = decoded?.samples ?? new Float32Array(0)
+    const slices = planRetranscribeSlices(samples.length, rate)
+    job.total = slices.length
+    const rows = []
+    for (const slice of slices) {
+      const wav = encodePcm16Wav(samples.subarray(slice.startFrame, slice.endFrame), rate)
+      let text = ''
+      try {
+        const result = await deps.paraformer.transcribeWav(wav)
+        text = typeof result?.text === 'string' ? result.text.trim() : ''
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const benign = message === '语音识别没有识别出任何文字'
+        if (!benign) logger?.warn?.(`meeting-minutes: retranscribe slice failed: ${message}`)
+      }
+      if (text !== '') rows.push({ at: slice.at, text })
+      job.done += 1
+    }
+    const merged = mergeRetranscribeTexts(rows.map((row) => row.text))
+    const mergedChars = merged.replace(/\s+/g, '').length
+    const current = store.get(meetingId)
+    const currentChars = String(current?.transcript ?? '').replace(/\s+/g, '').length
+    if (mergedChars === 0) {
+      job.status = 'error'
+      job.error = '整段重转写没有识别出文字，已保留原转写'
+      return
+    }
+    // 整段重转写是为了更连贯，但也不能把长转写换成一小段；明显变短时保留原转写。
+    if (currentChars > 0 && mergedChars < Math.max(80, Math.round(currentChars * 0.6))) {
+      job.status = 'done'
+      job.chars = mergedChars
+      job.note = '新识别内容偏少，已保留原转写'
+      logger?.warn?.(`meeting-minutes: retranscribe result too short (${mergedChars} vs ${currentChars} chars); keeping the existing transcript`)
+      return
+    }
+    await store.patch(meetingId, {
+      transcript: merged,
+      transcriptSegments: rows.map((row) => ({ speaker: '', text: row.text, at: row.at })),
+      transcriptSeconds: Math.round(samples.length / rate),
+    })
+    job.status = 'done'
+    job.chars = mergedChars
+    job.note = null
+    logger?.info?.(`meeting-minutes: retranscribe done (${mergedChars} chars, ${job.done} slices)`)
+  } catch (error) {
+    job.status = 'error'
+    job.error = error instanceof Error ? error.message : String(error)
+    logger?.warn?.(`meeting-minutes: retranscribe failed: ${job.error}`)
+  }
 }
 
 /** Build the `/state` payload the panel renders. */
@@ -324,12 +549,34 @@ export function registerRoutes(ctx, deps) {
       await store.load()
 
       if (segments.length === 1 && segments[0] === 'health') {
-        sendJson(res, 200, { ok: true, plugin: 'dsh-plugin-meeting-minutes', file: store.file })
+        sendJson(res, 200, { ok: true, plugin: 'dsh-meeting-live', file: store.file })
         return
       }
 
       if (segments.length === 1 && segments[0] === 'state' && method === 'GET') {
         sendJson(res, 200, await buildState(deps))
+        return
+      }
+
+      // 插件内置示意图：只允许 resources/ 下的简单文件名，避免路径穿越。
+      if (segments.length === 2 && segments[0] === 'assets' && method === 'GET') {
+        const name = segments[1]
+        if (!/^[a-z0-9][a-z0-9-]*\.(png|jpg|jpeg|webp|gif|svg)$/i.test(name)) {
+          sendJson(res, 400, { ok: false, error: '图片名不合法' })
+          return
+        }
+        const file = join(RESOURCES_DIR, name)
+        if (!existsSync(file)) {
+          sendJson(res, 404, { ok: false, error: `图片不存在：${name}` })
+          return
+        }
+        const bytes = await readFile(file)
+        const type = detectImageType(bytes)
+        if (type === null) {
+          sendJson(res, 415, { ok: false, error: '图片格式无法识别' })
+          return
+        }
+        sendBinary(res, 200, bytes, type.mime)
         return
       }
 
@@ -345,24 +592,33 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
+      if (segments.length === 2 && segments[0] === 'dialog' && segments[1] === 'pick-dir' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const picked = await pickFolder(typeof body?.title === 'string' ? body.title : '')
+        sendJson(res, 200, { ok: true, path: picked })
+        return
+      }
+
       if (segments.length === 2 && segments[0] === 'auto-ingest' && segments[1] === 'status' && method === 'GET') {
         sendJson(res, 200, { ok: true, autoIngest: autoIngest === undefined ? null : autoIngest.status() })
         return
       }
 
       if (segments.length === 2 && segments[0] === 'auto-ingest' && segments[1] === 'scan' && method === 'POST') {
-        if (autoIngest === undefined) throw new Error('自动入库不可用')
+        if (autoIngest === undefined) throw new Error('自动识别不可用')
         void autoIngest.scanNow().catch((error) => logger?.warn?.(error))
         sendJson(res, 200, { ok: true, autoIngest: autoIngest.status() })
         return
       }
 
       if (segments.length === 1 && segments[0] === 'auto-ingest' && method === 'POST') {
-        if (autoIngest === undefined) throw new Error('自动入库不可用')
+        if (autoIngest === undefined) throw new Error('自动识别不可用')
         const body = await readJsonBody(req)
         const autoIngestStatus = await autoIngest.setConfig({
           ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
           ...(body.tencent === undefined ? {} : { tencent: body.tencent }),
+          ...(body.tencentDir === undefined ? {} : { tencentDir: body.tencentDir }),
+          ...(body.dirsEnabled === undefined ? {} : { dirsEnabled: body.dirsEnabled }),
           ...(Array.isArray(body.dirs) ? { dirs: body.dirs } : {}),
         })
         sendJson(res, 200, { ok: true, autoIngest: autoIngestStatus })
@@ -721,14 +977,21 @@ export function registerRoutes(ctx, deps) {
         } catch (error) {
           // 实时转写是每 5 秒切一片滚动送识别的；某一片里没有可识别语音
           // （静音、环境噪声、说话太轻、刚点录音还没开口）属于正常现象，
-          // 上游把它当致命错误会让整场录音当场中断，这里降级成空结果继续。
-          if (!(error instanceof Error) || error.message !== '语音识别没有识别出任何文字') {
+          // 识别服务把它当致命错误会让整场录音当场中断，这里降级成空结果继续。
+          // 另外个别分片可能因请求被中断、音频头不完整而解码失败，同理按空结果处理。
+          const failureMessage = error instanceof Error ? error.message : String(error)
+          const benignFailure = failureMessage === '语音识别没有识别出任何文字'
+            || failureMessage === '音频数据无效'
+            || failureMessage === '音频数据不是 WAV 格式'
+            || failureMessage === '只支持 16bit PCM WAV'
+            || failureMessage === '音频数据里没有找到 PCM 数据段'
+          if (!benignFailure) {
             // 真故障写进宿主日志，便于事后定位（原插件在这里静默抛出）。
-            logger?.warn?.(`meeting-minutes: transcribe failed: ${error instanceof Error ? error.message : String(error)}`)
+            logger?.warn?.(`meeting-minutes: transcribe failed: ${failureMessage}`)
             throw error
           }
           const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
-          logger?.info?.(`meeting-minutes: chunk had no speech (${audioSeconds.toFixed(1)}s); keeping the session`)
+          logger?.info?.(`meeting-minutes: chunk had no usable audio (${audioSeconds.toFixed(1)}s, ${failureMessage}); keeping the session`)
           result = { text: '', audioSeconds: Math.round(audioSeconds * 100) / 100, inferenceSeconds: 0 }
         }
         const updated = await store.appendTranscript(id, result.text, result.audioSeconds)
@@ -740,6 +1003,33 @@ export function registerRoutes(ctx, deps) {
           transcript: updated?.transcript ?? '',
           transcriptSeconds: updated?.transcriptSeconds ?? 0,
         })
+        return
+      }
+
+      // 整段重转写：POST 启动（异步），GET 查进度。用于修复实时 5 秒分片造成的碎片/漏字。
+      if (segments.length === 3 && segments[2] === 'retranscribe' && (method === 'POST' || method === 'GET')) {
+        const meeting = requireMeeting(store, id)
+        if (method === 'GET') {
+          const job = retranscribeJobs.get(id)
+          sendJson(res, 200, { ok: true, job: job ? { ...job } : { status: 'idle', done: 0, total: 0 } })
+          return
+        }
+        const audio = (Array.isArray(meeting.media) ? meeting.media : [])
+          .find((item) => item && item.kind === 'audio' && typeof item.path === 'string' && existsSync(item.path))
+        if (audio === undefined) throw new Error('这场会议没有可用的录音文件，无法整段重转写')
+        if (deps.paraformer === undefined || deps.paraformer === null || typeof deps.paraformer.transcribeWav !== 'function'
+          || deps.paraformer.available?.() !== true) {
+          throw new Error('本地 Paraformer 模型未就绪，无法整段重转写')
+        }
+        const running = retranscribeJobs.get(id)
+        if (running !== undefined && running.status === 'running') {
+          sendJson(res, 200, { ok: true, job: { ...running } })
+          return
+        }
+        const job = { status: 'running', done: 0, total: 0, chars: 0, error: null, note: null, startedAt: Date.now() }
+        retranscribeJobs.set(id, job)
+        sendJson(res, 200, { ok: true, job: { ...job } })
+        void runRetranscribeJob({ deps, store, meetingId: id, audioPath: audio.path, logger })
         return
       }
 
@@ -766,14 +1056,22 @@ export function registerRoutes(ctx, deps) {
             throw new Error('DSH 待办不可用：未找到待办存储（~/.dsh/memories）')
           }
           const wanted = todoIds === undefined ? null : new Set(todoIds)
-          const targets = (meeting.todos ?? []).filter((todo) => wanted === null || wanted.has(todo.id))
+          const targets = (meeting.summary?.todos ?? []).filter((todo) => wanted === null || wanted.has(todo.id))
           for (const todo of targets) {
             const title = String(todo.title ?? '').trim()
             if (title === '') continue
             const owner = String(todo.owner ?? '').trim()
-            const text = owner === '' ? title : `${title}（负责人：${owner}）`
+            const due = typeof todo.due === 'string' ? todo.due.trim() : ''
+            const notes = String(todo.notes ?? '').trim()
+            // 保持单行：DSH 待办卡片遇到多行会多渲染一段正文，样式和原来不一致。
+            // 负责人/截止/备注用括号内联，信息不丢、外观不变。
+            const extras = []
+            if (owner !== '') extras.push(`负责人：${owner}`)
+            if (due !== '') extras.push(`截止：${due}`)
+            if (notes !== '') extras.push(`备注：${notes.length > 60 ? notes.slice(0, 60) + '…' : notes}`)
+            const text = extras.length > 0 ? `${title}（${extras.join('；')}）` : title
             const added = dshTodo.add(text, {
-              due: typeof todo.due === 'string' && todo.due !== '' ? todo.due : undefined,
+              due: due !== '' ? due : undefined,
               quadrant: todo.priority === 'high' ? 'q1' : (todo.priority === 'low' ? 'q4' : 'q2'),
               cat: '会议纪要',
             })
@@ -809,6 +1107,45 @@ export function registerRoutes(ctx, deps) {
           meeting: updated,
           calendar: calendarStatus,
           progress: todoProgress(updated),
+        })
+        return
+      }
+
+      // 只重新生成待办：保留已写入/已弃用的旧条目，只追加模型新识别出的行动项。
+      if (segments.length === 4 && segments[2] === 'todos' && segments[3] === 'regenerate' && method === 'POST') {
+        const meeting = requireMeeting(store, id)
+        if (meeting.summary === null || meeting.summary === undefined) {
+          throw new Error('这场会议还没有 AI 纪要，无法重新生成待办')
+        }
+        if (deps.summarizer === undefined || deps.summarizer === null || typeof deps.summarizer.extractTodos !== 'function') {
+          throw new Error('总结模型不可用，无法重新生成待办')
+        }
+        const settings = store.settings
+        const extracted = await deps.summarizer.extractTodos(meeting, {
+          selection: store.summaryModel,
+          custom: settings.summary.mode === 'custom' ? settings.summary.custom : null,
+        })
+        const existing = Array.isArray(meeting.summary.todos) ? meeting.summary.todos : []
+        const keyOf = (todo) => `${String(todo?.title ?? '').trim()}\u0000${String(todo?.owner ?? '').trim()}`
+        const seen = new Set(existing.map(keyOf))
+        const merged = [...existing]
+        let added = 0
+        for (const todo of Array.isArray(extracted) ? extracted : []) {
+          const key = keyOf(todo)
+          if (key.trim() === '') continue
+          if (seen.has(key)) continue
+          seen.add(key)
+          merged.push(todo)
+          added += 1
+        }
+        const updated = added > 0
+          ? await store.patch(id, { summary: { ...meeting.summary, todos: merged } })
+          : meeting
+        sendJson(res, 200, {
+          ok: true,
+          added,
+          meeting: updated,
+          todos: Array.isArray(updated.summary?.todos) ? updated.summary.todos : [],
         })
         return
       }
@@ -872,12 +1209,20 @@ export function registerRoutes(ctx, deps) {
               const settingsNow = store.settings
               if (settingsNow.diarize === true && deps.paraformer !== undefined && deps.paraformer.diarizationAvailable() === true) {
                 const analyzed = await deps.paraformer.transcribeFileWithSpeakers(target)
-                if (Array.isArray(analyzed.lines) && analyzed.lines.length > 0) {
+                const currentMeeting = store.get(id)
+                const batchText = typeof analyzed.text === 'string' ? analyzed.text : ''
+                const useBatch = shouldUseDiarizedTranscript(currentMeeting?.transcript, batchText)
+                if (useBatch && Array.isArray(analyzed.lines) && analyzed.lines.length > 0) {
                   await store.patch(id, {
-                    transcript: analyzed.text,
+                    transcript: batchText,
                     transcriptSegments: analyzed.lines.map((line) => ({ speaker: line.speaker, text: line.text, at: Math.round(line.start) })),
                   })
                   logger?.info?.('meeting-minutes: speaker diarization done (' + String(analyzed.speakers) + ' speakers, ' + String(analyzed.lines.length) + ' lines)')
+                } else if (Array.isArray(analyzed.lines) && analyzed.lines.length > 0) {
+                  // 典型场景：18 分钟录音只认出 2 句（19 字），而流式转写已有 174 段。
+                  // 保留流式转写和它的分段，避免把已识别内容整段覆盖掉。
+                  logger?.warn?.('meeting-minutes: diarization result too short (' + String(batchText.replace(/\s+/g, '').length)
+                    + ' chars vs ' + String((currentMeeting?.transcript ?? '').replace(/\s+/g, '').length) + ' chars); keeping the streamed transcript')
                 }
               }
               if (settingsNow.correctTranscript === true) {
@@ -941,3 +1286,4 @@ export function registerRoutes(ctx, deps) {
 
   return ctx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
 }
+

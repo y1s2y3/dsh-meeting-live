@@ -48,6 +48,11 @@ $script:Dragging = $false
 $script:Phase = 0.0
 $script:SmoothLevel = 0.0
 $script:DemoTicks = 0
+$script:StopPending = $false
+$script:StopPendingUntil = 0
+$script:InputSignature = ''
+$script:InputIds = @()
+$script:PopulatingInput = $false
 
 $BALL_SIZE = 96
 $BALL_CORE = 68
@@ -79,13 +84,15 @@ function Read-LatestState {
   }
 }
 
-function Write-Command([string]$name) {
+function Write-Command([string]$name, [string]$deviceId = '') {
   try {
     $stamp = [DateTime]::UtcNow.Ticks
     $rand = Get-Random -Minimum 1000 -Maximum 9999
     $file = Join-Path $StateDir ("cmd-{0}-{1}.json" -f $stamp, $rand)
-    $payload = @{ command = $name; at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() } | ConvertTo-Json -Compress
-    [System.IO.File]::WriteAllText($file, $payload, (New-Object System.Text.UTF8Encoding($false)))
+    $payload = @{ command = $name; at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    if ($deviceId -ne '') { $payload.deviceId = $deviceId }
+    $json = $payload | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($file, $json, (New-Object System.Text.UTF8Encoding($false)))
   } catch {
     # A dropped command is not fatal: the host keeps polling.
   }
@@ -192,6 +199,7 @@ $buttonStyle
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Grid Grid.Row="0">
@@ -224,7 +232,20 @@ $buttonStyle
                    VerticalScrollBarVisibility="Auto" IsTabStop="False" />
         </Border>
 
-        <Grid Grid.Row="3" Margin="0,10,0,0">
+        <Grid Grid.Row="3" Margin="0,8,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <TextBlock x:Name="BubbleInputLabel" Grid.Column="0" Text="Mic" FontSize="11"
+                     FontFamily="Microsoft YaHei UI" Foreground="#FF8A94A6" VerticalAlignment="Center"
+                     Margin="0,0,8,0" />
+          <ComboBox x:Name="BubbleInput" Grid.Column="1" Height="28" FontSize="11.5"
+                    FontFamily="Microsoft YaHei UI" VerticalContentAlignment="Center"
+                    ToolTip="Switch audio input" />
+        </Grid>
+
+        <Grid Grid.Row="4" Margin="0,10,0,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
@@ -517,9 +538,19 @@ function Apply-State {
   }
 
   $status = [string]$state.status
+  # After clicking Stop the command travels through the heartbeat (~1s); show the
+  # loading state immediately, then hand over to the normal stop flow once the host
+  # reports stopping / done / error.
+  if ($script:StopPending -and ($status -eq 'stopping' -or $status -eq 'done' -or $status -eq 'error')) {
+    $script:StopPending = $false
+  }
+  if ($script:StopPending -and $script:StopPendingUntil -gt 0 -and $nowTicks -gt $script:StopPendingUntil) {
+    $script:StopPending = $false
+  }
+  $stopWaiting = $script:StopPending -and ($status -eq 'recording' -or $status -eq 'paused')
   $dotBrush = $idle
-  if ($status -eq 'recording') { $dotBrush = $accent }
-  elseif ($status -eq 'paused' -or $status -eq 'stopping') { $dotBrush = $warn }
+  if ($status -eq 'recording' -and -not $stopWaiting) { $dotBrush = $accent }
+  elseif ($status -eq 'paused' -or $status -eq 'stopping' -or $stopWaiting) { $dotBrush = $warn }
   elseif ($status -eq 'done') { $dotBrush = $ok }
   $orbDot.Fill = $dotBrush
   $bubbleRoot.FindName('BubbleDot').Fill = $dotBrush
@@ -537,6 +568,7 @@ function Apply-State {
     'error' { Get-String $script:Labels 'error' 'Error' }
     default { Get-String $script:Labels 'idle' 'Idle' }
   }
+  if ($stopWaiting) { $statusLabel = Get-String $script:Labels 'stopping' 'Finishing' }
   $bubbleRoot.FindName('BubbleStatus').Text = $statusLabel
   $bubbleRoot.FindName('BubbleTitle').Text = (Get-String $state 'title' 'Meeting minutes')
   $charsTemplate = Get-String $script:Labels 'chars' '{0} chars'
@@ -550,9 +582,45 @@ function Apply-State {
     $pauseButton.Content = Get-String $script:Labels 'pause' 'Pause'
     $pauseButton.IsEnabled = ($status -eq 'recording')
   }
+  $pauseButton.IsEnabled = $pauseButton.IsEnabled -and -not $stopWaiting
   $stopButton = $bubbleRoot.FindName('BubbleStop')
-  $stopButton.Content = Get-String $script:Labels 'stop' 'Stop'
-  $stopButton.IsEnabled = ($status -eq 'recording' -or $status -eq 'paused')
+  if ($stopWaiting -or $status -eq 'stopping') {
+    $stopButton.Content = Get-String $script:Labels 'stoppingAction' 'Stopping...'
+    $stopButton.IsEnabled = $false
+  } else {
+    $stopButton.Content = Get-String $script:Labels 'stop' 'Stop'
+    $stopButton.IsEnabled = ($status -eq 'recording' -or $status -eq 'paused')
+  }
+
+  # 音频输入设备切换：只列设备、不做电平检测；选择后写一条 switch-input 命令。
+  $devices = @()
+  if ($null -ne $state.devices) { $devices = @($state.devices) }
+  $signature = (($devices | ForEach-Object { [string]$_.id + '=' + [string]$_.label }) -join '|')
+  $inputCombo = $bubbleRoot.FindName('BubbleInput')
+  if ($signature -ne $script:InputSignature) {
+    $script:PopulatingInput = $true
+    try {
+      $inputCombo.Items.Clear()
+      $script:InputIds = @()
+      foreach ($device in $devices) {
+        [void]$inputCombo.Items.Add([string]$device.label)
+        $script:InputIds += [string]$device.id
+      }
+      $script:InputSignature = $signature
+    } finally {
+      $script:PopulatingInput = $false
+    }
+  }
+  $currentId = ''
+  if ($null -ne $state.deviceId) { $currentId = [string]$state.deviceId }
+  $selectedIndex = -1
+  for ($i = 0; $i -lt $script:InputIds.Count; $i += 1) {
+    if ([string]$script:InputIds[$i] -eq $currentId) { $selectedIndex = $i; break }
+  }
+  $inputCombo.SelectedIndex = $selectedIndex
+  $inputCombo.IsEnabled = ($script:InputIds.Count -gt 1) -and ($status -eq 'recording' -or $status -eq 'paused')
+  $inputCombo.ToolTip = Get-String $script:Labels 'inputDevice' 'Input device'
+  $bubbleRoot.FindName('BubbleInputLabel').Text = Get-String $script:Labels 'inputDevice' 'Mic'
 
   $transcript = [string]$state.transcript
   if ($null -eq $transcript) { $transcript = '' }
@@ -668,7 +736,28 @@ $root.FindName('BubblePause').Add_Click({
   if ($null -ne $state -and [string]$state.status -eq 'paused') { Write-Command 'resume' }
   else { Write-Command 'pause' }
 })
-$root.FindName('BubbleStop').Add_Click({ Write-Command 'stop' })
+$root.FindName('BubbleStop').Add_Click({
+  if ($script:StopPending) { return }
+  $state = $script:State
+  $status = 'idle'
+  if ($null -ne $state) { $status = [string]$state.status }
+  if ($status -ne 'recording' -and $status -ne 'paused') { return }
+  # Enter the loading state immediately instead of waiting for the command round-trip.
+  $script:StopPending = $true
+  $script:StopPendingUntil = [DateTime]::UtcNow.Ticks + [TimeSpan]::FromSeconds(20).Ticks
+  Write-Command 'stop'
+  Apply-State
+})
+
+$root.FindName('BubbleInput').Add_SelectionChanged({
+  if ($script:PopulatingInput) { return }
+  $combo = $root.FindName('BubbleInput')
+  $index = $combo.SelectedIndex
+  if ($index -lt 0 -or $index -ge $script:InputIds.Count) { return }
+  $deviceId = [string]$script:InputIds[$index]
+  if ($deviceId -eq '') { return }
+  Write-Command 'switch-input' $deviceId
+})
 
 $stateTimer = New-Object System.Windows.Threading.DispatcherTimer
 $stateTimer.Interval = [TimeSpan]::FromMilliseconds(250)

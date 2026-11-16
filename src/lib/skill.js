@@ -8,7 +8,7 @@
  * Registered at runtime, so installing the plugin makes the skill appear in the
  * session skill catalog without a separate skill package or user-level file.
  *
- * @module dsh-plugin-meeting-minutes/skill
+ * @module dsh-meeting-live/skill
  */
 
 /** Kebab-case name shown in the session skill catalog. */
@@ -16,11 +16,11 @@ export const SKILL_NAME = 'meeting-minutes-workflow'
 
 /** One-line catalog description; this is what the model scans first. */
 export const SKILL_DESCRIPTION =
-  '把会议文本/录音整理成结构化纪要，并把确认后的待办写入 DSH 待办（工作类型）。涉及会议纪要、转写、腾讯会议导入、待办确认、加待办、会议自动入库时使用。'
+  '把会议文本/录音整理成结构化纪要，并把确认后的待办写入 DSH 待办（工作类型）。涉及会议纪要、转写、腾讯会议导入、待办确认、加待办、会议自动识别时使用。'
 
 /** Richer routing hint shown by catalog UIs. */
 export const SKILL_WHEN_TO_USE =
-  '用户粘贴会议纪要/聊天记录/转写文本、给出录音或视频文件、说“整理会议纪要”“生成待办”“把待办加进日历”“查一下上次会议”“导出纪要”“会议结束自动入库”时使用。用户只是随口提到“开会”但没有纪要或待办需求时不要主动整理。'
+  '用户粘贴会议纪要/聊天记录/转写文本、给出录音或视频文件、说“整理会议纪要”“生成待办”“把待办加进日历”“查一下上次会议”“导出纪要”“会议结束自动识别”时使用。用户只是随口提到“开会”但没有纪要或待办需求时不要主动整理。'
 
 /** Full instruction body loaded on demand by the `skill` tool. */
 export const SKILL_CONTENT = `# 会议纪要 → 待办
@@ -36,12 +36,11 @@ export const SKILL_CONTENT = `# 会议纪要 → 待办
 | \`meeting_create\` | 新建会议记录，\`transcript\` 放**原文**，不要先总结 |
 | \`meeting_transcribe\` | 把本机录音/视频转成文字并新建会议 |
 | \`meeting_summarize\` | 用当前默认模型生成/重新生成结构化纪要 |
-| \`meeting_push_todos\` | 把**用户确认过**的待办写入任务日历 |
+| \`meeting_push_todos\` | 把**用户确认过**的待办写入 DSH 待办（工作轨） |
 | \`meeting_export\` | 导出独立 HTML / Markdown 纪要文档 |
-| \`meeting_auto_ingest\` | 查看/启用/关闭/扫描会议自动入库 |
-| \`calendar_list_tasks\` / \`calendar_add_tasks\` / \`calendar_update_task\` / \`calendar_delete_task\` / \`calendar_reminder_config\` | 任务日历的查询与维护 |
+| \`meeting_auto_ingest\` | 查看/启用/关闭/扫描会议自动识别 |
 
-如果这些工具不存在，说明插件没装或没启用：提示用户安装 \`@zhangguitao666/meeting-suite\`（一次装两个）或对应的单个 npm 包，不要用文件读写去模拟。
+如果这些工具不存在，说明插件没装或没启用：提示用户先安装并启用 \`dsh-meeting-live\`（会议纪要插件），不要用文件读写去模拟。
 
 ## 先判断场景
 
@@ -54,9 +53,9 @@ export const SKILL_CONTENT = `# 会议纪要 → 待办
 4. **用户只要待办，不关心纪要**
    → 先定位会议（\`meeting_list\`/\`meeting_get\`）；没有会议记录时，把用户给的内容用 \`meeting_create\` 存下来再总结，不要凭空手写待办。
 5. **用户要把待办加到待办清单**
-   → 先展示待办清单，等用户确认；确认后 \`meeting_push_todos\`。只有一两个待办要手动建时，才用 \`calendar_add_tasks\`。
-6. **用户问日历任务/提醒**
-   → \`calendar_list_tasks\`；改期/完成用 \`calendar_update_task\`；提醒规则用 \`calendar_reminder_config\`。
+   → 先展示待办清单，等用户确认；确认后 \`meeting_push_todos\`（写入 DSH 待办的工作轨）。
+6. **用户问待办/提醒**
+   → 本插件只负责把会议待办写进 DSH 待办；查待办、改期、标记完成请引导用户去 DSH 待办面板（「工作 / 全部」轨），不要用别的工具模拟。
 7. **用户要导出/分享纪要**
    → \`meeting_export\`（format=html 或 md），把返回的文件路径给用户。
 8. **用户问“会议结束自动整理”**
@@ -125,3 +124,4 @@ export function registerMeetingSkill(ctx) {
     content: SKILL_CONTENT,
   })
 }
+

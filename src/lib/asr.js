@@ -10,14 +10,15 @@
  * 服务可能缺失（旧版本 / 未启用），所有入口都给出中文降级错误，而不是让
  * 未定义方法把调用方炸掉。
  *
- * @module dsh-plugin-meeting-minutes/asr
+ * @module dsh-meeting-live/asr
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, unlinkSync } from 'node:fs'
 import { readFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { promisify } from 'node:util'
 
 import { concatText, splitWav, toCanonicalWav, validateWav } from './audio.js'
@@ -47,6 +48,129 @@ const DEFAULT_PREPARE_TIMEOUT_MS = 10 * 60 * 1000
 
 /** macOS 自带的音频转换器；它把 mp3/m4a/mp4/aac 等转成 16k 单声道 PCM16。 */
 const AFCONVERT = '/usr/bin/afconvert'
+
+/** ffmpeg 探测结果缓存（Windows / Linux 上用它替代 macOS 的 afconvert）。 */
+let ffmpegProbed = false
+let ffmpegPath = null
+
+/** 常见 ffmpeg 位置：环境变量 → PATH → winget → Homebrew/系统目录。 */
+function ffmpegCandidates() {
+  const list = []
+  const fromEnv = process.env.FFMPEG_PATH
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') list.push(fromEnv.trim())
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? ''
+    if (local !== '') {
+      list.push(join(local, 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'))
+      try {
+        const packages = join(local, 'Microsoft', 'WinGet', 'Packages')
+        for (const name of readdirSync(packages)) {
+          if (!String(name).toLowerCase().includes('ffmpeg')) continue
+          const stack = [join(packages, name)]
+          while (stack.length > 0) {
+            const current = stack.pop()
+            let entries = []
+            try {
+              entries = readdirSync(current, { withFileTypes: true })
+            } catch {
+              continue
+            }
+            for (const entry of entries) {
+              const full = join(current, entry.name)
+              if (entry.isFile() && entry.name.toLowerCase() === 'ffmpeg.exe') list.push(full)
+              else if (entry.isDirectory() && current.split(sep).length < 8) stack.push(full)
+            }
+          }
+        }
+      } catch {
+        // winget 目录不存在是正常情况
+      }
+    }
+    list.push('C:/ffmpeg/bin/ffmpeg.exe', 'C:/Program Files/ffmpeg/bin/ffmpeg.exe')
+  } else {
+    list.push('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg')
+  }
+  list.push('ffmpeg')
+  return list
+}
+
+/**
+ * 运行一个外部命令并等待退出码。stdio 全部走忽略/文件，避免在受限环境里
+ * 因命名管道不可用而失败；失败时把 stderr（最后几行）带进错误信息。
+ */
+function runTool(command, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const stderrFile = join(tmpdir(), `dsh-asr-tool-${process.pid}-${randomUUID()}.log`)
+    let fd = null
+    try {
+      fd = openSync(stderrFile, 'w')
+    } catch {
+      fd = null
+    }
+    let child
+    try {
+      child = spawn(command, args, {
+        stdio: ['ignore', 'ignore', fd === null ? 'ignore' : fd],
+        windowsHide: true,
+      })
+    } catch (error) {
+      if (fd !== null) {
+        try { closeSync(fd) } catch { /* ignore */ }
+      }
+      reject(error instanceof Error ? error : new Error(String(error)))
+      return
+    }
+    let settled = false
+    let timer = null
+    const finish = (failure) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) clearTimeout(timer)
+      let detail = ''
+      try {
+        detail = readFileSync(stderrFile, 'utf8').trim().split(/\r?\n/).slice(-3).join(' ')
+      } catch {
+        detail = ''
+      }
+      try {
+        if (fd !== null) closeSync(fd)
+      } catch { /* ignore */ }
+      try {
+        unlinkSync(stderrFile)
+      } catch { /* ignore */ }
+      if (failure === null) {
+        resolve(detail)
+        return
+      }
+      const message = typeof failure === 'string' ? failure : String(failure?.message ?? failure)
+      reject(new Error(detail === '' ? message : `${message}（${detail}）`))
+    }
+    timer = setTimeout(() => {
+      try { child.kill() } catch { /* ignore */ }
+      finish('转换超时')
+    }, timeoutMs)
+    child.on('error', (error) => finish(error))
+    child.on('exit', (code) => finish(code === 0 ? null : `ffmpeg 退出码 ${code}`))
+  })
+}
+
+/** 找到可用的 ffmpeg；找不到返回 null（结果缓存）。 */
+export async function findFfmpeg() {
+  if (ffmpegProbed) return ffmpegPath
+  ffmpegProbed = true
+  for (const candidate of ffmpegCandidates()) {
+    if (candidate !== 'ffmpeg' && !existsSync(candidate)) continue
+    try {
+      await runTool(candidate, ['-version'], 15_000)
+      ffmpegPath = candidate
+      return candidate
+    } catch {
+      // 换下一个候选
+    }
+  }
+  ffmpegPath = null
+  return null
+}
 
 /** 提取 Error 的可读文本。 */
 function errorMessage(error) {
@@ -409,28 +533,50 @@ export function createAsr({ ctx, config = {} } = {}) {
     }
   }
 
-  /** 用 afconvert 把任意音频文件转成 16k 单声道 PCM16 WAV。 */
+  /**
+   * 用系统自带的转码器把任意音频文件转成 16k 单声道 PCM16 WAV。
+   * macOS 用 afconvert；Windows / Linux 用 ffmpeg（腾讯会议的 mp4/m4a 录制
+   * 在 Windows 上就靠它转成可识别 WAV）。
+   */
   async function convertToWav(input, output) {
+    if (process.platform === 'darwin') {
+      try {
+        await execFileAsync(
+          AFCONVERT,
+          ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', input, output],
+          { timeout: 120_000, maxBuffer: 1024 * 1024 },
+        )
+        return
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          // 没有 afconvert 时回退 ffmpeg（例如 Linux 子系统）
+        } else if (error?.killed === true) {
+          throw new Error('音频转换超时')
+        } else {
+          const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : ''
+          const detail = [errorMessage(error), stderr].filter((part) => part !== '').join(' ')
+          throw new Error(`音频转换失败：${detail}（支持 wav/mp3/m4a/mp4/aac）`)
+        }
+      }
+    }
+    const ffmpeg = await findFfmpeg()
+    if (ffmpeg === null) {
+      throw new Error('未找到音频转换工具 ffmpeg，无法转换该音频文件（Windows 请安装 ffmpeg 或设置 FFMPEG_PATH）')
+    }
     try {
-      await execFileAsync(
-        AFCONVERT,
-        ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', input, output],
-        { timeout: 120_000, maxBuffer: 1024 * 1024 },
+      await runTool(
+        ffmpeg,
+        ['-y', '-hide_banner', '-loglevel', 'error', '-i', input, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', output],
+        180_000,
       )
     } catch (error) {
-      if (error?.code === 'ENOENT') {
-        throw new Error(`未找到音频转换工具 ${AFCONVERT}，无法转换该音频文件`)
-      }
-      if (error?.killed === true) throw new Error('音频转换超时')
-      const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : ''
-      const detail = [errorMessage(error), stderr].filter((part) => part !== '').join(' ')
-      throw new Error(`音频转换失败：${detail}（支持 wav/mp3/m4a/mp4/aac）`)
+      throw new Error(`音频转换失败：${errorMessage(error)}（支持 wav/mp3/m4a/mp4/aac）`)
     }
   }
 
   /**
    * 识别一个本地音频文件。已经是合格的 16k 单声道 PCM16 WAV 就直接用，
-   * 否则用 afconvert 转成临时 WAV（os.tmpdir 下唯一文件，finally 删除）。
+   * 否则先转成临时 WAV（os.tmpdir 下唯一文件，finally 删除）。
    *
    * @param path - 音频文件绝对路径（wav/mp3/m4a/mp4/aac 等）。
    * @param options - `{ language='zh', providerId?, signal? }`。

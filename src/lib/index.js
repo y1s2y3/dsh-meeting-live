@@ -14,7 +14,7 @@
  * the client module system from this package's `dsh.client` declaration — no
  * second loader entry is needed.
  *
- * @module dsh-plugin-meeting-minutes
+ * @module dsh-meeting-live
  */
 
 import { ROUTE_PREFIX, buildState, registerRoutes } from './server.js'
@@ -33,7 +33,7 @@ import { createParaformerEngine } from './paraformer.js'
 import * as cloudAsr from './cloud-asr.js'
 
 /** Loader-facing plugin name. */
-export const name = 'meeting-minutes'
+export const name = 'meeting-live'
 
 /** Services this plugin needs before it can start. */
 export const inject = ['tools', 'webServer']

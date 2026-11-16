@@ -16,7 +16,7 @@
  */
 
 import { Buffer } from 'node:buffer';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 /* ================================ 常量 ================================ */
 
@@ -27,7 +27,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const IFLYTEK_HOST = 'iat-api.xfyun.cn';
 const IFLYTEK_PATH = '/v2/iat';
 /** 讯飞要求的音频帧大小：1280 字节（16k / 16bit / 单声道 ≈ 40ms） */
-const IFLYTEK_FRAME_BYTES = 1280;
+const IFLYTEK_FRAME_BYTES = 1280
+/** 讯飞 iat 帧间隔：服务端按实时流消费，灌太快会丢帧；10ms/帧≈4 倍速。 */
+const IFLYTEK_FRAME_INTERVAL_MS = 10;
 
 /* 腾讯云 */
 const TENCENT_HOST = 'asr.tencentcloudapi.com';
@@ -174,14 +176,23 @@ function normalizeTransportError(error, ctx, label) {
   return new CloudAsrError(`${label}网络请求失败：${sanitizeMessage(cause)}`);
 }
 
-/** 发起请求并解析 JSON，同时把 HTTP 状态码写进中文错误 */
+/** 发起请求并解析 JSON，同时把 HTTP 状态码与服务端错误信息写进中文错误 */
 async function requestJson(url, options, label) {
   const response = await fetch(url, options);
   const status = response.status;
   const statusText = sanitizeMessage(response.statusText || '');
   const raw = await response.text();
   if (!response.ok) {
-    throw new CloudAsrError(`${label}接口返回 HTTP ${status}${statusText && statusText !== '未知错误' ? `（${statusText}）` : ''}`);
+    let detail = '';
+    try {
+      const parsed = JSON.parse(raw);
+      const message = parsed?.message ?? parsed?.Message ?? parsed?.errmsg ?? parsed?.errMsg ?? '';
+      const code = parsed?.status ?? parsed?.Code ?? parsed?.code ?? '';
+      if (message !== '' || code !== '') detail = `：${code !== '' ? `${code} ` : ''}${sanitizeMessage(message)}`.trim();
+    } catch {
+      if (raw.trim() !== '') detail = `：${sanitizeMessage(raw.trim()).slice(0, 200)}`;
+    }
+    throw new CloudAsrError(`${label}接口返回 HTTP ${status}${statusText && statusText !== '未知错误' ? `（${statusText}）` : ''}${detail}`);
   }
   if (!raw) throw new CloudAsrError(`${label}接口返回空响应（HTTP ${status}）`);
   try {
@@ -519,7 +530,7 @@ function transcribeWithIflytek({ config, pcm, sampleRate, language, signal }) {
       return;
     }
 
-    const ctx = createRequestController(signal);
+    const ctx = createRequestController(signal, 60_000);
     // 讯飞 iat 的语种/口音：中文用 zh_cn + mandarin，英文用 en_us + mandarin
     const isEnglish = String(language).toLowerCase().startsWith('en');
     const accent = 'mandarin';
@@ -527,6 +538,7 @@ function transcribeWithIflytek({ config, pcm, sampleRate, language, signal }) {
 
     let socket = null;
     let settled = false;
+    let sentAll = false;
     let text = '';
 
     const finish = (result) => {
@@ -578,41 +590,63 @@ function transcribeWithIflytek({ config, pcm, sampleRate, language, signal }) {
     }
 
     socket.addEventListener('open', () => {
-      // 按 1280 字节切帧；末帧 status=2（只有一帧时直接用 2）
+      // 讯飞 iat v2 协议：首帧必须带 common + business，后续帧只带 data。
+      // data.status：0=首帧、1=中间帧、2=末帧；只有一帧时直接按末帧发送。
+      // 注意：一次性把整段音频灌进 WebSocket 会被服务端丢弃大部分帧（实测仅识别前几秒），
+      // 必须按 1280 字节/帧节流发送（10ms/帧 ≈ 4 倍速，30 秒音频约 7.5 秒发完）。
       const frameCount = Math.max(1, Math.ceil(pcm.length / IFLYTEK_FRAME_BYTES));
-      for (let index = 0; index < frameCount; index += 1) {
+      const audioFormat = `audio/L16;rate=${sampleRate}`;
+      let frameIndex = 0;
+      let timer = null;
+      const sendFrame = () => {
+        if (settled) return;
+        if (frameIndex >= frameCount) return;
+        const index = frameIndex;
+        frameIndex += 1;
         const start = index * IFLYTEK_FRAME_BYTES;
         const frame = pcm.subarray(start, Math.min(start + IFLYTEK_FRAME_BYTES, pcm.length));
         const isFirst = index === 0;
         const isLast = index === frameCount - 1;
         const status = isLast ? 2 : isFirst ? 0 : 1;
 
-        const audioPayload = {
-          encoding: 'raw',
-          sample_rate: sampleRate,
+        const dataPayload = {
           status,
-          seq: index + 1,
+          format: audioFormat,
+          encoding: 'raw',
           audio: frame.toString('base64'),
         };
-        const message = {
-          header: { app_id: config.appId, status },
-          parameter: {
-            format: `audio/L16;rate=${sampleRate}`,
-            domain: 'iat',
-            accent,
-            language: lang,
-            // 关闭动态修正（dwa），保证结果按序追加、无需处理替换逻辑
-            vad_eos: 10_000,
-          },
-          payload: { audio: audioPayload },
-        };
+        const message = isFirst
+          ? {
+            common: { app_id: config.appId },
+            business: {
+              language: lang,
+              domain: 'iat',
+              accent,
+              // 关闭动态修正（dwa），保证结果按序追加、无需处理替换逻辑
+              vad_eos: 10_000,
+            },
+            data: dataPayload,
+          }
+          : { data: dataPayload };
         try {
           socket.send(JSON.stringify(message));
         } catch {
           finish({ ok: false, error: '讯飞音频数据发送失败（连接已中断）' });
           return;
         }
+        if (isLast) sentAll = true;
+        if (!isLast) timer = setTimeout(sendFrame, IFLYTEK_FRAME_INTERVAL_MS);
+      };
+      try {
+        sendFrame();
+      } catch {
+        finish({ ok: false, error: '讯飞音频数据发送失败（连接已中断）' });
+        return;
       }
+      // 连接被取消/关闭时清理发送定时器
+      ctx.signal.addEventListener('abort', () => {
+        if (timer !== null) clearTimeout(timer);
+      });
     });
 
     socket.addEventListener('message', (event) => {
@@ -630,7 +664,9 @@ function transcribeWithIflytek({ config, pcm, sampleRate, language, signal }) {
       }
       const data = payload && payload.data ? payload.data : null;
       if (data && data.result) text += extractIflytekText(data.result);
-      if (data && data.status === 2) finish({ ok: true, text: text.trim() });
+      // 讯飞会在「一句话结束」时先给出 status=2，但连接并未结束；必须等整段音频都发完，
+      // 再收到 status=2 才是最终结果（否则会把长音频截断成第一句）。
+      if (data && data.status === 2 && sentAll) finish({ ok: true, text: text.trim() });
     });
 
     socket.addEventListener('error', () => {
@@ -640,6 +676,11 @@ function transcribeWithIflytek({ config, pcm, sampleRate, language, signal }) {
     socket.addEventListener('close', (event) => {
       if (settled) return;
       const code = event && event.code !== undefined ? event.code : '未知';
+      // 服务端提前关闭但已经拿到部分结果时，保留已识别内容（长音频比报错更有用）。
+      if (text.trim() !== '') {
+        finish({ ok: true, text: text.trim() });
+        return;
+      }
       finish({ ok: false, error: `讯飞连接已关闭（code=${code}），未收到完整识别结果` });
     });
   });
@@ -656,7 +697,8 @@ async function transcribeWithTencent({ config, pcm, language, signal }) {
   const payload = {
     EngSerViceType: engine,
     SourceType: 1,
-    VoiceFormat: 'wav',
+    // Data 传的是去掉 WAV 头后的裸 PCM，必须声明 pcm；写 wav 会被服务端按容器解析而报错
+    VoiceFormat: 'pcm',
     Data: pcm.toString('base64'),
     DataLen: pcm.length,
   };
@@ -705,46 +747,60 @@ async function transcribeWithTencent({ config, pcm, language, signal }) {
 }
 
 /** 阿里云：先 CreateToken 取 Token，再调用一句话识别 HTTP 接口 */
+/** 阿里云 Token 缓存：Token 有效期 24 小时，避免每次识别都重新 CreateToken（也避免 nonce 复用被拒）。 */
+const aliyunTokenCache = new Map();
+
 async function transcribeWithAliyun({ config, wavBuffer, sampleRate, signal }) {
   const region = isBlank(config.region) ? ALIYUN_DEFAULT_REGION : String(config.region);
   const metaHost = `nls-meta.${region}.aliyuncs.com`;
   const gatewayHost = `nls-gateway-${region}.aliyuncs.com`;
 
-  /* ---------- 步骤一：CreateToken ---------- */
+  /* ---------- 步骤一：CreateToken（带缓存） ---------- */
+  const cacheKey = `${config.accessKeyId}|${region}`;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cached = aliyunTokenCache.get(cacheKey);
+  let token = cached !== undefined && cached.expireAt > nowSeconds + 60 ? cached.token : '';
   const tokenCtx = createRequestController(signal);
-  let token = '';
   try {
-    const seconds = Math.floor(Date.now() / 1000);
-    const rpc = buildAliyunRpcRequest({
-      action: ALIYUN_TOKEN_ACTION,
-      version: ALIYUN_TOKEN_VERSION,
-      regionId: region,
-      accessKeyId: config.accessKeyId,
-      accessKeySecret: config.accessKeySecret,
-      timestamp: seconds,
-      nonce: buildDeterministicNonce(`${ALIYUN_TOKEN_ACTION}:${config.accessKeyId}:${seconds}`),
-    });
+    if (token === '') {
+      const seconds = Math.floor(Date.now() / 1000);
+      const rpc = buildAliyunRpcRequest({
+        action: ALIYUN_TOKEN_ACTION,
+        version: ALIYUN_TOKEN_VERSION,
+        regionId: region,
+        accessKeyId: config.accessKeyId,
+        accessKeySecret: config.accessKeySecret,
+        timestamp: seconds,
+        // 每次请求必须用新的 SignatureNonce，重复值会被阿里云判为 400（不能用时间戳派生）。
+        nonce: randomUUID(),
+      });
 
-    const json = await requestJson(
-      `https://${metaHost}/`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-          Accept: 'application/json',
+      const json = await requestJson(
+        `https://${metaHost}/`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+            Accept: 'application/json',
+          },
+          body: rpc.body,
+          signal: tokenCtx.signal,
         },
-        body: rpc.body,
-        signal: tokenCtx.signal,
-      },
-      '阿里云 Token 服务',
-    );
+        '阿里云 Token 服务',
+      );
 
-    if (json && json.Code) {
-      const message = json.Message ? `（${sanitizeMessage(json.Message)}）` : '';
-      throw new CloudAsrError(`阿里云获取 Token 失败：${json.Code}${message}`);
+      if (json && json.Code) {
+        const message = json.Message ? `（${sanitizeMessage(json.Message)}）` : '';
+        throw new CloudAsrError(`阿里云获取 Token 失败：${json.Code}${message}`);
+      }
+      token = json && json.Token ? json.Token.Id : '';
+      if (isBlank(token)) throw new CloudAsrError('阿里云获取 Token 失败：返回结果缺少 Token.Id');
+      const expireAt = Number(json?.Token?.ExpireTime);
+      aliyunTokenCache.set(cacheKey, {
+        token,
+        expireAt: Number.isFinite(expireAt) && expireAt > nowSeconds ? expireAt : nowSeconds + 3600,
+      });
     }
-    token = json && json.Token ? json.Token.Id : '';
-    if (isBlank(token)) throw new CloudAsrError('阿里云获取 Token 失败：返回结果缺少 Token.Id');
   } catch (error) {
     throw normalizeTransportError(error, tokenCtx, '阿里云');
   } finally {
@@ -828,6 +884,16 @@ export async function transcribeCloud({
   const rate = Number.isFinite(Number(sampleRate)) && Number(sampleRate) > 0 ? Math.floor(Number(sampleRate)) : 16000;
   const lang = isBlank(language) ? 'zh' : String(language).trim().toLowerCase();
 
+  // 四、时长保护：三家一句话识别都限制单次 60 秒（腾讯另有 3MB、阿里 2MB 上限）。
+  // 插件侧已按 55 秒切片；这里再兜一层，避免把超长音频直接发给服务端换回难懂的报错。
+  const seconds = pcm.length / (rate * 2);
+  if (seconds > 60) {
+    return {
+      ok: false,
+      error: `音频过长（${seconds.toFixed(1)} 秒）：云端一句话识别单次上限 60 秒，请先切片后再识别`,
+    };
+  }
+
   try {
     if (provider === 'iflytek') {
       return await transcribeWithIflytek({ config, pcm, sampleRate: rate, language: lang, signal });
@@ -843,3 +909,4 @@ export async function transcribeCloud({
     return { ok: false, error: toReadableError(error) };
   }
 }
+

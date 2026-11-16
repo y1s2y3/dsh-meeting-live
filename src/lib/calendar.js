@@ -7,7 +7,7 @@
  * independently installable, and the calendar panel refreshes immediately
  * because the task is written exactly where the panel reads it.
  *
- * @module dsh-plugin-meeting-minutes/calendar
+ * @module dsh-meeting-live/calendar
  */
 
 /** Route prefix owned by the task-calendar plugin. */

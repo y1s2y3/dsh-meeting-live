@@ -18,14 +18,16 @@
  * Everything here is persisted through the store, deduplicated by source key,
  * and retried at most three times per source.
  *
- * @module dsh-plugin-meeting-minutes/autoingest
+ * @module dsh-meeting-live/autoingest
  */
 
 import { execFile } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, join, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { inflateRawSync } from 'node:zlib'
 
 import { formatMoment, localDay } from './model.js'
 
@@ -158,10 +160,113 @@ export function docxXmlToText(xml) {
     .trim()
 }
 
+/**
+ * 从一个 ZIP 包（docx 就是 ZIP）里取出指定条目；支持 store/deflate 两种方式。
+ * 用 Node 自带 zlib 实现，跨平台（Windows 上没有 /usr/bin/unzip）。
+ * @param buffer - 整个文件字节。
+ * @param entryName - 包内路径，如 `word/document.xml`。
+ * @returns Buffer 或 null。
+ */
+export function readZipEntry(buffer, entryName) {
+  let eocd = -1
+  const floor = Math.max(0, buffer.length - 66_000)
+  for (let offset = buffer.length - 22; offset >= floor; offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) {
+      eocd = offset
+      break
+    }
+  }
+  if (eocd < 0) throw new Error('不是有效的 docx（缺少 ZIP 目录）')
+  const entries = buffer.readUInt16LE(eocd + 10)
+  let offset = buffer.readUInt32LE(eocd + 16)
+  for (let index = 0; index < entries; index += 1) {
+    if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== 0x02014b50) break
+    const method = buffer.readUInt16LE(offset + 10)
+    const compressedSize = buffer.readUInt32LE(offset + 20)
+    const nameLength = buffer.readUInt16LE(offset + 28)
+    const extraLength = buffer.readUInt16LE(offset + 30)
+    const commentLength = buffer.readUInt16LE(offset + 32)
+    const localOffset = buffer.readUInt32LE(offset + 42)
+    const name = buffer.toString('utf8', offset + 46, offset + 46 + nameLength)
+    if (name === entryName) {
+      if (localOffset + 30 > buffer.length) break
+      const localNameLength = buffer.readUInt16LE(localOffset + 26)
+      const localExtraLength = buffer.readUInt16LE(localOffset + 28)
+      const dataStart = localOffset + 30 + localNameLength + localExtraLength
+      const data = buffer.subarray(dataStart, dataStart + compressedSize)
+      if (method === 0) return data
+      if (method === 8) return inflateRawSync(data)
+      throw new Error(`docx 使用了不支持的压缩方式（${method}）`)
+    }
+    offset += 46 + nameLength + extraLength + commentLength
+  }
+  return null
+}
+
+/** 读取 .docx 的正文纯文本（跨平台，无外部命令）。 */
+export async function readDocxText(filePath) {
+  const buffer = await readFile(filePath)
+  const xml = readZipEntry(buffer, 'word/document.xml')
+  if (xml === null) throw new Error('docx 里没有 word/document.xml')
+  return docxXmlToText(xml.toString('utf8'))
+}
+
 /** The Tencent Meeting database directory inside the macOS app container. */
 export function tencentDatabaseDirs() {
   const base = join(homedir(), 'Library/Containers/com.tencent.meeting/Data/Library')
   return [join(base, 'Global/Database'), join(base, 'Users')]
+}
+
+/**
+ * 腾讯会议本地录制的常见根目录（Windows 默认在「文档\\TencentMeeting」）。
+ * 只用于自动探测；用户可以在设置里手动选择任意目录覆盖它。
+ */
+export function defaultTencentDirs() {
+  const home = homedir()
+  const bases = [join(home, 'Documents')]
+  const oneDrive = process.env.OneDrive
+  if (typeof oneDrive === 'string' && oneDrive !== '') bases.push(join(oneDrive, 'Documents'))
+  const candidates = []
+  for (const base of bases) {
+    candidates.push(join(base, 'TencentMeeting'), join(base, 'WeMeet'))
+  }
+  candidates.push(join(home, 'Videos', 'TencentMeeting'))
+  const seen = new Set()
+  return candidates.filter((dir) => {
+    const key = process.platform === 'win32' ? dir.toLowerCase() : dir
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/** 目录是否存在且真的是目录。 */
+function directoryExists(dir) {
+  try {
+    return statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 选择本次使用的腾讯会议录制目录：手动配置优先，否则在默认位置里探测。
+ * @returns `{ dir, source: 'config'|'detected'|'none' }`。
+ */
+export function resolveTencentDir(config) {
+  const configured = expandHome(String(config?.tencentDir ?? '').trim())
+  if (configured !== '') return { dir: configured, source: 'config' }
+  for (const candidate of defaultTencentDirs()) {
+    if (directoryExists(candidate)) return { dir: candidate, source: 'detected' }
+  }
+  return { dir: '', source: 'none' }
+}
+
+/** 判断一个文件是否位于某个目录下（Windows 不区分大小写）。 */
+function isUnder(file, dir) {
+  const target = process.platform === 'win32' ? dir.toLowerCase() : dir
+  const value = process.platform === 'win32' ? file.toLowerCase() : file
+  return value === target || value.startsWith(target.endsWith(sep) ? target : target + sep)
 }
 
 /**
@@ -176,7 +281,15 @@ export function createAutoIngest(options) {
   const runtime = {
     scanning: false,
     pending: 0,
-    tencent: { available: false, dbPath: null, records: 0, error: null },
+    tencent: {
+      available: false,
+      mode: 'none',
+      dirPath: '',
+      dirSource: 'none',
+      dbPath: null,
+      records: 0,
+      error: null,
+    },
     lastResult: null,
     timer: 0,
     stopped: false,
@@ -238,11 +351,101 @@ export function createAutoIngest(options) {
     return null
   }
 
-  /** Read the Tencent local-recording catalogue. */
-  async function listTencentRecords() {
+  /** 递归收集目录下的可导入文件（腾讯会议按「账号/会议」分子目录，最多 3 层）。 */
+  async function collectTencentFiles(root) {
+    const files = []
+    const walk = async (current, depth) => {
+      let entries
+      try {
+        entries = await readdir(current, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        if (files.length >= 200) return
+        if (entry.name.startsWith('.')) continue
+        const full = join(current, entry.name)
+        if (entry.isDirectory()) {
+          if (depth < 3) await walk(full, depth + 1)
+          continue
+        }
+        if (!entry.isFile()) continue
+        if (fileKind(full) === null) continue
+        const lower = entry.name.toLowerCase()
+        if (lower.endsWith('.tmp') || lower.endsWith('.part') || lower.endsWith('.crdownload')) continue
+        let info
+        try {
+          info = await stat(full)
+        } catch {
+          continue
+        }
+        files.push({ path: full, mtimeMs: info.mtimeMs })
+      }
+    }
+    await walk(root, 0)
+    files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    return files
+  }
+
+  /** 目录模式的录制清单（Windows 默认走这里）：每个可导入文件算一条。 */
+  async function listTencentDirectoryFiles(resolved) {
+    if (resolved.dir === '') {
+      runtime.tencent = {
+        available: false,
+        mode: 'none',
+        dirPath: '',
+        dirSource: 'none',
+        dbPath: null,
+        records: 0,
+        error: '未找到腾讯会议录制目录（可在设置里手动选择）',
+      }
+      return []
+    }
+    if (!directoryExists(resolved.dir)) {
+      runtime.tencent = {
+        available: false,
+        mode: 'directory',
+        dirPath: resolved.dir,
+        dirSource: resolved.source,
+        dbPath: null,
+        records: 0,
+        error: '腾讯会议录制目录不存在：' + resolved.dir,
+      }
+      return []
+    }
+    const files = await collectTencentFiles(resolved.dir)
+    runtime.tencent = {
+      available: true,
+      mode: 'directory',
+      dirPath: resolved.dir,
+      dirSource: resolved.source,
+      dbPath: null,
+      records: files.length,
+      error: null,
+    }
+    return files.map((file) => ({
+      key: 'tencent:' + file.path,
+      path: file.path,
+      title: titleFromFile(file.path),
+      meetingCode: '',
+      endAt: file.mtimeMs,
+      completed: true,
+    }))
+  }
+
+  /** 数据库模式的录制清单（macOS 容器里的 local_record_data）。 */
+  async function listTencentDatabaseRecords() {
     const db = await findTencentDb()
     if (db === null) {
-      runtime.tencent = { available: false, dbPath: null, records: 0, error: '未找到腾讯会议本地录制数据库' }
+      runtime.tencent = {
+        available: false,
+        mode: 'database',
+        dirPath: '',
+        dirSource: 'none',
+        dbPath: null,
+        records: 0,
+        error: '未找到腾讯会议本地录制数据库',
+      }
       return []
     }
     try {
@@ -254,17 +457,40 @@ export function createAutoIngest(options) {
         'ORDER BY record_end_time DESC LIMIT 40',
       ].join(' '))
       const records = rows.map(normalizeTencentRow).filter((row) => row !== null && row.completed)
-      runtime.tencent = { available: true, dbPath: db, records: records.length, error: null }
+      runtime.tencent = {
+        available: true,
+        mode: 'database',
+        dirPath: '',
+        dirSource: 'none',
+        dbPath: db,
+        records: records.length,
+        error: null,
+      }
       return records
     } catch (error) {
       runtime.tencent = {
         available: true,
+        mode: 'database',
+        dirPath: '',
+        dirSource: 'none',
         dbPath: db,
         records: 0,
         error: `读取腾讯会议录制列表失败：${error instanceof Error ? error.message : String(error)}`,
       }
       return []
     }
+  }
+
+  /**
+   * 读取腾讯会议录制清单：手动/探测到的目录优先（Windows 唯一方式），
+   * macOS 未配置目录时回退 old-school 的本地数据库。
+   */
+  async function listTencentRecords(config) {
+    const resolved = resolveTencentDir(config)
+    if (resolved.source === 'config' || process.platform !== 'darwin') {
+      return listTencentDirectoryFiles(resolved)
+    }
+    return listTencentDatabaseRecords()
   }
 
   /** Has this source already been imported (or failed too often)? */
@@ -320,11 +546,7 @@ export function createAutoIngest(options) {
       let text = ''
       const ext = extname(path).toLowerCase()
       if (ext === '.docx') {
-        const { stdout } = await execFileAsync('/usr/bin/unzip', ['-p', path, 'word/document.xml'], {
-          timeout: 20_000,
-          maxBuffer: 8 * 1024 * 1024,
-        })
-        text = docxXmlToText(stdout)
+        text = await readDocxText(path)
       } else {
         text = extractTextPayload(await readFile(path, 'utf8'))
       }
@@ -350,7 +572,7 @@ export function createAutoIngest(options) {
   /** Import finished Tencent local recordings. */
   async function scanTencent(config, budget) {
     if (config.tencent === false) return budget
-    const records = await listTencentRecords()
+    const records = await listTencentRecords(config)
     const cutoff = Date.now() - RECENT_DAYS * 86_400_000
     for (const record of records) {
       if (budget <= 0) break
@@ -377,7 +599,8 @@ export function createAutoIngest(options) {
   }
 
   /** Import new files from the configured folders (two levels deep). */
-  async function scanDirs(config, budget) {
+  async function scanDirs(config, budget, tencentRoot = '') {
+    if (config.dirsEnabled === false) return budget
     const cutoff = Date.now() - RECENT_DAYS * 86_400_000
     for (const rawDir of config.dirs) {
       if (budget <= 0) break
@@ -412,6 +635,8 @@ export function createAutoIngest(options) {
           continue
         }
         if (info.mtimeMs < cutoff) continue
+        // 腾讯会议目录已经单独扫描过，避免同一条录制被两个来源各导入一次。
+        if (tencentRoot !== '' && isUnder(path, tencentRoot)) continue
         const key = `dir:${path}`
         if (alreadyHandled(config, key)) continue
         const meeting = await ingestSource({
@@ -437,7 +662,8 @@ export function createAutoIngest(options) {
     runtime.pending = 0
     try {
       let budget = await scanTencent(config, MAX_FILES_PER_SCAN)
-      budget = await scanDirs(store.autoIngest, budget)
+      const latestConfig = store.autoIngest
+      budget = await scanDirs(latestConfig, budget, resolveTencentDir(latestConfig).dir)
       await store.noteAutoScan({ lastScanAt: new Date().toISOString(), lastError: null })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -454,6 +680,8 @@ export function createAutoIngest(options) {
   /** Public status projection for the panel and `GET /state`. */
   function status() {
     const config = store.autoIngest
+    // 还没扫描过时，目录信息从配置/探测结果即时算出来，面板选完目录就能看到。
+    const resolved = resolveTencentDir(config)
     const recent = Object.entries(config.ingested)
       .map(([key, value]) => ({ key, ...value }))
       .sort((a, b) => String(b.at).localeCompare(String(a.at)))
@@ -461,7 +689,14 @@ export function createAutoIngest(options) {
     return {
       enabled: config.enabled,
       tencent: config.tencent,
+      tencentDir: config.tencentDir,
+      tencentDirPath: runtime.tencent.dirPath !== '' ? runtime.tencent.dirPath : resolved.dir,
+      tencentDirSource: runtime.tencent.dirSource !== 'none' ? runtime.tencent.dirSource : resolved.source,
+      tencentMode: runtime.tencent.mode !== 'none'
+        ? runtime.tencent.mode
+        : (resolved.dir !== '' ? 'directory' : (process.platform === 'darwin' ? 'database' : 'none')),
       dirs: [...config.dirs],
+      dirsEnabled: config.dirsEnabled === true,
       tencentAvailable: runtime.tencent.available,
       tencentDbPath: runtime.tencent.dbPath,
       tencentRecords: runtime.tencent.records,
@@ -481,7 +716,9 @@ export function createAutoIngest(options) {
     const next = {}
     if (patch?.enabled !== undefined) next.enabled = patch.enabled !== false
     if (patch?.tencent !== undefined) next.tencent = patch.tencent !== false
+    if (patch?.tencentDir !== undefined) next.tencentDir = String(patch.tencentDir ?? '').trim()
     if (Array.isArray(patch?.dirs)) next.dirs = patch.dirs.map((dir) => String(dir).trim()).filter((dir) => dir !== '')
+    if (patch?.dirsEnabled !== undefined) next.dirsEnabled = patch.dirsEnabled !== false
     await store.setAutoIngest(next)
     return status()
   }

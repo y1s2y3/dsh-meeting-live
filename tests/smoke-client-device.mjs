@@ -9,7 +9,7 @@ import os from 'node:os';
 
 const file = path.join(
   os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules',
-  'dsh-plugin-meeting-minutes', 'lib', 'client.js',
+  'dsh-meeting-live', 'lib', 'client.js',
 );
 
 /* ── 1. 桩 React ─────────────────────────────────────────────────────── */

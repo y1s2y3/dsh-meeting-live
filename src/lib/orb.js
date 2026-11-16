@@ -13,7 +13,7 @@
  * The orb also exits on its own after 30 s without a state refresh, so a crashed
  * or force-killed host cannot leave an orphan widget on screen.
  *
- * @module dsh-plugin-meeting-minutes/orb
+ * @module dsh-meeting-live/orb
  */
 
 import { spawn } from 'node:child_process'
@@ -38,6 +38,7 @@ const ORB_LABELS = {
   paused: '已暂停',
   preparing: '正在准备…',
   stopping: '正在收尾…',
+  stoppingAction: '停止中…',
   done: '已停止',
   error: '出错了',
   idle: '空闲',
@@ -45,6 +46,7 @@ const ORB_LABELS = {
   resume: '继续',
   stop: '停止',
   chars: '已转写 {0} 字',
+  inputDevice: '输入设备',
   hintStop: '点「停止」结束录音，并自动跳回会议纪要',
 }
 
@@ -137,7 +139,14 @@ export function createOrbManager({ logger, profileKey = process.env.DSH_PROFILE 
         const full = path.join(stateDir, name)
         try {
           const parsed = JSON.parse(fs.readFileSync(full, 'utf8'))
-          if (parsed && typeof parsed.command === 'string') commands.push(parsed.command)
+          if (parsed && typeof parsed.command === 'string') {
+            // 切换输入设备：把 deviceId 编进同一条命令串，浏览器侧按前缀解析。
+            if (parsed.command === 'switch-input' && typeof parsed.deviceId === 'string' && parsed.deviceId !== '') {
+              commands.push(`switch-input:${parsed.deviceId}`)
+            } else {
+              commands.push(parsed.command)
+            }
+          }
         } catch {
           // A half-written command is dropped.
         }
@@ -278,6 +287,8 @@ export function startOrbBridge({ liveMirror, orb, store, logger } = {}) {
       chars: snapshot.chars,
       lastText: snapshot.lastText,
       level: Number.isFinite(snapshot.level) ? snapshot.level : 0,
+      devices: Array.isArray(snapshot.devices) ? snapshot.devices : [],
+      deviceId: typeof snapshot.deviceId === 'string' ? snapshot.deviceId : '',
       transcript: transcriptFor(snapshot.meetingId),
       labels: ORB_LABELS,
       ...extra,

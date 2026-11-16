@@ -13,7 +13,7 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 const pluginDir = process.argv[2] ?? path.join(
-  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-plugin-meeting-minutes',
+  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-meeting-live',
 );
 const serverFile = path.join(pluginDir, 'lib', 'server.js');
 const mirrorFile = path.join(pluginDir, 'lib', 'live-mirror.js');
@@ -67,10 +67,13 @@ function makeRes() {
 function makeStore() {
   const meeting = {
     id: 'mt_test', title: '测试', transcript: '', transcriptSeconds: 0,
-    todos: [
-      { id: 'td_1', title: '确认 Q4 预算', owner: '张三', due: '2026-11-20', priority: 'high', status: 'pending', calendarTaskId: null },
-      { id: 'td_2', title: '补充供应商清单', owner: '', due: '', priority: 'normal', status: 'pending', calendarTaskId: null },
-    ],
+    summary: {
+      oneLine: '', overview: '', keyPoints: [], decisions: [], risks: [], sections: [], attendees: [],
+      todos: [
+        { id: 'td_1', title: '确认 Q4 预算', owner: '张三', due: '2026-11-20', priority: 'high', status: 'pending', calendarTaskId: null },
+        { id: 'td_2', title: '补充供应商清单', owner: '', due: '', priority: 'normal', status: 'pending', calendarTaskId: null },
+      ],
+    },
   };
   return {
     file: 'meeting-minutes.json',
@@ -86,7 +89,7 @@ function makeStore() {
     },
     async markTodoPushed(meetingId, todoId, calendarTaskId) {
       if (meetingId !== 'mt_test') return null;
-      const todo = (meeting.todos ?? []).find((item) => item.id === todoId);
+      const todo = (meeting.summary?.todos ?? []).find((item) => item.id === todoId);
       if (todo !== undefined) todo.calendarTaskId = calendarTaskId;
       return meeting;
     },
@@ -209,6 +212,152 @@ const okCase = await askOk('POST', '/dsh-meeting/meetings/mt_test/transcribe?lan
 const okPayload = JSON.parse(okCase.body);
 check('正常识别仍返回 200 且带文本', okCase.status === 200 && okPayload.text === '大家好，我们开始开会。' && okPayload.transcript === '大家好，我们开始开会。');
 
+/* 3.1 本地 Paraformer 引擎：路由传给它的音频必须是 Buffer
+   （回归：readRawBody 曾返回 Uint8Array，每个分片都报「音频数据无效」，整场录音中断） */
+{
+  const store = makeStore();
+  store.settings.transcribe.provider = 'paraformer-local';
+  let received = null;
+  const askPara = await runRoute(
+    { status: () => ({ available: true, providers: [], selection: {} }), prepare: () => {} },
+    {
+      store,
+      paraformer: {
+        available: () => true,
+        diarizationAvailable: () => false,
+        async transcribeWav(bytes) {
+          received = bytes;
+          return { text: '本地引擎结果', audioSeconds: 1, inferenceSeconds: 0.1 };
+        },
+      },
+    },
+  );
+  const paraCase = await askPara('POST', '/dsh-meeting/meetings/mt_test/transcribe?language=zh', makeWav(1));
+  const paraPayload = JSON.parse(paraCase.body);
+  check('Paraformer 路由收到的是 Buffer', Buffer.isBuffer(received), received?.constructor?.name);
+  check('Paraformer 转写正常返回文本', paraCase.status === 200 && paraPayload.text === '本地引擎结果', paraCase.body.slice(0, 120));
+}
+
+/* 3.2 单个分片解码失败（音频数据无效）按空结果处理，不再中断整场录音 */
+{
+  const askBadChunk = await runRoute({
+    status: () => ({ available: true, providers: [], selection: {} }),
+    prepare: () => {},
+    async transcribeWav() { throw new Error('音频数据无效'); },
+  });
+  const badChunkCase = await askBadChunk('POST', '/dsh-meeting/meetings/mt_test/transcribe?language=zh', makeWav(1));
+  const badChunkPayload = JSON.parse(badChunkCase.body);
+  check('音频数据无效降级为 200 空结果', badChunkCase.status === 200 && badChunkPayload.ok === true && badChunkPayload.text === '', badChunkCase.body.slice(0, 120));
+}
+
+/* 3.3 decodeWavToSamples 兼容 Uint8Array（双保险） */
+{
+  const { decodeWavToSamples } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'paraformer.js')).href);
+  const decoded = decodeWavToSamples(new Uint8Array(makeWav(1)));
+  check('decodeWavToSamples 接受 Uint8Array', decoded.samples.length === 16000, String(decoded.samples.length));
+}
+
+/* 3.4 整段说话人分离结果不得把长转写覆盖成几个碎片 */
+{
+  const { shouldUseDiarizedTranscript } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'server.js')).href);
+  check('批量结果明显更短时保留流式转写', shouldUseDiarizedTranscript('长'.repeat(500), '短'.repeat(20)) === false);
+  check('批量结果更长时采用批量结果', shouldUseDiarizedTranscript('短'.repeat(20), '长'.repeat(500)) === true);
+  check('原转写为空时采用批量结果', shouldUseDiarizedTranscript('', '任意文本') === true);
+  check('批量结果为空时保留原转写', shouldUseDiarizedTranscript('已有内容', '') === false);
+}
+
+/* 3.5 整段重转写：30 秒切片 + 分片文本合并 */
+{
+  const { planRetranscribeSlices, mergeRetranscribeTexts } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'server.js')).href);
+  const slices = planRetranscribeSlices(65 * 16000, 16000, 30);
+  check('65 秒音频切成 3 片', slices.length === 3 && slices[0].startFrame === 0 && slices[2].endFrame === 65 * 16000
+    && slices[2].at === 60, JSON.stringify(slices));
+  check('分片带起始秒数', slices[1].at === 30, String(slices[1].at));
+  check('合并分片文本丢弃空片', mergeRetranscribeTexts(['第一段', '', '  第二段  ']) === '第一段\n第二段');
+  check('全空分片合并为空串', mergeRetranscribeTexts(['', '  ', null]) === '');
+}
+
+/* 3.6 整段重转写路由：启动任务 → 轮询进度 → 写回转写 */
+{
+  const fsMod = (await import('node:fs')).default;
+  const tmpWav = path.join(os.tmpdir(), 'dsh-mm-retrans-test.wav');
+  fsMod.writeFileSync(tmpWav, makeWav(2));
+  const store = makeStore();
+  await store.patch('mt_test', { media: [{ kind: 'audio', name: 'test.wav', path: tmpWav, bytes: 44, seconds: 2 }] });
+  const fakeParaformer = {
+    available: () => true,
+    diarizationAvailable: () => false,
+    decodeWavToSamples: () => ({ samples: new Float32Array(16000 * 2), sampleRate: 16000, channels: 1 }),
+    transcribeWav: async () => ({ text: '整段重转写测试文本', audioSeconds: 1, inferenceSeconds: 0 }),
+  };
+  const askRetrans = await runRoute(
+    { status: () => ({ available: true, providers: [], selection: {} }), prepare: () => {} },
+    { store, paraformer: fakeParaformer },
+  );
+  const started = JSON.parse((await askRetrans('POST', '/dsh-meeting/meetings/mt_test/retranscribe')).body);
+  check('整段重转写任务可启动', started.ok === true && started.job?.status === 'running', JSON.stringify(started.job ?? null));
+  let job = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const polled = JSON.parse((await askRetrans('GET', '/dsh-meeting/meetings/mt_test/retranscribe')).body);
+    job = polled.job ?? null;
+    if (job !== null && job.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  check('整段重转写任务能跑完', job?.status === 'done', JSON.stringify(job ?? null));
+  const patched = store.get('mt_test');
+  check('整段重转写结果写回会议转写', typeof patched?.transcript === 'string' && patched.transcript.includes('整段重转写测试文本'),
+    String(patched?.transcript ?? '').slice(0, 60));
+  check('整段重转写覆盖分段与时长', Array.isArray(patched?.transcriptSegments) && patched.transcriptSegments.length > 0
+    && patched.transcriptSeconds === 2, JSON.stringify({ segments: patched?.transcriptSegments?.length, seconds: patched?.transcriptSeconds }));
+  fsMod.rmSync(tmpWav, { force: true });
+}
+
+/* 3.7 历史数据自愈：转写被覆盖成碎片时用分段恢复 */
+{
+  const { repairTruncatedTranscripts } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'store.js')).href);
+  const segA = '这是第一段比较长的会议内容，用来验证转写被覆盖后的恢复逻辑是否真的生效。'.repeat(4);
+  const segB = '这是第二段比较长的会议内容，同样应该被拼回整段转写里面去才对。'.repeat(4);
+  const segC = '这是第三段比较长的会议内容，三段加起来超过两百个字肯定没问题。'.repeat(4);
+  const broken = {
+    transcript: 'S1：我就先了',
+    transcriptSegments: [
+      { speaker: 'A', text: segA },
+      { speaker: 'B', text: segB },
+      { speaker: 'A', text: segC },
+    ],
+  };
+  const touched = repairTruncatedTranscripts([broken]);
+  check('被覆盖的短转写能从分段恢复', touched === 1 && broken.transcript.includes('第一段比较长的会议内容')
+    && broken.transcript.includes('A：') && broken.transcript.split('\n').length === 3, JSON.stringify(broken.transcript.slice(0, 60)));
+  const healthy = { transcript: '正常转写内容'.repeat(60), transcriptSegments: broken.transcriptSegments };
+  check('正常转写不会被自愈逻辑改动', repairTruncatedTranscripts([healthy]) === 0 && healthy.transcript === '正常转写内容'.repeat(60));
+  const fewSegments = { transcript: '短', transcriptSegments: [{ speaker: 'A', text: '只有一段' }] };
+  check('分段太少不改动（避免误伤）', repairTruncatedTranscripts([fewSegments]) === 0 && fewSegments.transcript === '短');
+}
+
+/* 3.8 重新生成待办：只追加新行动项，旧待办保留 */
+{
+  const store = makeStore();
+  const askTodos = await runRoute(
+    { status: () => ({ available: true, providers: [], selection: {} }), prepare: () => {} },
+    {
+      store,
+      summarizer: {
+        async extractTodos() {
+          return [
+            { title: '新行动项：补一份排期表', owner: '', due: '', priority: 'normal', notes: '' },
+            { title: '新行动项：确认供应商名单', owner: '李娜', due: '2026-11-20', priority: 'high', notes: '' },
+          ];
+        },
+      },
+    },
+  );
+  const regenerated = JSON.parse((await askTodos('POST', '/dsh-meeting/meetings/mt_test/todos/regenerate')).body);
+  check('重新生成待办能追加新条目', regenerated.ok === true && regenerated.added === 2
+    && regenerated.todos.some((todo) => String(todo.title).includes('补一份排期表')), JSON.stringify({ added: regenerated.added }));
+  check('重新生成待办保留旧条目', regenerated.todos.length >= 4, String(regenerated.todos.length));
+}
+
 /* 4. 浮窗心跳：状态入库 + 指令带回 */
 const liveMirror = createLiveMirror();
 const askLive = await runRoute({
@@ -263,6 +412,10 @@ const todoCase = await askTodos('POST', '/dsh-meeting/meetings/mt_test/todos/pus
 const todoPayload = JSON.parse(todoCase.body);
 check('写入待办返回 200', todoCase.status === 200, `status=${todoCase.status} ${todoCase.body.slice(0, 120)}`);
 check('两条待办都写进 DSH 待办', Array.isArray(todoPayload.created) && todoPayload.created.length === 2, JSON.stringify(todoPayload.created));
+check('写入内容带上负责人与截止信息（保持单行）', pushed.length === 2
+  && pushed[0].content.includes('张三') && pushed[0].content.includes('截止：2026-11-20')
+  && !pushed[0].content.includes('\n')
+  && pushed[0].meta.due === '2026-11-20', JSON.stringify(pushed[0]));
 check('写入标记为 dsh-todo:<id>', todoPayload.created?.every((entry) => String(entry.calendarTaskId).startsWith('dsh-todo:')) === true, JSON.stringify(todoPayload.created));
 check('待办文本带上负责人', pushed.length === 2 && pushed[0].content.includes('确认 Q4 预算') && pushed[0].content.includes('张三'), JSON.stringify(pushed));
 check('待办落到工作类型（cat=会议纪要、优先级映射象限）', pushed[0]?.meta?.cat === '会议纪要' && pushed[0]?.meta?.quadrant === 'q1' && pushed[0]?.meta?.due === '2026-11-20', JSON.stringify(pushed[0]?.meta));
@@ -352,6 +505,10 @@ process.env.DSH_HOME = docxHome
 const docxRes = await uploadCase('GET', '/dsh-meeting/meetings/mt_test/export?format=docx')
 const docxPayload = JSON.parse(docxRes.body)
 const docxBase64 = String(docxPayload.base64 ?? '')
+const docxXml = Buffer.from(docxBase64, 'base64').toString('utf8');
+check('Word 导出包含美化标记（表头重复/底纹/分页/标题色）', docxXml.includes('<w:tblHeader/>')
+  && docxXml.includes('<w:shd')
+  && docxXml.includes('D9E2F3') && docxXml.includes('1F3A6E'), '')
 check('Word 导出返回 base64 与 .docx 文件名', docxRes.status === 200 && docxPayload.format === 'docx' && String(docxPayload.filename).endsWith('.docx') && docxBase64.length > 100, JSON.stringify({ format: docxPayload.format, filename: docxPayload.filename, base64Length: docxBase64.length }))
 check('Word 包以 ZIP 魔数开头（PK）', Buffer.from(docxBase64, 'base64').subarray(0, 2).toString('ascii') === 'PK', '')
 if (previousHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previousHome
@@ -375,5 +532,24 @@ check('模型状态接口可用', modelsStatus.status === 200 && JSON.parse(mode
 const badKind = await uploadCase('POST', '/dsh-meeting/models/unknown/download')
 check('未知模型类型返回 200 但状态为未开始（广播模式）', badKind.status === 200, badKind.body.slice(0, 120))
 
+/* 22. 问题反馈：内置图片（操作指引 + 写死的公众号二维码横幅）通过 /assets 读取 */
+const assetsRes = await uploadCase('GET', '/dsh-meeting/assets/guide-follow.png')
+check('内置关注指引图可访问', assetsRes.status === 200 && assetsRes.headers?.['content-type'] === 'image/png' && Buffer.isBuffer(assetsRes.body) && assetsRes.body.length > 1000, `status=${assetsRes.status}`)
+const chatAsset = await uploadCase('GET', '/dsh-meeting/assets/guide-chat.png')
+check('内置对话指引图可访问', chatAsset.status === 200 && chatAsset.headers?.['content-type'] === 'image/png' && Buffer.isBuffer(chatAsset.body) && chatAsset.body.length > 1000, `status=${chatAsset.status}`)
+const qrAsset = await uploadCase('GET', '/dsh-meeting/assets/feedback-qr.png')
+check('写死的公众号二维码横幅可访问', qrAsset.status === 200 && qrAsset.headers?.['content-type'] === 'image/png' && Buffer.isBuffer(qrAsset.body) && qrAsset.body.length > 10000, `status=${qrAsset.status} bytes=${Buffer.isBuffer(qrAsset.body) ? qrAsset.body.length : 'n/a'}`)
+const placeholderRes = await uploadCase('GET', '/dsh-meeting/assets/feedback-qr-placeholder.png')
+check('二维码占位图可访问（文件缺失时的兜底）', placeholderRes.status === 200 && placeholderRes.headers?.['content-type'] === 'image/png', `status=${placeholderRes.status}`)
+const assetMiss = await uploadCase('GET', '/dsh-meeting/assets/not-exist.png')
+check('不存在的图片返回 404', assetMiss.status === 404, assetMiss.body.toString().slice(0, 120))
+const assetBad = await uploadCase('GET', '/dsh-meeting/assets/..%2F..%2Fpackage.json')
+check('图片名做了白名单校验（拒绝路径穿越）', assetBad.status === 400, String(assetBad.status))
+const noUpload = await uploadCase('POST', '/dsh-meeting/feedback/qr', JSON.stringify({ dataUrl: 'data:image/png;base64,AAAA' }), 'application/json')
+check('二维码上传接口已移除（二维码写死在插件里）', noUpload.status === 404 && String(noUpload.body).includes('未知接口'), `${noUpload.status} ${noUpload.body.slice(0, 120)}`)
+
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
+
+
+

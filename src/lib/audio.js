@@ -11,7 +11,7 @@
  * maxAudioBytes 上限（SenseVoice 默认 4MB ≈ 131 秒），因此超过 100 秒的音频
  * 先按帧边界切开，分别识别后再拼接文本。
  *
- * @module dsh-plugin-meeting-minutes/audio
+ * @module dsh-meeting-live/audio
  */
 
 /** 本地语音识别要求的采样率。 */

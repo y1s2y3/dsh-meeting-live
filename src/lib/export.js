@@ -6,7 +6,7 @@
  * - `html` — one self-contained, print-friendly HTML page with inline CSS
  *            (no external assets, no Harness runtime needed).
  *
- * @module dsh-plugin-meeting-minutes/export
+ * @module dsh-meeting-live/export
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -361,8 +361,9 @@ function docxRun(textValue, options = {}) {
   const size = Number(options.size ?? 21)
   const rPr = [
     '<w:rPr>',
-    '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/>',
+    '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="' + String(options.fontEastAsia ?? '宋体') + '"/>',
     options.bold === true ? '<w:b/>' : '',
+    options.italic === true ? '<w:i/>' : '',
     options.color !== undefined ? '<w:color w:val="' + String(options.color) + '"/>' : '',
     '<w:sz w:val="' + String(Math.round(size * 2)) + '"/>',
     '<w:szCs w:val="' + String(Math.round(size * 2)) + '"/>',
@@ -371,18 +372,47 @@ function docxRun(textValue, options = {}) {
   return '<w:r>' + rPr + '<w:t xml:space="preserve">' + xmlEscape(textValue) + '</w:t></w:r>'
 }
 
-/** One paragraph; options.align is left/center/right. */
+/** One paragraph; options: align / indent / shading / borderBottom / spacing. */
 function docxParagraph(textValue, options = {}) {
+  const border = options.borderBottom === true
+    ? '<w:pBdr><w:bottom w:val="single" w:sz="' + String(options.borderSize ?? 8) + '" w:space="4" w:color="' + String(options.borderColor ?? 'C9D8F0') + '"/></w:pBdr>'
+    : ''
   const props = [
     '<w:pPr>',
     options.heading === true ? '<w:keepNext/>' : '',
+    border,
+    options.shading !== undefined ? '<w:shd w:val="clear" w:color="auto" w:fill="' + String(options.shading) + '"/>' : '',
     '<w:spacing w:before="' + String(options.before ?? 0) + '" w:after="' + String(options.after ?? 120) + '" w:line="' + String(options.line ?? 300) + '" w:lineRule="auto"/>',
-    options.align !== undefined ? '<w:jc w:val="' + String(options.align) + '"/>' : '',
     options.indent === true ? '<w:ind w:firstLine="480"/>' : '',
+    options.leftIndent !== undefined ? '<w:ind w:left="' + String(options.leftIndent) + '"/>' : '',
+    options.align !== undefined ? '<w:jc w:val="' + String(options.align) + '"/>' : '',
     '</w:pPr>',
   ].join('')
-  const runs = typeof textValue === 'string' ? docxRun(textValue, options) : textValue
+  let runs
+  if (typeof textValue === 'string') {
+    runs = textValue.startsWith('<w:r') ? textValue : docxRun(textValue, options)
+  } else if (Array.isArray(textValue)) {
+    runs = textValue.join('')
+  } else {
+    runs = docxRun(textValue, options)
+  }
   return '<w:p>' + props + runs + '</w:p>'
+}
+
+/** Styled section heading used across the document. */
+function docxHeading(textValue) {
+  return docxParagraph(textValue, {
+    size: 24,
+    bold: true,
+    color: '2F5FB3',
+    heading: true,
+    before: 260,
+    after: 100,
+    line: 300,
+    borderBottom: true,
+    borderSize: 8,
+    borderColor: 'DCE6F5',
+  })
 }
 
 /** A table cell (borders come from the table-level tblBorders). */
@@ -391,9 +421,10 @@ function docxCell(textValue, options = {}) {
   return [
     '<w:tc>',
     '<w:tcPr><w:tcW w:w="' + String(width) + '" w:type="dxa"/>',
-    options.header === true ? '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>' : '',
+    options.header === true ? '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>'
+      : (options.shading !== undefined ? '<w:shd w:val="clear" w:color="auto" w:fill="' + String(options.shading) + '"/>' : ''),
     '<w:vAlign w:val="center"/></w:tcPr>',
-    docxParagraph(textValue, { size: options.size ?? 18, bold: options.header === true, after: 40, line: 260 }),
+    docxParagraph(textValue, { size: options.size ?? 19, bold: options.header === true, after: 40, line: 260, color: options.header === true ? '1F3A6E' : undefined }),
     '</w:tc>',
   ].join('')
 }
@@ -405,60 +436,100 @@ function buildDocxBody(meeting) {
   const summary = meeting.summary ?? null
   const todos = Array.isArray(summary?.todos) ? summary.todos : []
   const decisions = Array.isArray(summary?.decisions) ? summary.decisions : []
+  const keyPoints = Array.isArray(summary?.keyPoints) ? summary.keyPoints : []
+  const risks = Array.isArray(summary?.risks) ? summary.risks : []
   const parts = []
-  parts.push(docxParagraph(meeting.title || '会议纪要', { size: 22, bold: true, align: 'center', after: 120 }))
-  const meta = [
-    '会议日期：' + meeting.date,
-    '来源：' + (meeting.sourceType === 'recording' ? '录音' : meeting.sourceType === 'import' ? '导入文件' : '文本'),
-    '参会人：' + (attendees.length > 0 ? attendees.join('、') : '（未填写）'),
-    '字数：' + String(transcript.length),
-  ].join('　　')
-  parts.push(docxParagraph(meta, { size: 18, align: 'center', after: 240, color: '595959' }))
+
+  /* 标题 + 分隔线 + 元信息（居中、浅灰） */
+  parts.push(docxParagraph(meeting.title || '会议纪要', {
+    size: 30, bold: true, align: 'center', after: 100, color: '1F3A6E', line: 320,
+  }))
+  parts.push(docxParagraph('', { borderBottom: true, borderColor: '2F5FB3', borderSize: 12, after: 150 }))
+  const sourceLabel = meeting.sourceType === 'recording' ? '录音' : (meeting.sourceType === 'import' ? '导入文件' : '文本')
+  parts.push(docxParagraph('会议日期：' + meeting.date + '　　·　　来源：' + sourceLabel, {
+    size: 18, align: 'center', after: 40, color: '6B7A90',
+  }))
+  parts.push(docxParagraph('参会人：' + (attendees.length > 0 ? attendees.join('、') : '（未填写）') + '　　·　　字数：' + String(transcript.length), {
+    size: 18, align: 'center', after: 280, color: '6B7A90',
+  }))
+
   if (summary !== null) {
     if (summary.oneLine !== '') {
-      parts.push(docxParagraph('一句话结论', { size: 16, bold: true, after: 60 }))
-      parts.push(docxParagraph(summary.oneLine, { size: 21, after: 180 }))
+      parts.push(docxHeading('一句话结论'))
+      parts.push(docxParagraph(summary.oneLine, {
+        size: 24, bold: true, color: '1F3A6E', shading: 'EEF4FF', after: 220, line: 330,
+      }))
     }
     if (summary.overview !== '') {
-      parts.push(docxParagraph('概述', { size: 16, bold: true, after: 60 }))
-      parts.push(docxParagraph(summary.overview, { size: 21, indent: true, after: 180 }))
+      parts.push(docxHeading('会议概述'))
+      parts.push(docxParagraph(summary.overview, { size: 21, indent: true, after: 200, line: 340 }))
+    }
+    if (keyPoints.length > 0) {
+      parts.push(docxHeading('关键要点'))
+      keyPoints.forEach((point) => {
+        parts.push(docxParagraph('• ' + String(point), { size: 21, after: 90, line: 330 }))
+      })
+    }
+    if (risks.length > 0) {
+      parts.push(docxHeading('风险与待确认'))
+      const levelLabel = { high: '高', medium: '中', low: '低' }
+      risks.forEach((risk) => {
+        const label = levelLabel[risk?.level] ?? '中'
+        parts.push(docxParagraph('• [' + label + '] ' + String(risk?.text ?? ''), { size: 21, after: 90, line: 330 }))
+      })
     }
     if (decisions.length > 0) {
-      parts.push(docxParagraph('决策事项', { size: 16, bold: true, after: 60 }))
+      parts.push(docxHeading('决策事项'))
       decisions.forEach((item, index) => {
-        const owner = typeof item.owner === 'string' && item.owner !== '' ? '（负责人：' + item.owner + '）' : ''
-        parts.push(docxParagraph(String(index + 1) + '. ' + String(item.text ?? '') + owner, { size: 21, after: 80 }))
+        const owner = typeof item.owner === 'string' && item.owner !== '' ? item.owner : ''
+        const runs = docxRun(String(index + 1) + '. ' + String(item.text ?? ''), { size: 21 })
+          + (owner !== '' ? docxRun('（负责人：' + owner + '）', { size: 19, color: '6B7A90' }) : '')
+        parts.push(docxParagraph(runs, { after: 90, line: 330 }))
       })
     }
   }
-  parts.push(docxParagraph('待办事项', { size: 16, bold: true, after: 60 }))
+
+  /* 待办事项：带表头底纹 + 隔行底纹 + 细边框的表格 */
+  parts.push(docxHeading('待办事项'))
   if (todos.length === 0) {
-    parts.push(docxParagraph('（无）', { size: 21, after: 180 }))
+    parts.push(docxParagraph('（本次会议没有提取到待办事项）', { size: 20, color: '6B7A90', after: 200 }))
   } else {
-    const rows = [
-      '<w:tr>' + docxCell('序号', { header: true, width: 700 }) + docxCell('待办事项', { header: true, width: 4200 }) + docxCell('负责人', { header: true, width: 1200 }) + docxCell('截止日期', { header: true, width: 1400 }) + '</w:tr>',
-    ]
+    const widths = [800, 4000, 1400, 1800]
+    const header = '<w:tr><w:trPr><w:tblHeader/><w:cantSplit/></w:trPr>'
+      + docxCell('序号', { header: true, width: widths[0] })
+      + docxCell('待办事项', { header: true, width: widths[1] })
+      + docxCell('负责人', { header: true, width: widths[2] })
+      + docxCell('截止日期', { header: true, width: widths[3] })
+      + '</w:tr>'
+    const rows = [header]
     todos.forEach((todo, index) => {
-      rows.push('<w:tr>'
-        + docxCell(String(index + 1), { width: 700 })
-        + docxCell(String(todo.title ?? ''), { width: 4200 })
-        + docxCell(todo.owner === '' ? '--' : String(todo.owner), { width: 1200 })
-        + docxCell(todo.due === '' ? '--' : String(todo.due), { width: 1400 })
+      const shading = index % 2 === 1 ? 'F7FAFD' : undefined
+      rows.push('<w:tr><w:trPr><w:cantSplit/></w:trPr>'
+        + docxCell(String(index + 1), { width: widths[0], shading })
+        + docxCell(String(todo.title ?? ''), { width: widths[1], shading })
+        + docxCell(todo.owner === '' ? '--' : String(todo.owner), { width: widths[2], shading })
+        + docxCell(todo.due === '' ? '--' : String(todo.due), { width: widths[3], shading })
         + '</w:tr>')
     })
-    parts.push('<w:tbl><w:tblPr><w:tblW w:w="7500" w:type="dxa"/><w:tblBorders>'
-      + '<w:top w:val="single" w:sz="4" w:color="BFBFBF"/><w:left w:val="single" w:sz="4" w:color="BFBFBF"/>'
-      + '<w:bottom w:val="single" w:sz="4" w:color="BFBFBF"/><w:right w:val="single" w:sz="4" w:color="BFBFBF"/>'
-      + '<w:insideH w:val="single" w:sz="4" w:color="BFBFBF"/><w:insideV w:val="single" w:sz="4" w:color="BFBFBF"/>'
+    parts.push('<w:tbl><w:tblPr><w:tblW w:w="8000" w:type="dxa"/><w:tblLayout w:type="fixed"/>'
+      + '<w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="120" w:type="dxa"/>'
+      + '<w:bottom w:w="60" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar>'
+      + '<w:tblBorders>'
+      + '<w:top w:val="single" w:sz="6" w:color="D9E2F3"/><w:left w:val="single" w:sz="6" w:color="D9E2F3"/>'
+      + '<w:bottom w:val="single" w:sz="6" w:color="D9E2F3"/><w:right w:val="single" w:sz="6" w:color="D9E2F3"/>'
+      + '<w:insideH w:val="single" w:sz="6" w:color="D9E2F3"/><w:insideV w:val="single" w:sz="6" w:color="D9E2F3"/>'
       + '</w:tblBorders></w:tblPr>' + rows.join('') + '</w:tbl>')
-    parts.push(docxParagraph('', { after: 120 }))
+    parts.push(docxParagraph('', { after: 140 }))
   }
+
+  /* 原始转写：另起一页，正文用更小更浅的字号 */
   if (transcript !== '') {
-    parts.push(docxParagraph('原始转写', { size: 16, bold: true, before: 240, after: 60 }))
+    parts.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
+    parts.push(docxHeading('原始转写'))
     for (const line of transcript.split(/\r?\n/)) {
       const trimmed = line.trim()
       if (trimmed === '') continue
-      parts.push(docxParagraph(trimmed, { size: 19, after: 60, line: 280 }))
+      parts.push(docxParagraph(trimmed, { size: 19, color: '44506A', after: 50, line: 300 }))
     }
   }
   return parts.join('')

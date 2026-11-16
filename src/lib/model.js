@@ -5,7 +5,7 @@
  * reads other than the explicit `now` argument, so the whole module is
  * unit-testable under plain Node.
  *
- * @module dsh-plugin-meeting-minutes/model
+ * @module dsh-meeting-live/model
  */
 
 /** Where a meeting's text came from. */
@@ -147,6 +147,13 @@ function normalizeTodo(raw, previous = []) {
   if (input === null) return null
   const key = `${input.title}\u0000${input.owner}`
   const match = previous.find((todo) => `${todo.title}\u0000${todo.owner}` === key)
+  // 弃用状态优先看本次输入（恢复时显式传 false），否则沿用同一条旧待办的状态。
+  const dropped = typeof raw?.dropped === 'boolean' ? raw.dropped : match?.dropped === true
+  const droppedAt = dropped
+    ? (typeof raw?.droppedAt === 'string' && raw.droppedAt !== ''
+      ? raw.droppedAt
+      : (match?.droppedAt ?? null))
+    : null
   return {
     id: asText(raw?.id, match?.id ?? newId('td')),
     title: input.title,
@@ -156,6 +163,8 @@ function normalizeTodo(raw, previous = []) {
     notes: input.notes,
     calendarTaskId: match?.calendarTaskId ?? (typeof raw?.calendarTaskId === 'string' && raw.calendarTaskId !== '' ? raw.calendarTaskId : null),
     pushedAt: match?.pushedAt ?? (typeof raw?.pushedAt === 'string' ? raw.pushedAt : null),
+    dropped,
+    droppedAt,
   }
 }
 
@@ -219,8 +228,11 @@ export function normalizeSummary(raw, options = {}) {
 /** Auto-ingest configuration defaults, persisted in the meeting document. */
 export const DEFAULT_AUTO_INGEST = {
   enabled: true,
-  tencent: true,
+  // 两个自动来源默认关闭：新安装不会被自动导入的会议打扰，需要时在设置里打开。
+  tencent: false,
+  tencentDir: '',
   dirs: [],
+  dirsEnabled: false,
   ingested: {},
   failures: {},
   lastScanAt: null,
@@ -265,8 +277,10 @@ export function normalizeAutoIngestConfig(raw) {
   }
   return {
     enabled: input.enabled !== false,
-    tencent: input.tencent !== false,
+    tencent: input.tencent === true,
+    tencentDir: capText(input.tencentDir, 400),
     dirs,
+    dirsEnabled: input.dirsEnabled === true,
     ingested,
     failures,
     lastScanAt: typeof input.lastScanAt === 'string' && input.lastScanAt !== '' ? input.lastScanAt : null,

@@ -6,7 +6,7 @@
  * profile's node_modules, so entry formatting, directory locking and validation
  * stay identical to what the `dtodo` tool writes.
  *
- * @module dsh-plugin-meeting-minutes/dsh-todo
+ * @module dsh-meeting-live/dsh-todo
  */
 
 import fs from 'node:fs'

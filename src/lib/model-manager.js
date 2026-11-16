@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import crypto from 'node:crypto'
 
 /** 无数据可读（卡死）多久后放弃本次请求 */
 const IDLE_TIMEOUT_MS = 60000
@@ -35,25 +36,28 @@ const PROGRESS_BYTES_STEP = 1024 * 1024
 /** 进度回调的最小时间间隔（1 秒） */
 const PROGRESS_TIME_STEP = 1000
 
-/** 模型清单（URL 为已确认可用的 hf-mirror 地址；bytes 为 0 表示不校验大小） */
+/** 模型清单（URL 为已确认可用的 hf-mirror 地址；bytes 为 0 表示不校验大小）
+ *  sha256 取自模型仓库的官方文件哈希（LFS 元数据；tokens.txt 非 LFS，按官方镜像文件固定），
+ *  下载完成后逐个校验，防止镜像文件被替换。
+ */
 const ASSETS = {
   paraformer: {
     title: 'Paraformer 中文语音识别模型',
     files: [
-      { name: 'model.int8.onnx', url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09/resolve/main/model.int8.onnx', bytes: 227752837 },
-      { name: 'tokens.txt', url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09/resolve/main/tokens.txt', bytes: 0 }
+      { name: 'model.int8.onnx', url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09/resolve/main/model.int8.onnx', bytes: 227330205, sha256: '90bc03034ae1bef9575f8cc798cd1519c8be8aa9e8b458a033e32017ff4d584c' },
+      { name: 'tokens.txt', url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09/resolve/main/tokens.txt', bytes: 75354, sha256: '6c0e3b35cece259829e6cb5b8d90d13db88f61ea3a2953d11898e4b2bfd7a2e2' }
     ]
   },
   segmentation: {
     title: '说话人分段模型（pyannote）',
     files: [
-      { name: 'model.int8.onnx', url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.int8.onnx', bytes: 0 }
+      { name: 'model.int8.onnx', url: 'https://hf-mirror.com/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.int8.onnx', bytes: 1540506, sha256: 'd582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d' }
     ]
   },
   campplus: {
     title: '说话人声纹模型（cam++）',
     files: [
-      { name: '3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx', url: 'https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx', bytes: 0 }
+      { name: '3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx', url: 'https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx', bytes: 28281138, sha256: 'f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11' }
     ]
   }
 }
@@ -97,6 +101,7 @@ function friendlyError(error) {
     if (error.name === 'AbortError' || error.name === 'TimeoutError') return '下载超时，请检查网络后重试'
     if (error.message.startsWith('下载失败')) return error.message
     if (error.message.startsWith('文件大小校验失败')) return error.message
+    if (error.message.startsWith('模型文件校验失败')) return error.message
     if (error.message === '下载的文件为空') return error.message
     if (error.message === '下载的文件不完整') return error.message
     return '下载中断，请重试'
@@ -156,6 +161,29 @@ function planChunks(totalBytes) {
     plan.push({ index, start, end, length: end - start + 1 })
   }
   return plan.length > 1 ? plan : null
+}
+
+/**
+ * 计算文件的 SHA-256（流式读取，避免把几百 MB 的模型一次读进内存）。
+ * @param {string} filePath 文件绝对路径
+ * @returns {Promise<string>} 小写十六进制摘要
+ */
+export async function sha256File(filePath) {
+  const hash = crypto.createHash('sha256')
+  const handle = await fsp.open(filePath, 'r')
+  try {
+    const buffer = Buffer.allocUnsafe(1024 * 1024)
+    let position = 0
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
+      if (bytesRead <= 0) break
+      hash.update(buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+  } finally {
+    await handle.close()
+  }
+  return hash.digest('hex')
 }
 
 /**
@@ -466,7 +494,7 @@ export function createModelManager(options = {}) {
         }
       }
 
-      // ④ 校验：文件存在、非空、大小符合预期
+      // ④ 校验：文件存在、非空、大小符合预期、SHA-256 与官方一致（防镜像文件被替换）
       let actualSize = 0
       try {
         const stat = await fsp.stat(partPath)
@@ -484,6 +512,13 @@ export function createModelManager(options = {}) {
           logger?.warn?.(`模型文件大小与清单略有差异，已按响应头校准：${file.name}（清单 ${expected} 字节，实际 ${actualSize} 字节）`)
         } else {
           throw new Error(`文件大小校验失败（期望约 ${expected} 字节，实际 ${actualSize} 字节）`)
+        }
+      }
+      if (typeof file.sha256 === 'string' && file.sha256 !== '') {
+        const actualHash = await sha256File(partPath)
+        if (actualHash !== file.sha256.toLowerCase()) {
+          logger?.warn?.(`模型文件 SHA-256 与清单不一致：${file.name}（实际 ${actualHash}）`)
+          throw new Error(`模型文件校验失败（${file.name} 的 SHA-256 与官方不一致），已删除下载结果，请重试`)
         }
       }
 
