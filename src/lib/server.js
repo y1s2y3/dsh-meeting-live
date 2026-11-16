@@ -37,6 +37,7 @@ import { dirname, join, sep } from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { CURRENT_VERSION, checkForUpdate } from './update-check.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -455,6 +456,7 @@ export async function buildState(deps) {
     now: new Date().toISOString(),
     today: localDay(),
     clock: formatMoment(),
+    version: CURRENT_VERSION,
     autoIngest: auto,
     config: {
       llm: summarizer.describeRoute(store.summaryModel),
@@ -560,6 +562,13 @@ export function registerRoutes(ctx, deps) {
 
       if (segments.length === 1 && segments[0] === 'state' && method === 'GET') {
         sendJson(res, 200, await buildState(deps))
+        return
+      }
+
+      // 检查更新：只查询最新版本并返回下载页，不下载/不安装（设置页「检查更新」用）
+      if (segments.length === 1 && segments[0] === 'update-check' && method === 'GET') {
+        const force = url.searchParams.get('force') === '1'
+        sendJson(res, 200, await checkForUpdate({ force }))
         return
       }
 
@@ -689,6 +698,7 @@ export function registerRoutes(ctx, deps) {
           : false
         sendJson(res, 200, {
           ok: true,
+          version: CURRENT_VERSION,
           model: store.summaryModel,
           defaultModel,
           models: models.filter((item) => item.id !== ''),

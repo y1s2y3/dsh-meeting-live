@@ -28,7 +28,7 @@ src/                     插件源码（直接改这里）
   cordis.patch.yml       插件加载声明
   README.md              插件用户说明（随包分发）
   LICENSE                MIT 授权文本（随包分发）
-tests/                   离线自测（11 套，改完代码跑一遍）
+tests/                   离线自测（12 套，改完代码跑一遍）
 deploy.mjs               部署到 DSH Desktop profile
 package.mjs              打包成可分发的 .tgz
 INSTALL.md               给使用者的安装/升级/卸载说明
@@ -58,6 +58,7 @@ node tests/smoke-settings-render.mjs
 node tests/smoke-win-tencent.mjs    # Windows 专项：腾讯会议目录选择/扫描、docx 解析、ffmpeg 转码
 node tests/smoke-cloud-asr.mjs      # 云端转写协议层：三家签名/请求体/响应解析（mock，无需密钥）
 node tests/smoke-model-hash.mjs     # 模型文件 SHA-256 清单与本机已下载模型一致性（防镜像替换）
+node tests/smoke-update-check.mjs   # 版本更新检查（版本比较 / npm 优先 / GitHub 兜底 / 缓存）
 ```
 
 改完何时生效：

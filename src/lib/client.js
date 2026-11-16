@@ -3657,6 +3657,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [localTranscribeMode, setLocalTranscribeMode] = useState(null)
       const [termsText, setTermsText] = useState('')
       const [termsSaving, setTermsSaving] = useState(false)
+      // 版本与更新：appVersion 来自 /settings，updateInfo 来自 /update-check
+      const [appVersion, setAppVersion] = useState('')
+      const [updateState, setUpdateState] = useState('idle')
+      const [updateInfo, setUpdateInfo] = useState(null)
       const termsTouchedRef = useRef(false)
       const mountedRef = useRef(true)
 
@@ -3686,6 +3690,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         setModelsState(payload?.modelsState ?? null)
         setDshModels(Array.isArray(payload?.models) ? payload.models : [])
         setDefaultModel(payload?.defaultModel ?? null)
+        setAppVersion(typeof payload?.version === 'string' ? payload.version : '')
         const chosen = payload?.model
         setSummarySelection(chosen !== null && chosen !== undefined ? String(chosen.provider) + '|' + String(chosen.model) : '')
         if (termsTouchedRef.current !== true) setTermsText(payload?.settings?.terms ?? '')
@@ -3694,6 +3699,33 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       useEffect(() => {
         void loadSettings().catch((caught) => { setError(messageOf(caught)) })
       }, [])
+
+      /** 检查插件更新：只查询最新版本并提示，不下载/不自动安装。 */
+      const checkUpdates = async () => {
+        setUpdateState('checking')
+        setUpdateInfo(null)
+        try {
+          const payload = await requestJson('/update-check?force=1')
+          if (!mountedRef.current) return
+          setUpdateInfo(payload !== null && typeof payload === 'object' ? payload : null)
+        } catch (caught) {
+          if (!mountedRef.current) return
+          setUpdateInfo({ ok: false, hasUpdate: false, error: messageOf(caught) })
+        } finally {
+          if (mountedRef.current) setUpdateState('done')
+        }
+      }
+
+      /** 打开新版本下载页（GitHub Release）；打不开时把地址提示出来。 */
+      const openUpdateDownload = () => {
+        const target = updateInfo !== null && typeof updateInfo.url === 'string' ? updateInfo.url : ''
+        if (target === '') return
+        try {
+          window.open(target, '_blank', 'noopener,noreferrer')
+        } catch {
+          notify('info', '新版本下载地址', target)
+        }
+      }
 
       const downloadMissRef = useRef(0)
 
@@ -4325,6 +4357,35 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               ),
             )),
           ),
+        ),
+        h('div', { className: 'dsm-set-section' },
+          h('div', { className: 'dsm-set-section-head' },
+            h('span', { className: 'dsm-set-section-title' }, '版本与更新'),
+            h('span', { className: 'dsm-set-section-desc' }, '当前版本 ' + (appVersion === '' ? '—' : 'v' + appVersion) + '；只检查并提示，不会自动安装。'),
+          ),
+          h('div', { className: 'dsm-set-cloud-actions' },
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--sm',
+              disabled: updateState === 'checking',
+              onClick: () => { void checkUpdates() },
+            }, updateState === 'checking' ? '检查中…' : '检查更新'),
+            updateInfo !== null && updateInfo.hasUpdate === true
+              ? h('button', {
+                type: 'button',
+                className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                onClick: openUpdateDownload,
+              }, '下载 v' + String(updateInfo.latest ?? ''))
+              : null,
+            updateState === 'done' && updateInfo !== null && updateInfo.hasUpdate !== true
+              ? h('span', { className: 'dsm-hint' }, updateInfo.ok === true
+                ? '已是最新版本' + (updateInfo.latest ? '（v' + String(updateInfo.latest) + '）' : '')
+                : String(updateInfo.error ?? '检查更新失败'))
+              : null,
+          ),
+          updateInfo !== null && updateInfo.hasUpdate === true
+            ? h('div', { className: 'dsm-hint' }, '新版本 v' + String(updateInfo.latest) + ' 已发布：退出 DSH Desktop → 下载并用新包覆盖 node_modules\\dsh-meeting-live → 重启；会议数据不会丢。')
+            : null,
         ),
         error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
       )

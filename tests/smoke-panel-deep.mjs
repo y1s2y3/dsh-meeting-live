@@ -317,6 +317,7 @@ try {
     ['引导弹窗可直接去设置', code.includes('onOpenSettings') && code.includes('去下载 / 配置模型')],
     ['引导弹窗检查并提示安装 ffmpeg', code.includes('安装 ffmpeg（可选，建议）') && code.includes('winget install Gyan.FFmpeg') && code.includes('ffmpegReady')],
     ['ffmpeg 可用状态由宿主 /state 提供', code.includes('screen?.ffmpegReady')],
+    ['问题反馈页有版本与更新入口（只提示不自动装）', code.includes('版本与更新') && code.includes('检查更新') && code.includes('/update-check?force=1') && code.includes('不会自动安装')],
     ['会议纪要标题栏不再显示数字徽标', !code.includes('pending > 99') && !code.includes("className: 'dsm-icon-dot'")],
   ]
   for (const [label, ok] of checks) {

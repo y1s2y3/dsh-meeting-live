@@ -475,6 +475,27 @@ process.env.DSH_MEETING_NO_SCREEN = '1'
 const stateRes = await uploadCase('GET', '/dsh-meeting/state');
 const statePayload = JSON.parse(stateRes.body)
 check('状态接口返回 ffmpeg 可用标记（首次引导据此提示安装）', stateRes.status === 200 && typeof statePayload.screen?.ffmpegReady === 'boolean', JSON.stringify({ status: stateRes.status, screen: statePayload.screen }))
+check('状态接口返回当前插件版本', stateRes.status === 200 && typeof statePayload.version === 'string' && /^\d+\.\d+\.\d+/.test(statePayload.version), JSON.stringify(statePayload.version))
+
+/* 更新检查接口：用桩 fetch 验证「只查版本、返回下载页」 */
+{
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('registry.npmjs.org')) {
+      return { ok: true, json: async () => ({ version: '999.0.0' }) }
+    }
+    return { ok: false, json: async () => ({}) }
+  }
+  const updateRes = await uploadCase('GET', '/dsh-meeting/update-check?force=1')
+  const updatePayload = JSON.parse(updateRes.body)
+  globalThis.fetch = originalFetch
+  check('更新检查接口返回结构与当前版本', updateRes.status === 200 && typeof updatePayload.current === 'string' && updatePayload.current === statePayload.version, JSON.stringify(updatePayload))
+  check('更新检查接口能识别新版本并给出下载页', updatePayload.ok === true && updatePayload.hasUpdate === true && /^https:\/\/github\.com\/.+\/releases\/latest$/.test(updatePayload.url ?? ''), JSON.stringify(updatePayload.url))
+  check('更新检查不会自动安装（只有提示字段）', updatePayload.install === undefined && updatePayload.download === undefined, JSON.stringify(Object.keys(updatePayload)))
+}
+const settingsVersionRes = await uploadCase('GET', '/dsh-meeting/settings')
+const settingsVersionPayload = JSON.parse(settingsVersionRes.body)
+check('设置接口返回当前插件版本（问题反馈页显示用）', settingsVersionRes.status === 200 && settingsVersionPayload.version === statePayload.version, JSON.stringify(settingsVersionPayload.version))
 const sourcesRes = await uploadCase('GET', '/dsh-meeting/screen/sources')
 const sourcesPayload = JSON.parse(sourcesRes.body)
 check('屏幕源接口返回桌面源', sourcesRes.status === 200 && Array.isArray(sourcesPayload.sources) && sourcesPayload.sources.length >= 1, sourcesRes.body.slice(0, 140))

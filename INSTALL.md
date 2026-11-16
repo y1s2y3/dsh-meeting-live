@@ -56,6 +56,8 @@ node deploy.mjs        # 自动备份线上版本并复制到 desktop profile
 
 ## 四、升级与卸载
 
+- **检查新版本**：插件内「设置 → 问题反馈 → 版本与更新 → 检查更新」可查看是否有新版本（只提示，不自动安装）；
+  有新版本时点「下载」打开 Releases 页面。
 - **升级**：完全退出 DSH Desktop → 用新版本覆盖 `node_modules\dsh-meeting-live\` → 重启。
 - **卸载**：删除 `node_modules\dsh-meeting-live\`，并从 profile 的 `package.json` 里删掉
   `dependencies`、`dsh.profile.bundles` 中的 `dsh-meeting-live`，然后重启。
