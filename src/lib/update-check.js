@@ -35,9 +35,22 @@ function repoFromPackage(manifest) {
 /** 实际用于查 GitHub Releases 的仓库（owner/repo） */
 export const UPDATE_REPO = repoFromPackage(PKG) ?? DEFAULT_REPO
 
-/** 下载/查看新版本的地址（GitHub Releases 页） */
-export function releaseUrl(repo = UPDATE_REPO) {
+/** package.json 里是否显式配置了仓库地址（决定「下载」按钮跳 GitHub 还是 npm） */
+export const REPO_CONFIGURED = repoFromPackage(PKG) !== null
+
+/** GitHub Releases 页地址 */
+export function githubReleaseUrl(repo = UPDATE_REPO) {
   return `https://github.com/${repo}/releases/latest`
+}
+
+/** npm 包页面地址（没配置仓库时的兜底下载/查看入口） */
+export function npmPackageUrl(name = PACKAGE_NAME) {
+  return `https://www.npmjs.com/package/${name}`
+}
+
+/** 默认下载入口：配置了仓库就用 GitHub Releases，否则用 npm 页面 */
+export function releaseUrl(repo = UPDATE_REPO) {
+  return REPO_CONFIGURED ? githubReleaseUrl(repo) : npmPackageUrl()
 }
 
 /**
@@ -133,7 +146,7 @@ export async function checkForUpdate(options = {}) {
       current: CURRENT_VERSION,
       latest,
       hasUpdate: compareVersions(latest, CURRENT_VERSION) > 0,
-      url: releaseUrl(),
+      url: githubReleaseUrl(),
       source: 'github',
       error: null,
     })

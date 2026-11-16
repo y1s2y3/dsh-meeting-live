@@ -12,6 +12,7 @@ const {
   checkForUpdate,
   resetUpdateCache,
   releaseUrl,
+  npmPackageUrl,
 } = await import(pathToFileURL(moduleFile).href);
 
 let failures = 0;
@@ -46,6 +47,7 @@ check('compareVersions 1.0 < 1.0.1', compareVersions('1.0', '1.0.1') === -1);
   check('npm 返回新版本时 hasUpdate=true', result.ok === true && result.hasUpdate === true && result.latest === '9.9.9', result);
   check('来源标记为 npm', result.source === 'npm', result.source);
   check('返回的下载地址指向 Releases', result.url === releaseUrl(), result.url);
+  check('未配置仓库时下载入口回退到 npm 页面', result.url === npmPackageUrl(), result.url);
   check('只会查 npm，不再查 GitHub', calls.length === 1 && calls[0].includes('registry.npmjs.org'), calls);
 }
 
@@ -58,6 +60,7 @@ check('compareVersions 1.0 < 1.0.1', compareVersions('1.0', '1.0.1') === -1);
   };
   const result = await checkForUpdate({ fetcher, force: true });
   check('npm 无包时回退 GitHub', result.ok === true && result.source === 'github', result);
+  check('GitHub 兜底时下载地址是 Releases 页', /^https:\/\/github\.com\/.+\/releases\/latest$/.test(result.url ?? ''), result.url);
   check('GitHub 版本与当前相同 → 没有更新', result.hasUpdate === false && result.latest === CURRENT_VERSION, result);
 }
 

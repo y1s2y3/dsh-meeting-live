@@ -490,7 +490,8 @@ check('状态接口返回当前插件版本', stateRes.status === 200 && typeof 
   const updatePayload = JSON.parse(updateRes.body)
   globalThis.fetch = originalFetch
   check('更新检查接口返回结构与当前版本', updateRes.status === 200 && typeof updatePayload.current === 'string' && updatePayload.current === statePayload.version, JSON.stringify(updatePayload))
-  check('更新检查接口能识别新版本并给出下载页', updatePayload.ok === true && updatePayload.hasUpdate === true && /^https:\/\/github\.com\/.+\/releases\/latest$/.test(updatePayload.url ?? ''), JSON.stringify(updatePayload.url))
+  const downloadUrlOk = /releases\/latest$/.test(updatePayload.url ?? '') || /^https:\/\/www\.npmjs\.com\/package\//.test(updatePayload.url ?? '')
+  check('更新检查接口能识别新版本并给出下载页', updatePayload.ok === true && updatePayload.hasUpdate === true && downloadUrlOk, JSON.stringify(updatePayload.url))
   check('更新检查不会自动安装（只有提示字段）', updatePayload.install === undefined && updatePayload.download === undefined, JSON.stringify(Object.keys(updatePayload)))
 }
 const settingsVersionRes = await uploadCase('GET', '/dsh-meeting/settings')
