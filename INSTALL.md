@@ -17,7 +17,7 @@
 
 ### 2.1 方式一：下载发布包安装（推荐）
 
-1. 在 **GitHub Releases** 下载 `dsh-meeting-live-<版本>.tgz`（附带的 `安装说明-<版本>.md` 里有同样的步骤）。
+1. 在 [GitHub Releases](https://github.com/y1s2y3/dsh-meeting-live/releases) 下载 `dsh-meeting-live-<版本>.tgz`（附带的 `安装说明-<版本>.md` 里有同样的步骤）。
 2. 解压 tgz，得到 `dsh-meeting-live/` 目录；把它复制到
    `%USERPROFILE%\.dsh\profiles\desktop\node_modules\` 下（最终路径为
    `...\node_modules\dsh-meeting-live\`）。
@@ -35,7 +35,7 @@
 ### 2.3 方式三：从源码安装（开发者）
 
 ```powershell
-git clone <本仓库地址>
+git clone https://github.com/y1s2y3/dsh-meeting-live.git
 cd <仓库目录>
 node deploy.mjs        # 自动备份线上版本并复制到 desktop profile
 ```

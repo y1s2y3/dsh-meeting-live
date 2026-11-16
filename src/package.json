@@ -37,5 +37,10 @@
     "LICENSE"
   ],
   "license": "MIT",
-  "author": "DinosaurYSL"
+  "author": "DinosaurYSL",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/y1s2y3/dsh-meeting-live.git"
+  },
+  "homepage": "https://github.com/y1s2y3/dsh-meeting-live"
 }

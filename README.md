@@ -8,8 +8,9 @@ DSH Desktop 的「会议纪要」插件（录音/录屏 → 实时转写 → AI 
 ## 给使用者（不想参与开发）
 
 - **安装与首次使用**：见 [INSTALL.md](INSTALL.md)。
-- **发布包**：在 GitHub Releases 下载 `dsh-meeting-live-<版本>.tgz`（不要直接下「源码压缩包」当插件装，源码是给开发/打包用的）。
+- **发布包**：在 [GitHub Releases](https://github.com/y1s2y3/dsh-meeting-live/releases) 下载 `dsh-meeting-live-<版本>.tgz`（不要直接下「源码压缩包」当插件装，源码是给开发/打包用的）。
 - **插件功能与价值**：见 [src/README.md](src/README.md)（这是会随包分发给使用者的那份说明）。
+- **仓库**：<https://github.com/y1s2y3/dsh-meeting-live>
 
 ## 目录
 

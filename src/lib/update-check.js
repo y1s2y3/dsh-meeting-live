@@ -22,7 +22,7 @@ export const CURRENT_VERSION = String(PKG.version ?? '0.0.0')
 export const PACKAGE_NAME = String(PKG.name ?? 'dsh-meeting-live')
 
 /** 默认仓库；package.json 里填了 repository 时优先使用那里的 GitHub 地址 */
-export const DEFAULT_REPO = 'DinosaurYSL/dsh-meeting-live'
+export const DEFAULT_REPO = 'y1s2y3/dsh-meeting-live'
 
 function repoFromPackage(manifest) {
   const raw = typeof manifest?.repository === 'string'

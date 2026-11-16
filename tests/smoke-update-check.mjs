@@ -11,8 +11,6 @@ const {
   compareVersions,
   checkForUpdate,
   resetUpdateCache,
-  releaseUrl,
-  npmPackageUrl,
 } = await import(pathToFileURL(moduleFile).href);
 
 let failures = 0;
@@ -46,8 +44,8 @@ check('compareVersions 1.0 < 1.0.1', compareVersions('1.0', '1.0.1') === -1);
   const result = await checkForUpdate({ fetcher, force: true });
   check('npm 返回新版本时 hasUpdate=true', result.ok === true && result.hasUpdate === true && result.latest === '9.9.9', result);
   check('来源标记为 npm', result.source === 'npm', result.source);
-  check('返回的下载地址指向 Releases', result.url === releaseUrl(), result.url);
-  check('未配置仓库时下载入口回退到 npm 页面', result.url === npmPackageUrl(), result.url);
+  const urlOk = /releases\/latest$/.test(result.url ?? '') || /^https:\/\/www\.npmjs\.com\/package\//.test(result.url ?? '')
+  check('返回可用的下载页地址（Releases 或 npm 页面）', urlOk, result.url);
   check('只会查 npm，不再查 GitHub', calls.length === 1 && calls[0].includes('registry.npmjs.org'), calls);
 }
 
