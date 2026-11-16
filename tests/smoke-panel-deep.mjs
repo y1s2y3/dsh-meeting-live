@@ -85,7 +85,7 @@ globalThis.location = globalThis.window.location;
 
 const hookAnchor = '    exports.apply = apply';
 code = code.replace(hookAnchor, [
-  '    globalThis.__TEST_HOOKS__ = { MeetingPanel, RecordModal, SettingsModal, ToastOverlay, MeetingGlyph, Toolbar, LiveRecordingBar, SpeechChip, MeetingList, CoverSection, SettingsModal }',
+  '    globalThis.__TEST_HOOKS__ = { MeetingPanel, RecordModal, SettingsModal, ToastOverlay, MeetingGlyph, Toolbar, LiveRecordingBar, SpeechChip, MeetingList, CoverSection, SettingsModal, OnboardingModal }',
   hookAnchor,
 ].join(String.fromCharCode(10)));
 (0, eval)(code);
@@ -126,6 +126,8 @@ const cases = [
   ['RecordModal(record)', hooks.RecordModal, { initialTab: 'record', onClose() {}, onOpenTextImport() {}, onSummarize() {} }],
   ['RecordModal(file)', hooks.RecordModal, { initialTab: 'file', onClose() {}, onOpenTextImport() {}, onSummarize() {} }],
   ['SettingsModal', hooks.SettingsModal, { status: statePayload.autoIngest, onClose() {}, onSelectMeeting() {} }],
+  ['OnboardingModal(missing ffmpeg)', hooks.OnboardingModal, { modelReady: false, todoReady: false, ffmpegReady: false, onClose() {}, onOpenSettings() {} }],
+  ['OnboardingModal(ready)', hooks.OnboardingModal, { modelReady: true, todoReady: true, ffmpegReady: true, onClose() {}, onOpenSettings() {} }],
   ['Toolbar(refreshing=false)', hooks.Toolbar, { state: fakeState, handlers: { refresh() {}, settings() {} }, refreshing: false }],
   ['Toolbar(refreshing=true)', hooks.Toolbar, { state: fakeState, handlers: { refresh() {}, settings() {} }, refreshing: true }],
   ['ToastOverlay', hooks.ToastOverlay, {}],
@@ -311,6 +313,8 @@ try {
     ['首次使用有引导弹窗（转写模型 + 待办插件）', code.includes('OnboardingModal') && code.includes('ONBOARDING_STORAGE_KEY')
       && code.includes('准备语音转写模型') && code.includes('dsh-memory-evolve')],
     ['引导弹窗可直接去设置', code.includes('onOpenSettings') && code.includes('去下载 / 配置模型')],
+    ['引导弹窗检查并提示安装 ffmpeg', code.includes('安装 ffmpeg（可选，建议）') && code.includes('winget install Gyan.FFmpeg') && code.includes('ffmpegReady')],
+    ['ffmpeg 可用状态由宿主 /state 提供', code.includes('screen?.ffmpegReady')],
     ['会议纪要标题栏不再显示数字徽标', !code.includes('pending > 99') && !code.includes("className: 'dsm-icon-dot'")],
   ]
   for (const [label, ok] of checks) {

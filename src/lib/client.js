@@ -3392,7 +3392,17 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     function OnboardingModal(props) {
       const modelReady = props.modelReady === true
       const todoReady = props.todoReady === true
+      const ffmpegReady = props.ffmpegReady === true
       const openSettings = () => { if (typeof props.onOpenSettings === 'function') props.onOpenSettings() }
+      const copyFfmpegCommand = () => {
+        const command = 'winget install Gyan.FFmpeg'
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          void navigator.clipboard.writeText(command).then(
+            () => notifySuccess('已复制安装命令', command),
+            () => {},
+          )
+        }
+      }
       const footer = [
         h('button', {
           key: 'later',
@@ -3411,7 +3421,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         Modal,
         {
           title: '欢迎使用会议纪要',
-          subtitle: '两步准备，会议纪要和待办就能自动跑起来',
+          subtitle: '三步准备（第 3 步可选），会议纪要和待办就能自动跑起来',
           onClose: props.onClose,
           footer,
         },
@@ -3455,6 +3465,30 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 ? null
                 : h('div', { className: 'dsm-onboard-hint' },
                   '安装方式：DSH 设置 → 插件 → 搜索 dsh-memory-evolve 安装并启用，然后重启 Desktop。'),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'dsm-onboard-step' },
+            h('span', { className: 'dsm-onboard-index' }, '3'),
+            h(
+              'div',
+              { className: 'dsm-onboard-body' },
+              h('div', { className: 'dsm-onboard-title' },
+                h('span', null, '安装 ffmpeg（可选，建议）'),
+                h('span', { className: 'dsm-onboard-badge' + (ffmpegReady ? ' dsm-onboard-badge--ok' : ' dsm-onboard-badge--warn') }, ffmpegReady ? '已安装' : '未安装'),
+              ),
+              h('div', { className: 'dsm-onboard-text' },
+                '录屏导出 MP4、腾讯会议录制（mp4/m4a）自动转写、以及在对话里转写本地音视频文件需要 ffmpeg；不装仍可正常录音、实时转写、导入 WAV 和纯文本纪要。'),
+              ffmpegReady
+                ? null
+                : h('div', { className: 'dsm-onboard-hint' },
+                  'Windows 安装：winget install Gyan.FFmpeg（装完重启 DSH Desktop）；已装的话确认 ffmpeg 在 PATH 里，或设置环境变量 FFMPEG_PATH。'),
+              ffmpegReady
+                ? null
+                : h('div', { className: 'dsm-onboard-actions' },
+                  h('button', { type: 'button', className: 'dsm-btn', onClick: copyFfmpegCommand }, '复制安装命令'),
+                ),
             ),
           ),
         ),
@@ -5205,6 +5239,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               ),
               identifyNote !== null ? h('div', { className: 'dsm-hint', style: { gridColumn: '1 / -1' } }, identifyNote) : null,
               screenSourceError !== null ? h('div', { className: 'dsm-hint dsm-hint--warn', style: { gridColumn: '1 / -1' } }, '读取屏幕列表失败：' + screenSourceError) : null,
+              form.screen === true && state.data?.screen?.ffmpegReady === false
+                ? h('div', { className: 'dsm-hint dsm-hint--warn', style: { gridColumn: '1 / -1' } }, '未检测到 ffmpeg：现在开启录屏也只会录音频。先运行 winget install Gyan.FFmpeg（装完重启 DSH Desktop），再回来开录屏。')
+                : null,
             )
             : null,
           tab === 'record' && form.screen === true
@@ -6724,6 +6761,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       })()
       const onboardingModelReady = speechAvailable || state.data?.transcribe?.ready === true || cloudConfigured
       const onboardingTodoReady = calendarAvailable
+      // 宿主没提供该字段时按「已安装」处理，避免旧版本误报
+      const onboardingFfmpegReady = state.data?.screen?.ffmpegReady !== false
       const dismissOnboarding = (openSettings) => {
         try { window.localStorage.setItem(ONBOARDING_STORAGE_KEY, '1') } catch { /* ignore */ }
         setOnboardingOpen(false)
@@ -7047,6 +7086,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           ? h(OnboardingModal, {
             modelReady: onboardingModelReady,
             todoReady: onboardingTodoReady,
+            ffmpegReady: onboardingFfmpegReady,
             onClose: () => dismissOnboarding(false),
             onOpenSettings: () => dismissOnboarding(true),
           })

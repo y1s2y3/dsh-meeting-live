@@ -74,7 +74,8 @@ node package.mjs --name dsh-meeting-live-pro --version 1.2.0
 - `dsh-meeting-live-<版本>.tgz`（内含 `<包名>/` 目录，可直接被 npm/pnpm 安装）
 - `安装说明-<版本>.md`（给使用者的安装步骤 + 环境前提）
 
-别人环境要求：Windows 10/11、DSH Desktop ≥ 2.0.17；录屏要 MP4 需 ffmpeg；「写入待办」需
+别人环境要求：Windows 10/11、DSH Desktop ≥ 2.0.17；ffmpeg 用于录屏、腾讯会议录制（mp4/m4a）自动转写、
+对话里转写本地音视频（没装时这些不可用，实时录音转写与文本纪要正常）；「写入待办」需
 `dsh-memory-evolve` 插件（没装则按钮置灰，其他功能正常）。
 
 ## 主要改造记录
@@ -161,7 +162,7 @@ node package.mjs --name dsh-meeting-live-pro --version 1.2.0
 
 **录屏 / 产物**
 - 录音同屏录制：视频（屏幕画面 + 麦克风配音）+ 独立音频（WAV 16kHz）
-- 结束后本机 ffmpeg 后台转 **MP4（H.264 + AAC）**，转完自动删 WebM
+- 结束后本机 ffmpeg 后台合成 **MP4（H.264 + AAC）**，临时文件自动清理（无 ffmpeg 时录屏不可用，只录音频）
 - 文件落在 `~/.dsh/storages/meeting-minutes-media/<会议ID>/`，弹窗内可「在文件夹中显示」
 
 **待办**

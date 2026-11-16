@@ -77,6 +77,7 @@ function makeStore() {
   };
   return {
     file: 'meeting-minutes.json',
+    snapshot() { return { meetings: [] }; },
     async load() {},
     get(id) { return id === 'mt_test' ? meeting : null; },
     async patch(id, patch) {
@@ -129,7 +130,7 @@ async function runRoute(asrImpl, extraDeps = {}) {
   const deps = {
     store: makeStore(),
     asr: asrImpl,
-    summarizer: {},
+    summarizer: { describeRoute: () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }) },
     calendar: { status: async () => ({ available: false }) },
     autoIngest: { status: () => ({}) },
     logger: console,
@@ -469,6 +470,9 @@ await mediaFs.rm(mediaHome, { recursive: true, force: true })
 
 /* 18. 宿主录屏接口（测试模式只验接口，不真的采集屏幕） */
 process.env.DSH_MEETING_NO_SCREEN = '1'
+const stateRes = await uploadCase('GET', '/dsh-meeting/state');
+const statePayload = JSON.parse(stateRes.body)
+check('状态接口返回 ffmpeg 可用标记（首次引导据此提示安装）', stateRes.status === 200 && typeof statePayload.screen?.ffmpegReady === 'boolean', JSON.stringify({ status: stateRes.status, screen: statePayload.screen }))
 const sourcesRes = await uploadCase('GET', '/dsh-meeting/screen/sources')
 const sourcesPayload = JSON.parse(sourcesRes.body)
 check('屏幕源接口返回桌面源', sourcesRes.status === 200 && Array.isArray(sourcesPayload.sources) && sourcesPayload.sources.length >= 1, sourcesRes.body.slice(0, 140))

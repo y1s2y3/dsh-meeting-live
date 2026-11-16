@@ -471,6 +471,11 @@ export async function buildState(deps) {
       diarizationReady: diarizationReady === true,
       correctTranscript: settingsNow.correctTranscript === true,
     },
+    // 宿主能否找到 ffmpeg：录屏 / 非 WAV 音视频转码依赖它，首次引导据此提示安装
+    screen: {
+      ffmpegReady: findFfmpeg() !== null,
+      platform: process.platform,
+    },
     calendar: calendarStatus,
     totals,
     meetings,

@@ -60,7 +60,7 @@ DSH Desktop（DeepSeek Harness）的「会议纪要」插件：录音/录屏 →
 |---|---|---|
 | Windows 10/11 | 必须 | 桌面浮窗用 PowerShell + WPF 实现 |
 | DSH Desktop ≥ 2.0.17 | 必须 | 插件加载器版本要求 |
-| ffmpeg | 录屏要 MP4 才需要 | 缺 ffmpeg 时录屏只生成 WebM（自动探测 PATH / winget 目录） |
+| ffmpeg | 录像/自动转写相关功能需要 | 缺 ffmpeg 时：录屏不可用（只录音频）、腾讯会议 mp4/m4a 与监控目录非 WAV 音视频无法自动转写；实时录音转写与文本纪要不受影响。自动探测 PATH / winget 目录，也可设 \`FFMPEG_PATH\` |
 | dsh-memory-evolve 插件 | 可选 | 「写入待办」需要它；没装则该按钮置灰，其他功能正常 |
 
 安装 ffmpeg（Windows，任一方式）：
