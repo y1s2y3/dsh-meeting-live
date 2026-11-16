@@ -269,7 +269,11 @@ try {
 {
   const checks = [
     ['单独决策清单模块已移除', !code.includes("title: '决策清单'") && !code.includes('dsm-decision')],
-    ['AI 会议纪要仍含决策事项', code.includes("groups.push({ title: '决策事项'")],
+    ['AI 会议纪要仍含决策事项', code.includes("renderList('决策事项'")],
+    ['AI 会议纪要展示详细结构（关键要点/章节/风险/待确认/发言人）', code.includes("renderList('关键要点'")
+      && code.includes("'章节速览'") && code.includes("renderList('风险与待确认'")
+      && code.includes("renderList('待确认问题'") && code.includes("'发言人总结'")
+      && code.includes('dsm-minutes-keyword') && code.includes('dsm-minutes-section-summary')],
   ]
   for (const [label, ok] of checks) {
     if (ok) {

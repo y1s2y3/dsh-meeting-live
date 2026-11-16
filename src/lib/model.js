@@ -121,6 +121,32 @@ function textList(value, max, maxLength = 400) {
   return list
 }
 
+/**
+ * 概述排版：模型有时会把 400+ 字的概述写成一整段。
+ * 没有空行时按句号切成 2-3 段，让阅读和导出（Word/HTML）更像腾讯会议/通义听悟的摘要。
+ */
+function formatOverviewParagraphs(value) {
+  const raw = String(value ?? '').replace(/\r\n?/g, '\n').trim()
+  if (raw === '' || raw.includes('\n')) return raw
+  const sentences = raw.split(/(?<=[。！？；])/).map((item) => item.trim()).filter((item) => item !== '')
+  if (sentences.length <= 2) return raw
+  const total = raw.length
+  const targetCount = total >= 480 ? 3 : (total >= 300 ? 2 : 1)
+  if (targetCount <= 1) return raw
+  const per = Math.ceil(total / targetCount)
+  const paragraphs = []
+  let current = ''
+  for (const sentence of sentences) {
+    current += sentence
+    if (current.length >= per && paragraphs.length < targetCount - 1) {
+      paragraphs.push(current)
+      current = ''
+    }
+  }
+  if (current !== '') paragraphs.push(current)
+  return paragraphs.join('\n\n')
+}
+
 /** Normalize one todo produced by the model (before it gets an id). */
 export function normalizeTodoInput(raw) {
   const input = raw !== null && typeof raw === 'object' ? raw : {}
@@ -190,7 +216,12 @@ export function normalizeSummary(raw, options = {}) {
   for (const entry of Array.isArray(raw.decisions) ? raw.decisions : []) {
     const text = typeof entry === 'string' ? capText(entry, 600) : capText(entry?.text, 600)
     if (text === '') continue
-    decisions.push({ text, owner: typeof entry === 'object' ? capText(entry?.owner, 60) : '' })
+    decisions.push({
+      text,
+      owner: typeof entry === 'object' ? capText(entry?.owner, 60) : '',
+      // 决策依据/影响（腾讯会议、通义听悟的「决策说明」），旧数据没有就留空
+      rationale: typeof entry === 'object' ? capText(entry?.rationale ?? entry?.reason ?? entry?.impact, 500) : '',
+    })
     if (decisions.length >= 20) break
   }
   const risks = []
@@ -198,7 +229,12 @@ export function normalizeSummary(raw, options = {}) {
     const text = typeof entry === 'string' ? capText(entry, 600) : capText(entry?.text, 600)
     if (text === '') continue
     const level = typeof entry === 'object' && RISK_LEVELS.includes(entry?.level) ? entry.level : 'medium'
-    risks.push({ text, level })
+    risks.push({
+      text,
+      level,
+      // 应对建议（没有就留空）
+      suggestion: typeof entry === 'object' ? capText(entry?.suggestion ?? entry?.mitigation, 500) : '',
+    })
     if (risks.length >= 20) break
   }
   const sections = []
@@ -206,17 +242,38 @@ export function normalizeSummary(raw, options = {}) {
     if (entry === null || typeof entry !== 'object') continue
     const heading = capText(entry.heading, 120)
     const bullets = textList(entry.bullets, 20, 800)
-    if (heading === '' && bullets.length === 0) continue
-    sections.push({ heading: heading === '' ? '议题' : heading, bullets })
+    // 章节摘要（2-4 句），旧数据没有则为空
+    const sectionSummary = capText(entry.summary ?? entry.digest, 800)
+    if (heading === '' && bullets.length === 0 && sectionSummary === '') continue
+    sections.push({
+      heading: heading === '' ? '议题' : heading,
+      summary: sectionSummary,
+      bullets,
+    })
     if (sections.length >= 30) break
+  }
+  const speakerSummaries = []
+  for (const entry of Array.isArray(raw.speakerSummaries) ? raw.speakerSummaries : []) {
+    if (entry === null || typeof entry !== 'object') continue
+    const speaker = capText(entry.speaker ?? entry.name, 60)
+    const summaryText = capText(entry.summary ?? entry.text, 1200)
+    if (speaker === '' || summaryText === '') continue
+    speakerSummaries.push({ speaker, summary: summaryText })
+    if (speakerSummaries.length >= 20) break
   }
   return {
     oneLine: capText(raw.oneLine, 240),
-    overview: capText(raw.overview, 2400),
-    keyPoints: textList(raw.keyPoints, 16, 600),
+    overview: formatOverviewParagraphs(capText(raw.overview, 6000)),
+    keyPoints: textList(raw.keyPoints, 20, 800),
+    // 关键词（产品/项目/系统/指标名），用于卡片上的标签
+    keywords: textList(raw.keywords, 24, 40),
     decisions,
     risks,
     sections,
+    // 发言人总结：只有转写里能区分说话人时才由模型输出
+    speakerSummaries,
+    // 待确认问题：和「风险」区分开，指需要会后确认的事实/数据/口径
+    openQuestions: textList(raw.openQuestions, 20, 600),
     suggestedTitle: capText(raw.suggestedTitle, 60),
     attendees: normalizeAttendees(raw.attendees),
     todos,

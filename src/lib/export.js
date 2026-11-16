@@ -73,15 +73,28 @@ export function buildMarkdown(meeting) {
     '',
     summary.overview || '（未生成）',
     '',
-    '## 关键要点',
-    '',
-    ...summary.keyPoints.map((item, index) => `${index + 1}. ${item}`),
-    '',
   )
+  if (Array.isArray(summary.keywords) && summary.keywords.length > 0) {
+    lines.push('## 关键词', '', summary.keywords.join(' · '), '')
+  }
+  lines.push('## 关键要点', '')
+  if (summary.keyPoints.length === 0) lines.push('- （未生成）')
+  else summary.keyPoints.forEach((item, index) => lines.push(`${index + 1}. ${item}`))
+  lines.push('')
+  if (summary.sections.length > 0) {
+    lines.push('## 章节速览', '')
+    for (const section of summary.sections) {
+      lines.push(`### ${section.heading}`, '')
+      if (typeof section.summary === 'string' && section.summary !== '') lines.push(section.summary, '')
+      lines.push(...bullets(section.bullets))
+      lines.push('')
+    }
+  }
   if (summary.decisions.length > 0) {
     lines.push('## 会议决策', '')
     for (const decision of summary.decisions) {
       lines.push(`- ${decision.text}${decision.owner === '' ? '' : `（负责人：${decision.owner}）`}`)
+      if (typeof decision.rationale === 'string' && decision.rationale !== '') lines.push(`  - 依据/影响：${decision.rationale}`)
     }
     lines.push('')
   }
@@ -90,16 +103,18 @@ export function buildMarkdown(meeting) {
     for (const risk of summary.risks) {
       const level = risk.level === 'high' ? '高' : risk.level === 'low' ? '低' : '中'
       lines.push(`- [${level}] ${risk.text}`)
+      if (typeof risk.suggestion === 'string' && risk.suggestion !== '') lines.push(`  - 应对建议：${risk.suggestion}`)
     }
     lines.push('')
   }
-  if (summary.sections.length > 0) {
-    lines.push('## 分节纪要', '')
-    for (const section of summary.sections) {
-      lines.push(`### ${section.heading}`, '')
-      lines.push(...bullets(section.bullets))
-      lines.push('')
-    }
+  if (Array.isArray(summary.openQuestions) && summary.openQuestions.length > 0) {
+    lines.push('## 待确认问题', '')
+    summary.openQuestions.forEach((question, index) => lines.push(`${index + 1}. ${question}`))
+    lines.push('')
+  }
+  if (Array.isArray(summary.speakerSummaries) && summary.speakerSummaries.length > 0) {
+    lines.push('## 发言人总结', '')
+    for (const item of summary.speakerSummaries) lines.push(`### ${item.speaker}`, '', item.summary, '')
   }
   if (summary.todos.length > 0) {
     lines.push('## 待办事项', '', '| 状态 | 交付物 | 负责人 | 截止 | 优先级 | 备注 |', '| :-- | :-- | :-- | :-- | :-- | :-- |')
@@ -142,7 +157,7 @@ body{margin:0;background:#eef1f6;color:#1b2330;font-family:"PingFang SC","Hiragi
 .body{padding:30px 44px 40px}
 h2{font-size:17px;margin:30px 0 12px;padding-left:11px;border-left:4px solid #1f56b8;line-height:1.3}
 h2:first-child{margin-top:0}
-.overview{color:#39465c;background:#f5f8fd;border-radius:12px;padding:14px 16px;border:1px solid #e2eaf7}
+.overview{color:#39465c;background:#f5f8fd;border-radius:12px;padding:14px 16px;border:1px solid #e2eaf7;white-space:pre-wrap}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
 .card{border:1px solid #e4e9f2;border-radius:12px;padding:13px 15px;background:#fbfcfe}
 .card .idx{display:inline-flex;width:20px;height:20px;border-radius:50%;background:#1f56b8;color:#fff;font-size:12px;align-items:center;justify-content:center;margin-right:7px;font-weight:700}
@@ -157,6 +172,14 @@ h2:first-child{margin-top:0}
 .section h3{font-size:14px;margin:0 0 7px;color:#16305f}
 .section ul{margin:0;padding-left:18px;color:#34415a}
 .section li{margin:3px 0}
+.section .sec-summary{margin:0 0 8px;color:#44506a}
+.keywords{display:flex;flex-wrap:wrap;gap:8px}
+.keyword{font-size:12px;padding:2px 10px;border-radius:999px;background:#eef4ff;border:1px solid #d6e4ff;color:#2b5296}
+.speaker{border:1px solid #e4e9f2;border-radius:10px;padding:10px 14px;margin-bottom:9px;background:#fbfcfe}
+.speaker h3{margin:0 0 4px;font-size:13px;color:#16305f}
+.speaker p{margin:0;color:#44506a}
+.questions{padding-left:18px;color:#34415a}
+.questions li{margin:4px 0}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #e7ecf4;vertical-align:top}
 th{background:#f5f8fd;color:#4a5972;font-weight:600;white-space:nowrap}
@@ -212,6 +235,11 @@ export function buildHtml(meeting) {
       parts.push('<h2>整体概述</h2>')
       parts.push(`<div class="overview">${escapeHtml(summary.overview)}</div>`)
     }
+    if (Array.isArray(summary.keywords) && summary.keywords.length > 0) {
+      parts.push('<h2>关键词</h2><div class="keywords">')
+      for (const keyword of summary.keywords) parts.push(`<span class="keyword">${escapeHtml(keyword)}</span>`)
+      parts.push('</div>')
+    }
     if (summary.keyPoints.length > 0) {
       parts.push('<h2>关键要点</h2><div class="grid">')
       summary.keyPoints.forEach((point, index) => {
@@ -219,27 +247,46 @@ export function buildHtml(meeting) {
       })
       parts.push('</div>')
     }
+    if (summary.sections.length > 0) {
+      parts.push('<h2>章节速览</h2>')
+      for (const section of summary.sections) {
+        parts.push(`<div class="section"><h3>${escapeHtml(section.heading)}</h3>`)
+        if (typeof section.summary === 'string' && section.summary !== '') parts.push(`<p class="sec-summary">${escapeHtml(section.summary)}</p>`)
+        parts.push('<ul>')
+        if (section.bullets.length === 0) parts.push('<li>（无）</li>')
+        for (const bullet of section.bullets) parts.push(`<li>${escapeHtml(bullet)}</li>`)
+        parts.push('</ul></div>')
+      }
+    }
     if (summary.decisions.length > 0) {
       parts.push('<h2>会议决策</h2>')
       for (const decision of summary.decisions) {
         const owner = decision.owner === '' ? '' : `<span style="color:#5c6a82;margin-left:6px">负责人：${escapeHtml(decision.owner)}</span>`
-        parts.push(`<div class="decision"><span class="tick">✓</span><div>${escapeHtml(decision.text)}${owner}</div></div>`)
+        const rationale = typeof decision.rationale === 'string' && decision.rationale !== ''
+          ? `<div style="color:#5c6a82;font-size:12.5px;margin-top:3px">依据/影响：${escapeHtml(decision.rationale)}</div>`
+          : ''
+        parts.push(`<div class="decision"><span class="tick">✓</span><div>${escapeHtml(decision.text)}${owner}${rationale}</div></div>`)
       }
     }
     if (summary.risks.length > 0) {
       parts.push('<h2>风险 / 待确认</h2>')
       for (const risk of summary.risks) {
         const level = risk.level === 'high' ? '高' : risk.level === 'low' ? '低' : '中'
-        parts.push(`<div class="risk ${escapeHtml(risk.level)}"><span class="tag">${level}</span>${escapeHtml(risk.text)}</div>`)
+        const suggestion = typeof risk.suggestion === 'string' && risk.suggestion !== ''
+          ? `<div style="color:#8a6a2f;font-size:12.5px;margin-top:3px">建议：${escapeHtml(risk.suggestion)}</div>`
+          : ''
+        parts.push(`<div class="risk ${escapeHtml(risk.level)}"><span class="tag">${level}</span>${escapeHtml(risk.text)}${suggestion}</div>`)
       }
     }
-    if (summary.sections.length > 0) {
-      parts.push('<h2>分节纪要</h2>')
-      for (const section of summary.sections) {
-        parts.push(`<div class="section"><h3>${escapeHtml(section.heading)}</h3><ul>`)
-        if (section.bullets.length === 0) parts.push('<li>（无）</li>')
-        for (const bullet of section.bullets) parts.push(`<li>${escapeHtml(bullet)}</li>`)
-        parts.push('</ul></div>')
+    if (Array.isArray(summary.openQuestions) && summary.openQuestions.length > 0) {
+      parts.push('<h2>待确认问题</h2><ol class="questions">')
+      for (const question of summary.openQuestions) parts.push(`<li>${escapeHtml(question)}</li>`)
+      parts.push('</ol>')
+    }
+    if (Array.isArray(summary.speakerSummaries) && summary.speakerSummaries.length > 0) {
+      parts.push('<h2>发言人总结</h2>')
+      for (const item of summary.speakerSummaries) {
+        parts.push(`<div class="speaker"><h3>${escapeHtml(item.speaker)}</h3><p>${escapeHtml(item.summary)}</p></div>`)
       }
     }
     if (summary.todos.length > 0) {
@@ -437,7 +484,11 @@ function buildDocxBody(meeting) {
   const todos = Array.isArray(summary?.todos) ? summary.todos : []
   const decisions = Array.isArray(summary?.decisions) ? summary.decisions : []
   const keyPoints = Array.isArray(summary?.keyPoints) ? summary.keyPoints : []
+  const keywords = Array.isArray(summary?.keywords) ? summary.keywords : []
+  const sections = Array.isArray(summary?.sections) ? summary.sections : []
   const risks = Array.isArray(summary?.risks) ? summary.risks : []
+  const openQuestions = Array.isArray(summary?.openQuestions) ? summary.openQuestions : []
+  const speakerSummaries = Array.isArray(summary?.speakerSummaries) ? summary.speakerSummaries : []
   const parts = []
 
   /* 标题 + 分隔线 + 元信息（居中、浅灰） */
@@ -462,7 +513,13 @@ function buildDocxBody(meeting) {
     }
     if (summary.overview !== '') {
       parts.push(docxHeading('会议概述'))
-      parts.push(docxParagraph(summary.overview, { size: 21, indent: true, after: 200, line: 340 }))
+      for (const paragraph of String(summary.overview).split(/\n+/)) {
+        if (paragraph.trim() === '') continue
+        parts.push(docxParagraph(paragraph.trim(), { size: 21, indent: true, after: 160, line: 340 }))
+      }
+    }
+    if (keywords.length > 0) {
+      parts.push(docxParagraph('关键词：' + keywords.join(' · '), { size: 19, color: '2F5FB3', after: 180 }))
     }
     if (keyPoints.length > 0) {
       parts.push(docxHeading('关键要点'))
@@ -470,21 +527,55 @@ function buildDocxBody(meeting) {
         parts.push(docxParagraph('• ' + String(point), { size: 21, after: 90, line: 330 }))
       })
     }
-    if (risks.length > 0) {
-      parts.push(docxHeading('风险与待确认'))
-      const levelLabel = { high: '高', medium: '中', low: '低' }
-      risks.forEach((risk) => {
-        const label = levelLabel[risk?.level] ?? '中'
-        parts.push(docxParagraph('• [' + label + '] ' + String(risk?.text ?? ''), { size: 21, after: 90, line: 330 }))
+    if (sections.length > 0) {
+      parts.push(docxHeading('章节速览'))
+      sections.forEach((section) => {
+        parts.push(docxParagraph(String(section?.heading ?? '议题'), {
+          size: 22, bold: true, color: '2F5FB3', before: 120, after: 70, line: 320,
+        }))
+        const sectionSummary = typeof section?.summary === 'string' ? section.summary : ''
+        if (sectionSummary !== '') parts.push(docxParagraph(sectionSummary, { size: 21, after: 90, line: 330 }))
+        for (const bullet of Array.isArray(section?.bullets) ? section.bullets : []) {
+          parts.push(docxParagraph('· ' + String(bullet), { size: 20, leftIndent: 280, after: 60, line: 320 }))
+        }
       })
     }
     if (decisions.length > 0) {
       parts.push(docxHeading('决策事项'))
       decisions.forEach((item, index) => {
         const owner = typeof item.owner === 'string' && item.owner !== '' ? item.owner : ''
+        const rationale = typeof item.rationale === 'string' && item.rationale !== '' ? item.rationale : ''
         const runs = docxRun(String(index + 1) + '. ' + String(item.text ?? ''), { size: 21 })
           + (owner !== '' ? docxRun('（负责人：' + owner + '）', { size: 19, color: '6B7A90' }) : '')
-        parts.push(docxParagraph(runs, { after: 90, line: 330 }))
+        parts.push(docxParagraph(runs, { after: rationale === '' ? 90 : 40, line: 330 }))
+        if (rationale !== '') {
+          parts.push(docxParagraph('依据/影响：' + rationale, { size: 19, color: '6B7A90', leftIndent: 280, after: 100, line: 320 }))
+        }
+      })
+    }
+    if (risks.length > 0) {
+      parts.push(docxHeading('风险与待确认'))
+      const levelLabel = { high: '高', medium: '中', low: '低' }
+      risks.forEach((risk) => {
+        const label = levelLabel[risk?.level] ?? '中'
+        const suggestion = typeof risk?.suggestion === 'string' && risk.suggestion !== '' ? risk.suggestion : ''
+        parts.push(docxParagraph('• [' + label + '] ' + String(risk?.text ?? ''), { size: 21, after: suggestion === '' ? 90 : 40, line: 330 }))
+        if (suggestion !== '') {
+          parts.push(docxParagraph('建议：' + suggestion, { size: 19, color: '6B7A90', leftIndent: 280, after: 100, line: 320 }))
+        }
+      })
+    }
+    if (openQuestions.length > 0) {
+      parts.push(docxHeading('待确认问题'))
+      openQuestions.forEach((question, index) => {
+        parts.push(docxParagraph(String(index + 1) + '. ' + String(question), { size: 21, after: 80, line: 330 }))
+      })
+    }
+    if (speakerSummaries.length > 0) {
+      parts.push(docxHeading('发言人总结'))
+      speakerSummaries.forEach((item) => {
+        parts.push(docxParagraph(String(item?.speaker ?? '发言人'), { size: 21, bold: true, color: '1F3A6E', before: 80, after: 50 }))
+        parts.push(docxParagraph(String(item?.summary ?? ''), { size: 21, after: 120, line: 330 }))
       })
     }
   }

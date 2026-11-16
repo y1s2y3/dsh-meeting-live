@@ -580,8 +580,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-minutes-action:disabled{opacity:.5;cursor:not-allowed}
 .dsm-minutes-caret{display:inline-block;font-size:12px;line-height:12px;transform:translateY(-1px);transition:transform .16s ease}
 .dsm-minutes-caret--up{transform:translateY(-3px) rotate(180deg)}
-.dsm-minutes-body{position:relative;height:96px;overflow:hidden;padding:11px 14px;transition:height .18s ease}
-.dsm-minutes--expanded .dsm-minutes-body{height:340px;overflow:auto}
+.dsm-minutes-body{position:relative;height:120px;overflow:hidden;padding:11px 14px;transition:height .18s ease}
+.dsm-minutes--expanded .dsm-minutes-body{height:min(64vh,560px);overflow:auto}
 .dsm-minutes-body::after{content:"";position:absolute;left:0;right:0;bottom:0;height:26px;background:linear-gradient(180deg,rgba(255,255,255,0),#FFFFFF);pointer-events:none}
 .dsm-minutes--expanded .dsm-minutes-body::after{display:none}
 .dsm-minutes-oneline{font-size:12.5px;font-weight:600;line-height:20px;color:#0F172A}
@@ -591,6 +591,20 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-minutes-item{display:flex;gap:6px;font-size:12px;line-height:20px;color:#334155}
 .dsm-minutes-dot{flex:0 0 auto;width:5px;height:5px;margin-top:7px;border-radius:50%;background:#93B4F5}
 .dsm-minutes-empty{font-size:12px;color:#8A94A6}
+/* 详细纪要：关键词 / 章节 / 依据 / 风险等级 / 发言人 */
+.dsm-minutes-keywords{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.dsm-minutes-keyword{font-size:10.5px;line-height:17px;padding:0 8px;border-radius:999px;border:1px solid #D6E4FF;background:#EEF4FF;color:#2563EB}
+.dsm-minutes-section{margin-top:8px;padding:9px 11px;border:1px solid #E9EEF7;border-radius:10px;background:#FBFDFF}
+.dsm-minutes-section-head{font-size:12px;font-weight:650;color:#0F172A;line-height:18px}
+.dsm-minutes-section-summary{font-size:11.5px;line-height:19px;color:#475569;margin-top:3px;white-space:pre-wrap}
+.dsm-minutes-note{font-size:11px;line-height:18px;color:#8A94A6;margin-left:4px}
+.dsm-minutes-level{display:inline-block;font-size:10px;line-height:16px;padding:0 6px;border-radius:6px;margin-right:5px;border:1px solid #D8DEE9;color:#5A6474;flex:0 0 auto}
+.dsm-minutes-level--high{border-color:#F0C4C4;background:#FEF2F2;color:#B91C1C}
+.dsm-minutes-level--medium{border-color:#F4D3A6;background:#FFFAF0;color:#B45309}
+.dsm-minutes-level--low{border-color:#BBDCC7;background:#F2FBF6;color:#15803D}
+.dsm-minutes-speaker{display:flex;gap:8px;font-size:12px;line-height:19px;color:#334155;margin-top:4px}
+.dsm-minutes-speaker-name{flex:0 0 auto;font-weight:650;color:#2563EB}
+.dsm-minutes-speaker-text{min-width:0}
 /* ── 录音弹窗：关键信息更醒目 ── */
 .dsm-rec-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .dsm-rec-item--wide{grid-column:span 2}
@@ -6317,16 +6331,53 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [expanded, setExpanded] = useState(false)
       const [copied, setCopied] = useState(false)
       if (summary === null || summary === undefined) return null
-      const oneLine = typeof summary.oneLine === 'string' ? summary.oneLine : ''
-      const overview = typeof summary.overview === 'string' ? summary.overview : ''
+      const asText = (value) => (typeof value === 'string' ? value : '')
+      const oneLine = asText(summary.oneLine)
+      const overview = asText(summary.overview)
+      const keywords = Array.isArray(summary.keywords) ? summary.keywords : []
+      const keyPoints = Array.isArray(summary.keyPoints) ? summary.keyPoints : []
       const decisions = Array.isArray(summary.decisions) ? summary.decisions : []
+      const risks = Array.isArray(summary.risks) ? summary.risks : []
+      const sections = Array.isArray(summary.sections) ? summary.sections : []
+      const openQuestions = Array.isArray(summary.openQuestions) ? summary.openQuestions : []
+      const speakerSummaries = Array.isArray(summary.speakerSummaries) ? summary.speakerSummaries : []
+      const levelLabel = { high: '高', medium: '中', low: '低' }
       const textOf = (item) => (typeof item === 'string' ? item : String(item?.text ?? ''))
       const plain = []
       if (oneLine !== '') plain.push(oneLine)
       if (overview !== '') plain.push('', '【概述】', overview)
+      if (keywords.length > 0) plain.push('', '【关键词】', keywords.join(' · '))
+      if (keyPoints.length > 0) {
+        plain.push('', '【关键要点】')
+        keyPoints.forEach((point, index) => plain.push(String(index + 1) + '. ' + String(point)))
+      }
+      if (sections.length > 0) {
+        plain.push('', '【章节速览】')
+        for (const section of sections) {
+          plain.push('', String(section?.heading ?? '议题'))
+          if (asText(section?.summary) !== '') plain.push(asText(section.summary))
+          for (const bullet of Array.isArray(section?.bullets) ? section.bullets : []) plain.push('· ' + String(bullet))
+        }
+      }
       if (decisions.length > 0) {
         plain.push('', '【决策事项】')
-        for (const item of decisions) plain.push('· ' + textOf(item))
+        decisions.forEach((item, index) => {
+          plain.push(String(index + 1) + '. ' + textOf(item) + (asText(item?.rationale) !== '' ? '（依据：' + asText(item.rationale) + '）' : ''))
+        })
+      }
+      if (risks.length > 0) {
+        plain.push('', '【风险与待确认】')
+        for (const risk of risks) {
+          plain.push('- [' + (levelLabel[risk?.level] ?? '中') + '] ' + textOf(risk) + (asText(risk?.suggestion) !== '' ? '（建议：' + asText(risk.suggestion) + '）' : ''))
+        }
+      }
+      if (openQuestions.length > 0) {
+        plain.push('', '【待确认问题】')
+        openQuestions.forEach((question, index) => plain.push(String(index + 1) + '. ' + String(question)))
+      }
+      if (speakerSummaries.length > 0) {
+        plain.push('', '【发言人总结】')
+        for (const item of speakerSummaries) plain.push(String(item?.speaker ?? '') + '：' + String(item?.summary ?? ''))
       }
       const copyAll = async () => {
         try {
@@ -6335,8 +6386,31 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           window.setTimeout(() => setCopied(false), 1600)
         } catch { }
       }
-      const groups = []
-      if (decisions.length > 0) groups.push({ title: '决策事项', items: decisions })
+      const renderList = (title, items, renderItem, extraClass) => items.length === 0 ? null : h(
+        'div',
+        { className: 'dsm-minutes-group' + (extraClass ? ' ' + extraClass : '') },
+        h('div', { className: 'dsm-minutes-group-title' }, title),
+        ...items.map((item, index) => h(
+          'div',
+          { key: title + '-' + String(index), className: 'dsm-minutes-item' },
+          h('span', { className: 'dsm-minutes-dot' }),
+          h('span', null, renderItem(item, index)),
+        )),
+      )
+      const sectionBlocks = sections.map((section, index) => h(
+        'div',
+        { key: 'section-' + String(index), className: 'dsm-minutes-section' },
+        h('div', { className: 'dsm-minutes-section-head' }, String(section?.heading ?? '议题')),
+        asText(section?.summary) !== '' ? h('div', { className: 'dsm-minutes-section-summary' }, asText(section.summary)) : null,
+        ...(Array.isArray(section?.bullets) ? section.bullets : []).map((bullet, bulletIndex) => h(
+          'div',
+          { key: 'section-' + String(index) + '-bullet-' + String(bulletIndex), className: 'dsm-minutes-item' },
+          h('span', { className: 'dsm-minutes-dot' }),
+          h('span', null, String(bullet)),
+        )),
+      ))
+      const emptyContent = oneLine === '' && overview === '' && keyPoints.length === 0 && sections.length === 0
+        && decisions.length === 0 && risks.length === 0 && openQuestions.length === 0 && speakerSummaries.length === 0
       return h(
         'section',
         { className: 'dsm-minutes' + (expanded ? ' dsm-minutes--expanded' : '') },
@@ -6389,20 +6463,33 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           { className: 'dsm-minutes-body' },
           oneLine !== '' ? h('div', { className: 'dsm-minutes-oneline' }, oneLine) : null,
           overview !== '' ? h('div', { className: 'dsm-minutes-overview' }, overview) : null,
-          ...groups.map((group) => h(
-            'div',
-            { key: group.title, className: 'dsm-minutes-group' },
-            h('div', { className: 'dsm-minutes-group-title' }, group.title),
-            ...group.items.map((item, index) => h(
-              'div',
-              { key: group.title + '-' + String(index), className: 'dsm-minutes-item' },
-              h('span', { className: 'dsm-minutes-dot' }),
-              h('span', null, textOf(item)),
-            )),
-          )),
-          oneLine === '' && overview === '' && groups.length === 0
-            ? h('div', { className: 'dsm-minutes-empty' }, '还没有生成的纪要内容')
+          keywords.length > 0
+            ? h('div', { className: 'dsm-minutes-keywords' },
+              ...keywords.map((keyword) => h('span', { key: String(keyword), className: 'dsm-minutes-keyword' }, String(keyword))))
             : null,
+          renderList('关键要点', keyPoints, (item) => String(item)),
+          sections.length > 0
+            ? h('div', { className: 'dsm-minutes-group' },
+              h('div', { className: 'dsm-minutes-group-title' }, '章节速览'),
+              ...sectionBlocks)
+            : null,
+          renderList('决策事项', decisions, (item) => h('span', null,
+            textOf(item),
+            asText(item?.rationale) !== '' ? h('span', { className: 'dsm-minutes-note' }, '（依据：' + asText(item.rationale) + '）') : null)),
+          renderList('风险与待确认', risks, (item) => h('span', null,
+            h('span', { className: 'dsm-minutes-level dsm-minutes-level--' + String(item?.level ?? 'medium') }, levelLabel[item?.level] ?? '中'),
+            textOf(item),
+            asText(item?.suggestion) !== '' ? h('span', { className: 'dsm-minutes-note' }, '（建议：' + asText(item.suggestion) + '）') : null)),
+          renderList('待确认问题', openQuestions, (item) => String(item)),
+          speakerSummaries.length > 0
+            ? h('div', { className: 'dsm-minutes-group' },
+              h('div', { className: 'dsm-minutes-group-title' }, '发言人总结'),
+              ...speakerSummaries.map((item, index) => h('div', { key: 'speaker-' + String(index), className: 'dsm-minutes-speaker' },
+                h('div', { className: 'dsm-minutes-speaker-name' }, String(item?.speaker ?? '发言人')),
+                h('div', { className: 'dsm-minutes-speaker-text' }, String(item?.summary ?? '')),
+              )))
+            : null,
+          emptyContent ? h('div', { className: 'dsm-minutes-empty' }, '还没有生成的纪要内容') : null,
         ),
       )
     }
@@ -6412,9 +6499,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const summary = meeting.summary
       const attendees = Array.isArray(meeting.attendees) ? meeting.attendees : []
       const summaryStartedAt = props.summarizing?.id === meeting.id ? props.summarizing.startedAt : null
-      const keyPoints = Array.isArray(summary?.keyPoints) ? summary.keyPoints : []
-      const risks = Array.isArray(summary?.risks) ? summary.risks : []
-      const sections = Array.isArray(summary?.sections) ? summary.sections : []
       const hasSummary = summary !== null && summary !== undefined
       const hasTranscript = typeof meeting.transcript === 'string' && meeting.transcript.trim() !== ''
       const hasAudio = Array.isArray(meeting.media) && meeting.media.some((item) => item && item.kind === 'audio')

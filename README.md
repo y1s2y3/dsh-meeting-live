@@ -29,7 +29,7 @@ src/                     插件源码（直接改这里）
   cordis.patch.yml       插件加载声明
   README.md              插件用户说明（随包分发）
   LICENSE                MIT 授权文本（随包分发）
-tests/                   离线自测（12 套，改完代码跑一遍）
+tests/                   离线自测（13 套，改完代码跑一遍）
 deploy.mjs               部署到 DSH Desktop profile
 package.mjs              打包成可分发的 .tgz
 INSTALL.md               给使用者的安装/升级/卸载说明
@@ -60,6 +60,7 @@ node tests/smoke-win-tencent.mjs    # Windows 专项：腾讯会议目录选择/
 node tests/smoke-cloud-asr.mjs      # 云端转写协议层：三家签名/请求体/响应解析（mock，无需密钥）
 node tests/smoke-model-hash.mjs     # 模型文件 SHA-256 清单与本机已下载模型一致性（防镜像替换）
 node tests/smoke-update-check.mjs   # 版本更新检查（版本比较 / npm 优先 / GitHub 兜底 / 缓存）
+node tests/smoke-summary-rich.mjs   # 详细纪要结构：新字段规范化、prompt 要求、Word/HTML/Markdown 导出
 ```
 
 改完何时生效：
@@ -115,6 +116,8 @@ node package.mjs --name dsh-meeting-live-pro --version 1.2.0
   去掉与界面状态重复的成功提示；同一条提示正在显示时不会重复堆叠
 - 设置弹窗三页（模型配置 / 自动识别 / 问题反馈）统一成同一宽度（跟「问题反馈」页一致），
   切页时弹窗不再忽宽忽窄；宽屏下模型页的两列字段也更好填
+- 结构化纪要升级为「详细版」（参考腾讯会议 / 通义听悟）：概述 400–800 字多段、章节速览带每章摘要、
+  关键词、决策依据、风险应对建议、待确认问题、发言人总结；卡片可展开查看，Word/HTML/Markdown 同步导出
 - 配色改为浅灰底 + 白卡片 + 浅蓝主题
 
 **录音 / 转写**

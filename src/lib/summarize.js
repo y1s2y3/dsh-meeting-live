@@ -22,33 +22,56 @@ const CALL_TIMEOUT_MS = 180_000
 /** Output-token cap for one summary attempt. */
 const MAX_TOKENS = 8192
 
-/** System instruction: role, output contract, and grounding rules. */
+/**
+ * System instruction: role, output contract, and grounding rules.
+ * 结构参考腾讯会议 AI 小助手 / 通义听悟：结论 + 详细概述 + 章节速览（带每章摘要）
+ * + 决策依据 + 风险建议 + 待确认问题 + 关键词 + 发言人总结 + 待办。
+ * 目标：不是「一句话总结」，而是让没参会的人也能完整理解会议内容。
+ */
 export const SYSTEM_PROMPT = [
-  '你是一位专业的中文会议纪要助理。你会读到一场会议的标题、日期、参会人和完整转写/纪要文本。',
-  '你的任务是把内容整理成结构化的会议纪要 JSON，供后续渲染成可视化文档并抽取待办。',
+  '你是一位资深的中文会议纪要助理。你会读到一场会议的标题、日期、参会人和完整转写/纪要文本。',
+  '你的任务是把内容整理成一份「详细、可读、可执行」的结构化会议纪要 JSON，供渲染成文档并抽取待办。',
+  '目标读者是没参加会议的同事：看完纪要要能明白「讨论了什么、为什么这么定、接下来谁做什么」。',
   '',
   '硬性要求：',
   '1. 只输出一个 JSON 对象，不要输出 Markdown 代码围栏、解释、前言或后记。',
   '2. 严格使用下面给出的字段名和类型，不要增删字段、不要改字段名。',
   '3. 只依据提供的文本，不要编造事实、人名、数字或日期；文本没提到的信息留空字符串或空数组。',
   '4. 待办优先提取“有明确交付物 + 有负责人或明确截止时间”的行动项；若讨论明确了下一步要做什么、但没提到谁做或何时做，也要生成待办（owner/due 留空），不要因为信息不全就整场不输出待办。',
-  '4.1 转写可能由 5 秒分片拼接而成、有断句和错字，请按语义合并理解，不要因为文本碎片就忽略行动项；todos 通常 3-8 条，确实没有任何行动信息时才给空数组。',
+  '4.1 转写可能由 5 秒分片拼接而成、有断句和错字，请按语义合并理解，不要因为文本碎片就忽略行动项；todos 通常 3-10 条，确实没有任何行动信息时才给空数组。',
   '5. 相对时间（“下周三”“本周五前”“月底”）必须换算成具体日期：日期用 YYYY-MM-DD，带时刻用 YYYY-MM-DD HH:mm；无法确定就留空字符串。',
   '6. 使用参会文本本身的语言；中文会议就用中文。',
-  '7. oneLine 不超过 60 个汉字；overview 不超过 300 个汉字；keyPoints 3-8 条；sections 按议题分节，每节 2-8 条要点。',
-  '8. suggestedTitle 用 8-20 个汉字概括会议主题（例如“Q4预算评审与投放排期”），不要用“会议纪要”“讨论”等空泛词。',
+  '',
+  '内容深度要求（重要）：整份纪要要覆盖会议从开头到结尾的主要内容，不要只总结前几分钟；overview 不得少于 350 字；信息密度优先，每一句都要有实质信息，不要用“大家进行了深入讨论”这类空话凑长度。文本本身很短时按实际内容写，不要硬编。',
+  '',
+  '各字段写法：',
+  '- suggestedTitle：8-20 个汉字概括会议主题（例如“Q4预算评审与投放排期”），不要用“会议纪要”“讨论”这类空泛词。',
+  '- oneLine：一句话结论（不超过 60 个汉字），必须写出这场会最重要、最可执行的决定或结论。',
+  '- overview：400-800 字的整体概述，最少 350 字，2-4 段（段落之间用换行符 \\n\\n 分隔）。第一段写会议背景/目的与整体判断；第二段写主要讨论内容与分歧；第三段写达成的结论与下一步。要求读完概述就基本了解会议全貌；如果原文信息偏少或很碎，就把各章节的关键信息汇总进概述，宁可写详细也不要只给一两句，但不得编造。',
+  '- keyPoints：6-10 条关键要点，每条 20-60 字，必须带具体信息（谁、什么数字、哪个系统/模块、什么时间），不要同义重复 oneLine。',
+  '- decisions：3-10 条已经明确决定的事项。text 写“决定了什么”；rationale 写“为什么这么定 / 影响 / 依据”（文本没提就留空）；owner 写负责人（没提就留空）。',
+  '- risks：3-10 条风险或待确认事项。text 写风险本身；level 取 low|medium|high；suggestion 写建议的应对方式（没提就留空）。',
+  '- sections：按会议时间/议题顺序输出 4-12 节「章节速览」。heading 用 8-20 字概括该章节议题；summary 用 2-4 句、80-200 字概括这一节讨论了什么、达成什么（不要只重复 bullets）；bullets 输出 3-8 条该节的具体要点，每条 15-60 字，带上数字、人名、系统名等细节。',
+  '- keywords：5-15 个关键词（项目名/系统名/产品模块/关键指标/关键决策词），每个不超过 12 字。',
+  '- speakerSummaries：仅当文本能区分说话人（例如 S1/S2、A：/B：、姓名：）时输出，每人 60-200 字，写他/她的关注点、立场和承诺；文本无法区分说话人时输出空数组 []。',
+  '- openQuestions：3-10 条需要会后确认的问题（事实、数据口径、外部依赖、未定的责任），不要与 risks 重复；没有就输出空数组。',
+  '- attendees：从文本中能确认的参会人；识别不出就留空数组，不要编造。',
+  '- todos：3-10 条行动项。title 用动词开头的交付物（不超过 40 字）；notes 写验收标准、依赖或上下文（不超过 200 字）；owner/due 没提就留空。',
   '',
   '输出 JSON 形状：',
   '{',
-  '  "suggestedTitle": "为这场会议起一个 8-20 字的标题，概括主题，不要写“会议纪要”“讨论”这类空话",',
-  '  "oneLine": "一句话结论",',
-  '  "overview": "整体概述",',
-  '  "keyPoints": ["关键要点"],',
-  '  "decisions": [{"text": "已决定的事项", "owner": "负责人或空"}],',
-  '  "risks": [{"text": "风险或待确认事项", "level": "low|medium|high"}],',
-  '  "sections": [{"heading": "议题标题", "bullets": ["该议题下的要点"]}],',
+  '  "suggestedTitle": "8-20 字标题",',
+  '  "oneLine": "一句话结论（≤60字）",',
+  '  "overview": "400-800 字多段概述，段落间用 \\n\\n 分隔",',
+  '  "keyPoints": ["关键要点（6-10 条，带细节）"],',
+  '  "keywords": ["关键词"],',
+  '  "decisions": [{"text": "决定事项", "rationale": "依据/影响，可空", "owner": "负责人或空"}],',
+  '  "risks": [{"text": "风险或待确认事项", "level": "low|medium|high", "suggestion": "应对建议，可空"}],',
+  '  "sections": [{"heading": "章节议题", "summary": "该章节 2-4 句摘要", "bullets": ["该章节具体要点"]}],',
+  '  "speakerSummaries": [{"speaker": "S1 或姓名", "summary": "该发言人观点总结"}],',
+  '  "openQuestions": ["需要会后确认的问题"],',
   '  "attendees": ["从文本中能确认的参会人"],',
-  '  "todos": [{"title": "交付物", "owner": "负责人或空", "due": "截止时间或空", "priority": "high|normal|low", "notes": "验收标准或补充信息"}]',
+  '  "todos": [{"title": "交付物", "owner": "负责人或空", "due": "截止时间或空", "priority": "high|normal|low", "notes": "验收标准/依赖/上下文"}]',
   '}',
 ].join('\n')
 
@@ -97,6 +120,18 @@ export function clampTranscript(text, limit = MAX_TRANSCRIPT_CHARS) {
 
 /** User message: meeting metadata plus the transcript. */
 export function buildUserPrompt(meeting) {
+  const transcript = String(meeting?.transcript ?? '')
+  // 优先用本地说话人分段的真实标记（A/B/C/D 或 S1/S2）；没有分段时再看转写文本里的标记。
+  const segments = Array.isArray(meeting?.transcriptSegments) ? meeting.transcriptSegments : []
+  const segmentSpeakers = [...new Set(segments
+    .map((item) => String(item?.speaker ?? '').trim())
+    .filter((name) => name !== ''))].slice(0, 12)
+  const hasSpeakerMarks = segmentSpeakers.length > 0 || /(^|\n)\s*(S\d{1,2}|[A-Za-z]\d?)\s*[：:]/.test(transcript)
+  const speakerLine = segmentSpeakers.length > 0
+    ? `文本包含说话人标记（${segmentSpeakers.join('、')}）：请为每位说话人输出 speakerSummaries，speaker 字段直接用这些标记。`
+    : (hasSpeakerMarks
+      ? '文本包含说话人标记（如 S1/S2、A：/B：）：请按说话人分别总结到 speakerSummaries。'
+      : '文本没有稳定的说话人标记：speakerSummaries 请输出空数组。')
   const lines = [
     `会议标题：${meeting.title}`,
     `会议日期：${meeting.date}`,
@@ -104,8 +139,10 @@ export function buildUserPrompt(meeting) {
     meeting.notes === '' ? '' : `补充说明：${meeting.notes}`,
     '',
     '会议文本如下（可能是转写稿或腾讯会议纪要原文）：',
+    speakerLine,
+    '请通读全文、按章节顺序输出，覆盖从会议开始到最后的内容，不要只总结前几段。',
     '----- 会议文本开始 -----',
-    clampTranscript(meeting.transcript),
+    clampTranscript(transcript),
     '----- 会议文本结束 -----',
   ].filter((line) => line !== '')
   return lines.join('\n')
