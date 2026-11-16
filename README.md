@@ -5,6 +5,12 @@
 DSH Desktop 的「会议纪要」插件（录音/录屏 → 实时转写 → AI 纪要 → 待办 → 导出）。
 本目录是**唯一事实源**：所有修改直接改 `src/`，再用脚本部署 / 打包。
 
+## 给使用者（不想参与开发）
+
+- **安装与首次使用**：见 [INSTALL.md](INSTALL.md)。
+- **发布包**：在 GitHub Releases 下载 `dsh-meeting-live-<版本>.tgz`（不要直接下「源码压缩包」当插件装，源码是给开发/打包用的）。
+- **插件功能与价值**：见 [src/README.md](src/README.md)（这是会随包分发给使用者的那份说明）。
+
 ## 目录
 
 ```
@@ -25,6 +31,7 @@ src/                     插件源码（直接改这里）
 tests/                   离线自测（11 套，改完代码跑一遍）
 deploy.mjs               部署到 DSH Desktop profile
 package.mjs              打包成可分发的 .tgz
+INSTALL.md               给使用者的安装/升级/卸载说明
 LICENSE                  本仓库授权文本
 backups/                 deploy 自动备份的线上版本（git 忽略）
 dist/                    打包产物（git 忽略）

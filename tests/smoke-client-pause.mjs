@@ -7,10 +7,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
-const pluginDir = process.argv[2] ?? path.join(
-  os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-meeting-live',
-);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const installedDir = path.join(os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-meeting-live');
+// 默认优先用本机已安装版本（与 DSH 实际运行一致）；别人 clone 仓库跑测试时自动退回 src/
+const pluginDir = process.argv[2] ?? (fs.existsSync(installedDir) ? installedDir : path.join(repoRoot, 'src'));
 const file = path.join(pluginDir, 'lib', 'client.js');
 
 /* ── 桩 React（带状态持久化 + effect） ─────────────────────────────── */

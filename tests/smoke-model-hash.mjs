@@ -3,12 +3,12 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /* 模型文件校验回归：下载后必须按清单 SHA-256 校验（防 hf-mirror 镜像被替换）。
    本测试覆盖：哈希计算正确性、清单完整性（每个文件都有大小与哈希）、本机已下载模型与清单一致。 */
 
-const root = path.join(process.env.USERPROFILE, 'Desktop', 'dsh-meeting-live-src');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const moduleFile = path.join(root, 'src', 'lib', 'model-manager.js');
 const { sha256File, describeAssets } = await import(pathToFileURL(moduleFile).href);
 

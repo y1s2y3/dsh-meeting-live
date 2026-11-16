@@ -2,6 +2,7 @@ dist/
 backups/
 node_modules/
 *.bak-*
+*.tgz
 .DS_Store
 
 # 含真实会议内容的示例与截图，不要提交（需要示例时请换脱敏数据）

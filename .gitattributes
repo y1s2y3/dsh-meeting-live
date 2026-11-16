@@ -1,0 +1,7 @@
+# 统一换行符；图片按二进制处理，避免被当文本改写
+* text=auto
+*.png binary
+*.tgz binary
+
+# PowerShell 脚本（带 BOM 保存）在 Windows 上更稳妥地用 CRLF
+*.ps1 text eol=crlf

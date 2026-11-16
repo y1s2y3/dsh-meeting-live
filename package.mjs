@@ -58,7 +58,7 @@ DSH Desktop（DeepSeek Harness）的「会议纪要」插件：录音/录屏 →
 
 | 前提 | 是否必须 | 说明 |
 |---|---|---|
-| Windows 10/11 | 必须 | 桌面浮窗用 PowerShell + WPF 实现 |
+| Windows 10/11 | 推荐 | 桌面浮窗、录屏、腾讯会议解析仅 Windows；其他平台可用录音转写/纪要/导出等部分功能 |
 | DSH Desktop ≥ 2.0.17 | 必须 | 插件加载器版本要求 |
 | ffmpeg | 录像/自动转写相关功能需要 | 缺 ffmpeg 时：录屏不可用（只录音频）、腾讯会议 mp4/m4a 与监控目录非 WAV 音视频无法自动转写；实时录音转写与文本纪要不受影响。自动探测 PATH / winget 目录，也可设 \`FFMPEG_PATH\` |
 | dsh-memory-evolve 插件 | 可选 | 「写入待办」需要它；没装则该按钮置灰，其他功能正常 |
@@ -67,30 +67,34 @@ DSH Desktop（DeepSeek Harness）的「会议纪要」插件：录音/录屏 →
 - \`winget install Gyan.FFmpeg\`（推荐）
 - 或把 ffmpeg.exe 放到 PATH 里，或设置环境变量 \`FFMPEG_PATH\`
 
-## 安装方式 A：桌面端插件页（推荐）
+## 安装方式 A：手工安装（推荐，最稳）
 
-1. 打开 DSH Desktop → 插件 → 从本地文件安装，选择本 tgz；
-2. 或者把 tgz 解压出来的 \`${name}\` 目录放进
-   \`%USERPROFILE%\\.dsh\\profiles\\desktop\\node_modules\\\`；
-3. 打开 \`%USERPROFILE%\\.dsh\\profiles\\desktop\\package.json\`，把 \`${name}\` 加进
-   \`dependencies\` 与 \`dsh.profile.bundles\`；
-4. 完全重启 DSH Desktop。
+1. 解压本 tgz，得到 \`${name}\` 目录；把它复制到
+   \`%USERPROFILE%\\.dsh\\profiles\\desktop\\node_modules\\\` 下；
+2. 打开 \`%USERPROFILE%\\.dsh\\profiles\\desktop\\package.json\`：
+   - 在 \`dependencies\` 里加一行 \`"${name}": "<版本号>"\`；
+   - 在 \`dsh.profile.bundles\` 数组里加 \`"${name}"\`；
+3. 完全退出并重启 DSH Desktop（不是刷新页面）；
+4. 左侧出现「会议纪要」图标即安装成功。
 
-## 安装方式 B：命令行
+## 安装方式 B：桌面端插件页
 
-\`\`\`powershell
-dsh plugin --profile desktop add "<本 tgz 的绝对路径>"
-\`\`\`
+如果当前 DSH Desktop 版本的「插件」页支持**从本地文件安装**，可以直接选择本 tgz；
+如果只支持在线包，请用方式 A。
 
-（如果提示 profile 由桌面端独占管理，用方式 A 的手工步骤。）
+> 说明：desktop profile 由桌面端独占管理，命令行 \`dsh plugin --profile desktop add ...\`
+> 通常会被拒绝（提示 profile 被应用独占），不要依赖它。
 
 ## 首次使用
 
-1. 左侧「实时录音/录屏」开始录音；需要录屏就勾选「同步录屏」，浏览器会让你选屏幕；
-2. 停止后自动生成 MP4 视频（带配音）+ WAV 音频，存在
+1. 打开「会议纪要」：首次引导里下载本地转写模型（约 245 MB，离线识别、音频不出本机），
+   或到「设置 → 模型配置」填云端转写密钥；
+2. 首次引导第 3 步会检查 ffmpeg：需要录屏/自动转写时按提示安装；
+3. 左侧「实时录音/录屏」开始录音；需要录屏就勾选「同步录屏」，浏览器会让你选屏幕；
+4. 停止后自动生成 MP4 视频（带配音）+ WAV 音频，存在
    \`%USERPROFILE%\\.dsh\\storages\\meeting-minutes-media\\<会议ID>\\\`；
-3. 生成 AI 纪要后，详情页会出现「AI 会议纪要」卡片（可复制、可展开）；
-4. 待办可一键写入 DSH 待办（工作类型）。
+5. 生成 AI 纪要后，详情页会出现「AI 会议纪要」卡片（可复制、可展开）；
+6. 待办可一键写入 DSH 待办（需要先安装并启用 dsh-memory-evolve）。
 
 ## 卸载
 

@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const file = path.join(process.env.USERPROFILE, 'Desktop', 'dsh-meeting-live-src', 'src', 'lib', 'client.js');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const file = path.join(root, 'src', 'lib', 'client.js');
 let code = fs.readFileSync(file, 'utf8');
 
 const hookStates = [];
