@@ -487,6 +487,27 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-term-evidence{flex:1 1 auto;min-width:0;font-size:11px;color:#8A94A6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsm-term-del{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:#94A3B8;padding:3px;border-radius:6px;cursor:pointer}
 .dsm-term-del:hover{background:#FEF2F2;color:#DC2626}
+/* 多文件夹 + 预览勾选 + 手动编辑/排序 */
+.dsm-term-folders{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.dsm-term-folder{display:flex;align-items:center;gap:8px;padding:4px 8px;border:1px solid #E9EEF7;border-radius:8px;background:#F8FAFE}
+.dsm-term-folder-path{flex:1 1 auto;min-width:0;font-size:11px;line-height:18px;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-term-folder-del{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:#94A3B8;padding:2px;border-radius:5px;cursor:pointer;font-size:14px;line-height:14px;width:18px;height:18px}
+.dsm-term-folder-del:hover{background:#FEF2F2;color:#DC2626}
+.dsm-term-check{flex:0 0 auto;width:14px;height:14px;margin:0;accent-color:#2563EB;cursor:pointer}
+.dsm-terms-checkall{margin-left:8px;gap:5px}
+.dsm-terms--preview{border-color:#CFE0FB;background:#FBFDFF}
+.dsm-terms--preview .dsm-term-item:hover{background:#F2F7FF}
+.dsm-term-actions{display:flex;align-items:center;gap:2px;flex:0 0 auto}
+.dsm-term-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:#94A3B8;cursor:pointer;font-size:13px;line-height:1}
+.dsm-term-btn:hover:not(:disabled){background:#EEF3FB;color:#2563EB}
+.dsm-term-btn:disabled{opacity:.35;cursor:not-allowed}
+.dsm-term-btn--up svg{transform:rotate(-90deg)}
+.dsm-term-btn--down svg{transform:rotate(90deg)}
+.dsm-term-btn--danger:hover:not(:disabled){background:#FEF2F2;color:#DC2626}
+.dsm-term-item--editing{padding:8px 12px}
+.dsm-term-edit{display:flex;align-items:center;gap:8px;width:100%}
+.dsm-term-edit .dsm-input{flex:1 1 auto;height:28px;font-size:12px;min-width:0}
+.dsm-term-cat-select{flex:0 0 auto;height:28px;border:1px solid #E4E9F2;border-radius:6px;background:#FFFFFF;font-family:inherit;font-size:11.5px;color:#334155;padding:0 6px;cursor:pointer}
 .dsm-set-cloud{border:1px dashed #D9E2F0;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;background:#FFFFFF}
 .dsm-set-inline{display:flex;align-items:center;gap:10px}
 .dsm-set-tabs{display:flex;gap:4px}
@@ -3732,13 +3753,16 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [localTranscribeMode, setLocalTranscribeMode] = useState(null)
       const [termsText, setTermsText] = useState('')
       const [termsSaving, setTermsSaving] = useState(false)
-      // 从文件夹提取的术语（按重要性排序）与解析状态
-      const [termDir, setTermDir] = useState('')
+      // 从文件夹提取的术语（支持多个文件夹；解析后先预览勾选，再保存）
+      const [termDirs, setTermDirs] = useState([])
+      const [termInput, setTermInput] = useState('')
       const [termItems, setTermItems] = useState([])
       const [termStats, setTermStats] = useState(null)
       const [termAt, setTermAt] = useState('')
       const [termBusy, setTermBusy] = useState(false)
       const [termError, setTermError] = useState(null)
+      const [termPreview, setTermPreview] = useState(null)
+      const [termEditing, setTermEditing] = useState(null)
       // 版本与更新：appVersion 来自 /settings，updateInfo 来自 /update-check
       const [appVersion, setAppVersion] = useState('')
       const [updateState, setUpdateState] = useState('idle')
@@ -3777,7 +3801,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         setSummarySelection(chosen !== null && chosen !== undefined ? String(chosen.provider) + '|' + String(chosen.model) : '')
         if (termsTouchedRef.current !== true) setTermsText(payload?.settings?.terms ?? '')
         const termExtract = nextSettings?.termExtract ?? null
-        setTermDir(typeof termExtract?.dir === 'string' ? termExtract.dir : '')
+        setTermDirs(Array.isArray(termExtract?.dirs) ? termExtract.dirs : [])
         setTermItems(Array.isArray(termExtract?.items) ? termExtract.items : [])
         setTermStats(termExtract?.stats ?? null)
         setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
@@ -3942,37 +3966,56 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
-      /** 选择用于术语提取的文件夹（复用宿主的系统文件夹对话框）。 */
+      /** 添加一个文件夹（去重，最多 12 个）。 */
+      const addTermDir = (value) => {
+        const dir = String(value ?? '').trim()
+        if (dir === '') return
+        setTermDirs((previous) => (previous.includes(dir) ? previous : [...previous, dir].slice(0, 12)))
+        setTermInput('')
+        setTermPreview(null)
+      }
+
+      /** 选择文件夹（系统对话框，可反复添加多个）。 */
       const pickTermDir = async () => {
         setTermError(null)
         try {
           const payload = await requestJson('/dialog/pick-dir', {
             method: 'POST',
-            body: { title: '选择要解析术语的文件夹（会议纪要、转写稿等）' },
+            body: { title: '选择要解析术语的文件夹（会议纪要、转写稿等；可多次添加）' },
           })
           const picked = typeof payload?.path === 'string' ? payload.path.trim() : ''
-          if (picked !== '') setTermDir(picked)
+          if (picked !== '') addTermDir(picked)
         } catch (caught) {
           setTermError(messageOf(caught))
         }
       }
 
-      /** 解析整个文件夹：读取文本/Word → 请模型抽取并按重要性排序 → 持久化。 */
-      const extractTermsFromFolder = async () => {
-        const dir = termDir.trim()
-        if (dir === '') { setTermError('请先选择要解析的文件夹'); return }
+      const removeTermDir = (dir) => {
+        setTermDirs((previous) => previous.filter((item) => item !== dir))
+        setTermPreview(null)
+      }
+
+      /** 解析文件夹（只生成预览，不覆盖现有术语库）。 */
+      const extractTermsPreview = async () => {
+        const dirs = termDirs.slice()
+        if (dirs.length === 0) { setTermError('请先选择至少一个文件夹'); return }
         setTermBusy(true)
         setTermError(null)
+        setTermEditing(null)
         try {
-          const payload = await requestJson('/terms/extract', { method: 'POST', body: { dir } })
-          const termExtract = payload?.termExtract ?? null
+          const payload = await requestJson('/terms/extract', { method: 'POST', body: { dirs } })
+          const preview = payload?.preview ?? null
           if (!mountedRef.current) return
-          setTermDir(typeof termExtract?.dir === 'string' ? termExtract.dir : dir)
-          setTermItems(Array.isArray(termExtract?.items) ? termExtract.items : [])
-          setTermStats(termExtract?.stats ?? null)
-          setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
-          const count = Array.isArray(termExtract?.items) ? termExtract.items.length : 0
-          notifySuccess('术语解析完成', '已提取 ' + String(count) + ' 个术语，将用于转写纠错')
+          if (preview === null) throw new Error('解析没有返回结果，请稍后重试')
+          const items = Array.isArray(preview.items) ? preview.items : []
+          setTermPreview({
+            dirs: Array.isArray(preview.dirs) && preview.dirs.length > 0 ? preview.dirs : dirs,
+            at: typeof preview.at === 'string' ? preview.at : '',
+            items,
+            stats: preview.stats ?? null,
+            checked: items.map(() => true),
+          })
+          notifySuccess('解析完成，请勾选保留', '候选 ' + String(items.length) + ' 个；保存前不会覆盖现有术语库')
         } catch (caught) {
           if (mountedRef.current) setTermError(messageOf(caught))
         } finally {
@@ -3980,30 +4023,105 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
-      /** 删除单个术语：只改术语库，不动会议数据。 */
-      const removeTermItem = async (id) => {
-        const next = termItems.filter((item) => item?.id !== id)
+      const togglePreviewItem = (index) => {
+        setTermPreview((previous) => previous === null ? previous : {
+          ...previous,
+          checked: previous.checked.map((value, itemIndex) => (itemIndex === index ? value !== true : value)),
+        })
+      }
+
+      const setAllPreview = (value) => {
+        setTermPreview((previous) => previous === null ? previous : { ...previous, checked: previous.checked.map(() => value === true) })
+      }
+
+      /** 保存术语列表（统一在这里把 priority 重排成 1..N）。 */
+      const saveTermItems = async (items, extra = {}) => {
+        const next = (Array.isArray(items) ? items : []).map((item, index) => ({ ...item, priority: index + 1 }))
         setTermItems(next)
+        await requestJson('/settings', {
+          method: 'PATCH',
+          body: {
+            settings: {
+              termExtract: {
+                dirs: Array.isArray(extra.dirs) ? extra.dirs : termDirs,
+                at: typeof extra.at === 'string' ? extra.at : termAt,
+                items: next,
+                stats: extra.stats ?? termStats ?? {},
+              },
+            },
+          },
+        })
+      }
+
+      /** 确认预览：只保留勾选的术语并保存。 */
+      const confirmPreview = async () => {
+        if (termPreview === null) return
+        const selected = termPreview.items.filter((item, index) => termPreview.checked[index] === true)
+        if (selected.length === 0) { setTermError('至少勾选一个术语再保存'); return }
         try {
-          await requestJson('/settings', {
-            method: 'PATCH',
-            body: { settings: { termExtract: { dir: termDir, at: termAt, items: next, stats: termStats ?? {} } } },
-          })
+          await saveTermItems(selected, { dirs: termPreview.dirs, at: termPreview.at, stats: termPreview.stats })
+          if (!mountedRef.current) return
+          setTermDirs(termPreview.dirs)
+          setTermAt(termPreview.at)
+          setTermStats(termPreview.stats)
+          setTermPreview(null)
+          notifySuccess('术语已保存', '保留 ' + String(selected.length) + ' 个，将用于转写纠错')
         } catch (caught) {
           setTermError(messageOf(caught))
           void loadSettings().catch(() => {})
         }
       }
 
-      /** 一键清空提取结果（保留文件夹路径，方便再解析）。 */
-      const clearTermItems = async () => {
-        setTermItems([])
-        setTermAt('')
+      const discardPreview = () => setTermPreview(null)
+
+      /** 删除单个术语：只改术语库，不动会议数据。 */
+      const removeTermItem = async (id) => {
         try {
-          await requestJson('/settings', {
-            method: 'PATCH',
-            body: { settings: { termExtract: { dir: termDir, at: '', items: [], stats: termStats ?? {} } } },
-          })
+          await saveTermItems(termItems.filter((item) => item?.id !== id))
+        } catch (caught) {
+          setTermError(messageOf(caught))
+          void loadSettings().catch(() => {})
+        }
+      }
+
+      /** 上移 / 下移一个术语（调整优先级）。 */
+      const moveTermItem = async (index, delta) => {
+        const target = index + delta
+        if (target < 0 || target >= termItems.length) return
+        const next = termItems.slice()
+        const [item] = next.splice(index, 1)
+        next.splice(target, 0, item)
+        try {
+          await saveTermItems(next)
+        } catch (caught) {
+          setTermError(messageOf(caught))
+          void loadSettings().catch(() => {})
+        }
+      }
+
+      /** 手动编辑术语文本 / 分类。 */
+      const startTermEdit = (item) => setTermEditing({ id: item.id, text: item.text, category: item.category })
+      const cancelTermEdit = () => setTermEditing(null)
+      const updateTermEditing = (field, value) => setTermEditing((previous) => (previous === null ? previous : { ...previous, [field]: value }))
+      const saveTermEdit = async () => {
+        if (termEditing === null) return
+        const text = String(termEditing.text ?? '').trim()
+        if (text.length < 2) { setTermError('术语至少 2 个字'); return }
+        const next = termItems.map((item) => (item.id === termEditing.id ? { ...item, text, category: termEditing.category } : item))
+        try {
+          await saveTermItems(next)
+          setTermEditing(null)
+        } catch (caught) {
+          setTermError(messageOf(caught))
+        }
+      }
+
+      /** 一键清空提取结果（保留文件夹列表，方便再解析）。 */
+      const clearTermItems = async () => {
+        try {
+          await saveTermItems([], { at: '' })
+          setTermAt('')
+          setTermPreview(null)
         } catch (caught) {
           setTermError(messageOf(caught))
           void loadSettings().catch(() => {})
@@ -4129,6 +4247,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const transcribeProvider = settings.transcribe.provider
       const cloudConfig = settings.transcribe.cloud ?? {}
       const transcribeMode = localTranscribeMode ?? (transcribeProvider.startsWith('cloud-') ? 'cloud' : 'local')
+      const termPreviewCount = termPreview === null ? 0 : termPreview.items.length
+      const termPreviewChecked = termPreview === null ? 0 : termPreview.checked.filter((value) => value === true).length
+      const termPreviewAllChecked = termPreview !== null && termPreviewCount > 0 && termPreviewChecked === termPreviewCount
 
       const modelPage = h(
         'div',
@@ -4352,59 +4473,93 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           h('div', { className: 'dsm-set-subhead' },
             h('div', { className: 'dsm-set-section-head' },
               h('span', { className: 'dsm-set-section-title' }, '从文件夹提取术语'),
-              h('span', { className: 'dsm-set-section-desc' }, '选一个放会议纪要/转写稿的文件夹，模型通读后抽取专业术语、系统名和人名，按重要性排序（最多 50 个），自动用于转写纠错。'),
+              h('span', { className: 'dsm-set-section-desc' }, '可一次选多个文件夹，模型通读后抽取专业术语、系统名、机构与人名，按重要性排序（最多 50 个）；解析后先预览、勾选保留，再自动用于转写纠错。'),
             ),
           ),
-          h(Field, { label: '文件夹' }, h('div', { className: 'dsm-row' },
-            h(TextInput, {
-              value: termDir,
-              onChange: (value) => { setTermDir(value) },
-              placeholder: '例如 D:\\会议资料；支持 .txt / .md / .json / .csv / .log / .html / .docx',
-            }),
-            h('button', {
-              type: 'button',
-              className: 'dsm-btn',
-              disabled: termBusy,
-              style: { flex: '0 0 auto', whiteSpace: 'nowrap' },
-              onClick: () => { void pickTermDir() },
-            }, '选择文件夹…'),
-          )),
+          h(Field, { label: '文件夹（可多个，合并解析）' },
+            h('div', { className: 'dsm-row' },
+              h(TextInput, {
+                value: termInput,
+                onChange: (value) => { setTermInput(value) },
+                placeholder: '粘贴文件夹路径，或点右侧「选择文件夹…」；支持 .txt/.md/.json/.csv/.log/.html/.docx/.xlsx/.pdf',
+              }),
+              h('button', {
+                type: 'button',
+                className: 'dsm-btn',
+                disabled: termBusy,
+                style: { flex: '0 0 auto', whiteSpace: 'nowrap' },
+                onClick: () => { void pickTermDir() },
+              }, '选择文件夹…'),
+              h('button', {
+                type: 'button',
+                className: 'dsm-btn',
+                disabled: termBusy || termInput.trim() === '',
+                style: { flex: '0 0 auto' },
+                onClick: () => { addTermDir(termInput) },
+              }, '添加'),
+            ),
+            termDirs.length > 0
+              ? h('div', { className: 'dsm-term-folders' },
+                ...termDirs.map((dir, index) => h('div', { key: 'dir-' + String(index), className: 'dsm-term-folder' },
+                  h('span', { className: 'dsm-term-folder-path', title: dir }, dir),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsm-term-folder-del',
+                    title: '移除这个文件夹',
+                    onClick: () => { removeTermDir(dir) },
+                  }, '×'),
+                )))
+              : null,
+          ),
           h('div', { className: 'dsm-set-cloud-actions' },
             h('button', {
               type: 'button',
               className: 'dsm-btn dsm-btn--primary',
-              disabled: termBusy || termDir.trim() === '',
-              onClick: () => { void extractTermsFromFolder() },
-            }, termBusy ? '解析中…' : '解析文件夹'),
+              disabled: termBusy || termDirs.length === 0,
+              onClick: () => { void extractTermsPreview() },
+            }, termBusy ? '解析中…' : (termDirs.length > 1 ? '解析 ' + String(termDirs.length) + ' 个文件夹' : '解析文件夹')),
             termStats !== null
               ? h('span', { className: 'dsm-hint' },
-                '上次解析 ' + String(termStats.supported ?? 0) + ' 个文件'
-                + (Number(termStats.skipped) > 0 ? '，跳过 ' + String(termStats.skipped) + ' 个不支持的文件' : '')
-                + (termStats.truncated === true ? '（内容较多，只分析了部分）' : ''))
+                '上次保存：' + String(termStats.folders ?? 0) + ' 个文件夹 · ' + String(termStats.supported ?? 0) + ' 个文件'
+                + (Number(termStats.skipped) > 0 ? '（跳过 ' + String(termStats.skipped) + ' 个不支持的）' : '')
+                + (termStats.truncated === true ? '，内容较多只分析了部分' : ''))
               : null,
           ),
           termBusy ? h('div', { className: 'dsm-hint' }, '正在读取文件夹并请模型排序，通常 10–60 秒，请稍候…') : null,
           termError !== null ? h('div', { className: 'dsm-inline-error' }, termError) : null,
-          termItems.length > 0
-            ? h('div', { className: 'dsm-terms' },
+          termPreview !== null
+            ? h('div', { className: 'dsm-terms dsm-terms--preview' },
               h('div', { className: 'dsm-terms-head' },
-                h('span', { className: 'dsm-terms-title' }, '已提取 ' + String(termItems.length) + ' 个术语（按重要性排序）'),
-                termAt !== '' ? h('span', { className: 'dsm-terms-meta' }, '解析于 ' + formatStamp(termAt)) : null,
+                h('span', { className: 'dsm-terms-title' }, '解析预览：' + String(termPreviewCount) + ' 个候选'),
+                h('label', { className: 'dsm-check dsm-terms-checkall' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: termPreviewAllChecked,
+                    onChange: () => { setAllPreview(!termPreviewAllChecked) },
+                  }),
+                  h('span', null, '全选'),
+                ),
                 h('span', { className: 'dsm-spacer' }),
                 h('button', {
                   type: 'button',
                   className: 'dsm-btn dsm-btn--sm',
-                  disabled: termBusy,
-                  onClick: () => { void extractTermsFromFolder() },
-                }, '重新解析'),
+                  onClick: discardPreview,
+                }, '放弃'),
                 h('button', {
                   type: 'button',
-                  className: 'dsm-btn dsm-btn--sm',
-                  disabled: termBusy,
-                  onClick: () => { void clearTermItems() },
-                }, '清空'),              ),
+                  className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                  disabled: termPreviewChecked === 0,
+                  onClick: () => { void confirmPreview() },
+                }, '保留勾选的 ' + String(termPreviewChecked) + ' 个'),
+              ),
               h('div', { className: 'dsm-term-list' },
-                ...termItems.map((item, index) => h('div', { key: String(item?.id ?? index), className: 'dsm-term-item' },
+                ...termPreview.items.map((item, index) => h('div', { key: 'preview-' + String(index), className: 'dsm-term-item' },
+                  h('input', {
+                    type: 'checkbox',
+                    className: 'dsm-term-check',
+                    checked: termPreview.checked[index] === true,
+                    onChange: () => { togglePreviewItem(index) },
+                  }),
                   h('span', { className: 'dsm-term-rank' }, String(index + 1)),
                   h('span', { className: 'dsm-term-text' }, String(item?.text ?? '')),
                   h('span', { className: 'dsm-term-cat' }, String(item?.category ?? '术语')),
@@ -4412,15 +4567,103 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   typeof item?.evidence === 'string' && item.evidence !== ''
                     ? h('span', { className: 'dsm-term-evidence', title: item.evidence }, item.evidence)
                     : h('span', { className: 'dsm-term-evidence' }),
-                  h('button', {
-                    type: 'button',
-                    className: 'dsm-term-del',
-                    title: '删除这个术语',
-                    onClick: () => { void removeTermItem(item.id) },
-                  }, h(Icon, { name: 'close', size: 13 })),
                 )),
               ),
-              h('div', { className: 'dsm-hint', style: { padding: '7px 12px' } }, '这些术语会和上面的「术语表」一起用于录音结束后的自动纠错；删除只影响术语库，不影响会议数据。'),
+              h('div', { className: 'dsm-hint', style: { padding: '7px 12px' } }, '勾选后点「保留勾选的 N 个」保存；保存前不会覆盖现有术语库。'),
+            )
+            : null,
+          termItems.length > 0
+            ? h('div', { className: 'dsm-terms' },
+              h('div', { className: 'dsm-terms-head' },
+                h('span', { className: 'dsm-terms-title' }, '已保存 ' + String(termItems.length) + ' 个术语（按重要性排序）'),
+                termAt !== '' ? h('span', { className: 'dsm-terms-meta' }, '解析于 ' + formatStamp(termAt)) : null,
+                h('span', { className: 'dsm-spacer' }),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  disabled: termBusy,
+                  onClick: () => { void extractTermsPreview() },
+                }, '重新解析'),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  disabled: termBusy,
+                  onClick: () => { void clearTermItems() },
+                }, '清空'),
+              ),
+              h('div', { className: 'dsm-term-list' },
+                ...termItems.map((item, index) => {
+                  const editing = termEditing !== null && termEditing.id === item.id
+                  return h('div', { key: String(item?.id ?? index), className: 'dsm-term-item' + (editing ? ' dsm-term-item--editing' : '') },
+                    ...(editing
+                      ? [
+                        h('div', { key: 'edit-fields', className: 'dsm-term-edit' },
+                          h(TextInput, {
+                            value: termEditing.text,
+                            onChange: (value) => { updateTermEditing('text', value) },
+                            placeholder: '术语文本',
+                          }),
+                          h('select', {
+                            key: 'category',
+                            className: 'dsm-term-cat-select',
+                            value: termEditing.category,
+                            onChange: (event) => { updateTermEditing('category', event.target.value) },
+                          }, ...['术语', '产品/系统', '项目', '机构', '人名', '其他'].map((option) => h('option', { key: option, value: option }, option))),
+                          h('button', {
+                            key: 'save',
+                            type: 'button',
+                            className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                            onClick: () => { void saveTermEdit() },
+                          }, '保存'),
+                          h('button', {
+                            key: 'cancel',
+                            type: 'button',
+                            className: 'dsm-btn dsm-btn--sm',
+                            onClick: cancelTermEdit,
+                          }, '取消'),
+                        ),
+                      ]
+                      : [
+                        h('span', { key: 'rank', className: 'dsm-term-rank' }, String(index + 1)),
+                        h('span', { key: 'text', className: 'dsm-term-text' }, String(item?.text ?? '')),
+                        h('span', { key: 'cat', className: 'dsm-term-cat' }, String(item?.category ?? '术语')),
+                        Number(item?.count) > 1 ? h('span', { key: 'count', className: 'dsm-term-count' }, '×' + String(item.count)) : null,
+                        typeof item?.evidence === 'string' && item.evidence !== ''
+                          ? h('span', { key: 'evidence', className: 'dsm-term-evidence', title: item.evidence }, item.evidence)
+                          : h('span', { key: 'evidence', className: 'dsm-term-evidence' }),
+                        h('div', { key: 'actions', className: 'dsm-term-actions' },
+                          h('button', {
+                            type: 'button',
+                            className: 'dsm-term-btn dsm-term-btn--up',
+                            title: '上移（提高优先级）',
+                            disabled: index === 0,
+                            onClick: () => { void moveTermItem(index, -1) },
+                          }, '↑'),
+                          h('button', {
+                            type: 'button',
+                            className: 'dsm-term-btn dsm-term-btn--down',
+                            title: '下移（降低优先级）',
+                            disabled: index === termItems.length - 1,
+                            onClick: () => { void moveTermItem(index, 1) },
+                          }, '↓'),
+                          h('button', {
+                            type: 'button',
+                            className: 'dsm-term-btn',
+                            title: '编辑术语',
+                            onClick: () => { startTermEdit(item) },
+                          }, h(Icon, { name: 'edit', size: 11 })),
+                          h('button', {
+                            type: 'button',
+                            className: 'dsm-term-btn dsm-term-btn--danger',
+                            title: '删除这个术语',
+                            onClick: () => { void removeTermItem(item.id) },
+                          }, '×'),
+                        ),
+                      ]),
+                  )
+                }),
+              ),
+              h('div', { className: 'dsm-hint', style: { padding: '7px 12px' } }, '这些术语会和上面的「术语表」一起用于录音结束后的自动纠错；删除/调整顺序只影响术语库，不影响会议数据。'),
             )
             : null,
         ),

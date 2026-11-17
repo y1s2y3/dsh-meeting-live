@@ -17,13 +17,12 @@ import {
   CLOUD_PROVIDERS,
   TRANSCRIBE_PROVIDERS,
   effectiveTerms,
-  normalizeTermExtract,
   normalizeTermItems,
   parseTerms,
   validateCloudSettings,
   validateSummaryCustom,
 } from './settings.js'
-import { scanFolder } from './term-extract.js'
+import { scanFolders } from './term-extract.js'
 import {
   dropTempVideo,
   isCapturing,
@@ -760,14 +759,15 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
-      // 从文件夹解析术语：扫描文本/Word → 请总结模型排序 → 持久化到设置里。
+      // 从文件夹解析术语：扫描文本/Word/Excel/PDF → 请总结模型排序 → 返回预览（由前端勾选后保存）。
       if (segments.length === 2 && segments[0] === 'terms' && segments[1] === 'extract' && method === 'POST') {
         const body = await readJsonBody(req)
-        const dir = String(body?.dir ?? '').trim()
-        if (dir === '') throw new Error('请先选择要解析的文件夹')
-        const scanned = await scanFolder(dir)
+        const dirsInput = Array.isArray(body?.dirs) ? body.dirs : (typeof body?.dir === 'string' ? [body.dir] : [])
+        const dirs = [...new Set(dirsInput.map((item) => String(item ?? '').trim()).filter((item) => item !== ''))]
+        if (dirs.length === 0) throw new Error('请先选择要解析的文件夹')
+        const scanned = await scanFolders(dirs)
         if (scanned.text === '') {
-          throw new Error('这个文件夹里没有可解析的文本或 Word 文件（支持 .txt / .md / .json / .csv / .log / .html / .docx）')
+          throw new Error('这些文件夹里没有可解析的文本、Word、Excel 或 PDF 文本（支持 .txt / .md / .json / .csv / .log / .html / .docx / .xlsx / .pdf）')
         }
         const settingsNow = store.settings
         const result = await summarizer.extractTerms(scanned.text, { ...scanned.stats, names: scanned.names }, {
@@ -775,15 +775,16 @@ export function registerRoutes(ctx, deps) {
           custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
         })
         const items = normalizeTermItems(result.items)
-        const termExtract = normalizeTermExtract({
-          dir,
-          at: new Date().toISOString(),
-          items,
-          stats: scanned.stats,
+        logger?.info?.('meeting-minutes: term preview with ' + String(items.length) + ' item(s) from ' + String(dirs.length) + ' folder(s)')
+        sendJson(res, 200, {
+          ok: true,
+          preview: {
+            dirs,
+            at: new Date().toISOString(),
+            items,
+            stats: scanned.stats,
+          },
         })
-        await store.setSettings({ termExtract })
-        logger?.info?.('meeting-minutes: extracted ' + String(items.length) + ' term(s) from folder')
-        sendJson(res, 200, { ok: true, termExtract: store.settings.termExtract })
         return
       }
 

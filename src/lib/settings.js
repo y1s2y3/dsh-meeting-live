@@ -44,10 +44,10 @@ export const DEFAULT_SETTINGS = {
    * 结构：{ dir, at, items: [{ id, text, category, priority, evidence, count }], stats }
    */
   termExtract: {
-    dir: '',
+    dirs: [],
     at: '',
     items: [],
-    stats: { files: 0, supported: 0, skipped: 0, chars: 0, truncated: false },
+    stats: { folders: 0, files: 0, supported: 0, skipped: 0, chars: 0, truncated: false },
   },
   /** 转写结束后用 LLM 做一次语境纠错（错别字/人名/术语）。 */
   correctTranscript: true,
@@ -97,18 +97,28 @@ export function normalizeTermItems(raw) {
   return items.map((item, index) => ({ ...item, priority: index + 1 }))
 }
 
-/** 归一化「文件夹术语提取」整体结果（目录、时间、术语、统计）。 */
+/** 归一化「文件夹术语提取」整体结果（目录列表、时间、术语、统计）。 */
 export function normalizeTermExtract(raw) {
   const input = raw !== null && typeof raw === 'object' ? raw : {}
-  const dir = singleLine(input.dir, 500)
+  const dirs = []
+  const seen = new Set()
+  const candidates = Array.isArray(input.dirs) ? input.dirs : (typeof input.dir === 'string' ? [input.dir] : [])
+  for (const item of candidates) {
+    const value = singleLine(item, 500)
+    if (value === '' || seen.has(value)) continue
+    seen.add(value)
+    dirs.push(value)
+    if (dirs.length >= 12) break
+  }
   const at = typeof input.at === 'string' && input.at !== '' ? input.at.slice(0, 40) : ''
   const stats = input.stats !== null && typeof input.stats === 'object' ? input.stats : {}
   const number = (value) => (Number.isFinite(Number(value)) ? Math.max(0, Math.min(1000000, Math.round(Number(value)))) : 0)
   return {
-    dir,
+    dirs,
     at,
-    items: dir === '' ? [] : normalizeTermItems(input.items),
+    items: dirs.length === 0 ? [] : normalizeTermItems(input.items),
     stats: {
+      folders: number(stats.folders),
       files: number(stats.files),
       supported: number(stats.supported),
       skipped: number(stats.skipped),
