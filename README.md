@@ -63,15 +63,22 @@ node tests/smoke-update-check.mjs   # 版本更新检查（版本比较 / npm �
 node tests/smoke-summary-rich.mjs   # 详细纪要结构：新字段规范化、prompt 要求、Word/HTML/Markdown 导出
 node tests/smoke-terms.mjs          # 文件夹术语提取：扫描 txt/docx、排序去重、设置归一化、前端入口
 node tests/smoke-accuracy.mjs       # 转写准确率：录音质量分析、纠错 diff、说话人重命名、prompt/导出映射
+node tests/smoke-transcript-live.mjs # 原始转写卡片：默认展开、录音实时条（计时/字数/暂停/停止）、声纹分离进度
+node tests/preview-transcript-live.mjs # 视觉预览：把「录音中 / 分离完成」两种状态渲染成静态 HTML（配 dsh-browser 截图）
 ```
+
+> 测新功能时如果要跑 `src/` 而不是已装版本，追加目录参数：`node tests/smoke-transcript-live.mjs src`。
 
 改完何时生效：
 
 | 改动位置 | 生效方式 |
 |---|---|
-| `lib/client.js`（界面） | 刷新页面 `Ctrl+R` |
+| `lib/client.js`（界面） | 刷新页面 `Ctrl+R`；宿主的 `dsh-client-hmr` 也会在文件变化后自动热重载 |
 | `lib/server.js` / `index.js` / `package.json` / `cordis.patch.yml` | **重启 DSH Desktop** |
 | `resources/meeting-orb.ps1` | 下次开始录音时自动重新拉起浮窗，无需重启 |
+
+> ⚠ **录音进行中不要部署 `lib/client.js`**：热重载会重新加载插件的客户端模块，模块级录音状态（麦克风采集、识别队列）随之重置，正在进行的会议录音会中断。
+> 需要边开会边改界面时，等会议停止并保存后再 `node deploy.mjs`（或先跑 `deploy-meeting-live-*-when-idle.mjs` 这类「等空闲再部署」的脚本）。
 
 ## 打包给别人用
 
