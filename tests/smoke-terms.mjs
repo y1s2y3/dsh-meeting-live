@@ -4,7 +4,7 @@
  *   - effectiveTerms：文件夹术语优先 + 手动术语补充
  *   - term-extract：txt/md/json/docx/xlsx/pdf、递归目录、多文件夹合并、跳过不支持文件
  *   - prompt：最多 50 个、按 priority 排序、只抽专有名词
- *   - 前端：多文件夹、预览勾选、重新解析、编辑/排序、逐个删除
+ *   - 前端：多文件夹、解析结果追加进同一个术语输入框、纳入并保存/撤销
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -226,8 +226,9 @@ function makeXlsx() {
   const client = fs.readFileSync(path.join(repo, 'src', 'lib', 'client.js'), 'utf8');
   check('设置页有文件夹术语入口', client.includes('从文件夹提取术语') && client.includes("requestJson('/terms/extract'"));
   check('支持多文件夹（列表 + 添加/移除）', client.includes('dsm-term-folders') && client.includes('addTermDir') && client.includes('removeTermDir'));
-  check('解析后先预览勾选再保存', client.includes('解析预览') && client.includes('保留勾选的') && client.includes('togglePreviewItem') && client.includes('confirmPreview'));
-  check('支持重新解析 / 编辑 / 排序 / 删除 / 清空', client.includes("'重新解析'") && client.includes('startTermEdit') && client.includes('moveTermItem') && client.includes('removeTermItem') && client.includes('clearTermItems'));
+  check('手动术语与解析结果共用同一个输入框', client.includes('extractTermsIntoBox') && client.includes('setTermsText(next)') && client.includes('setTermPending({ baseline, added'));
+  check('解析结果先加进输入框，确认后才保存', client.includes("'纳入并保存'") && client.includes("'撤销本次解析'") && client.includes("terms: lines.join('\\n')") && client.includes('items: []'));
+  check('独立预览列表/逐条编辑排序已移除', !client.includes('解析预览') && !client.includes('startTermEdit') && !client.includes('moveTermItem') && !client.includes('confirmPreview'));
   check('术语复用系统文件夹选择', client.includes("'/dialog/pick-dir'"));
   const server = fs.readFileSync(path.join(repo, 'src', 'lib', 'server.js'), 'utf8');
   check('宿主提供 /terms/extract 路由（返回预览）', server.includes("segments[1] === 'extract'") && server.includes('extractTerms') && server.includes('preview:'));
