@@ -3723,7 +3723,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     }
 
     /**
-     * 设置弹窗（三页）：模型配置（语音转写 / 会议总结）、自动识别、问题反馈。
+     * 设置弹窗（四页）：模型配置（语音转写 / 会议总结）、转写纠错、自动识别、问题反馈。
      * 布局参考 DSH 设置：左侧导航 + 右侧内容卡片。
      */
     function SettingsModal(props) {
@@ -4448,6 +4448,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               : '使用 DSH 模型列表里选中的模型生成纪要'),
           ),
         ),
+        error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
+      )
+
+      const correctPage = h(
+        'div',
+        { className: 'dsm-set-page' },
         h('div', { className: 'dsm-set-section' },
           h('div', { className: 'dsm-set-section-head' },
             h('span', { className: 'dsm-set-section-title' }, '转写纠错与术语'),
@@ -4883,8 +4889,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         Modal,
         {
           title: '设置',
-          subtitle: '模型、自动识别与问题反馈。改动即时保存。',
-          // 三页统一用「问题反馈」页的宽度（xwide）：切页时弹窗不再忽宽忽窄。
+          subtitle: '模型、转写纠错、自动识别与问题反馈。改动即时保存。',
+          // 四页统一用「问题反馈」页的宽度（xwide）：切页时弹窗不再忽宽忽窄。
           extraWide: true,
           onClose: props.onClose,
           footer,
@@ -4902,6 +4908,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               onClick: () => setPage('model'),
             }, h(Icon, { name: 'sliders', size: 13 }), h('span', null, '模型配置')),
             h('button', {
+              key: 'nav-correct',
+              type: 'button',
+              className: 'dsm-set-nav-item' + (page === 'correct' ? ' dsm-set-nav-item--on' : ''),
+              onClick: () => setPage('correct'),
+            }, h(Icon, { name: 'check', size: 13 }), h('span', null, '转写纠错')),
+            h('button', {
               key: 'nav-auto',
               type: 'button',
               className: 'dsm-set-nav-item' + (page === 'auto' ? ' dsm-set-nav-item--on' : ''),
@@ -4915,7 +4927,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             }, h(Icon, { name: 'info', size: 13 }), h('span', null, '问题反馈')),
           ),
           h('div', { className: 'dsm-set-content' },
-            page === 'model' ? modelPage : (page === 'auto' ? autoPage : feedbackPage),
+            page === 'model' ? modelPage
+              : (page === 'correct' ? correctPage
+                : (page === 'auto' ? autoPage : feedbackPage)),
           ),
         ),
         lightbox === null

@@ -114,12 +114,13 @@ try {
   const element = renderWithEffects(hooks.SettingsModal, modalProps);
   console.log('渲染成功，根元素:', element?.type, Object.keys(element?.props ?? {}).join(','));
 
-  /* 回归：设置弹窗三页统一宽度（跟随「问题反馈」页的 xwide），切页时不再忽宽忽窄 */
+  /* 回归：设置弹窗四页统一宽度（跟随「问题反馈」页的 xwide），切页时不再忽宽忽窄 */
   check('设置弹窗使用 xwide 统一宽度', element?.props?.extraWide === true, element?.props?.extraWide);
   check('设置弹窗不再走 660px 的 wide 宽度', element?.props?.wide === undefined, element?.props?.wide);
-  // 宽度不能跟着当前页变：把 page 状态依次改成 auto / feedback 再渲染，宽度必须保持
+  check('设置弹窗有独立的「转写纠错」菜单', code.includes("nav-correct") && code.includes("'转写纠错'") && code.includes("page === 'correct' ? correctPage"));
+  // 宽度不能跟着当前页变：把 page 状态依次改成 correct / auto / feedback 再渲染，宽度必须保持
   let feedbackElement = null
-  for (const pageKey of ['auto', 'feedback']) {
+  for (const pageKey of ['correct', 'auto', 'feedback']) {
     hookStates[0] = pageKey;
     hookIndex = 0;
     const pageElement = hooks.SettingsModal(modalProps);
