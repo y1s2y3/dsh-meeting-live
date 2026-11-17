@@ -152,6 +152,68 @@ export function buildUserPrompt(meeting) {
   return lines.join('\n')
 }
 
+/** 不同会议类型的纪要侧重（用户可在设置里选）。 */
+export const TEMPLATE_INSTRUCTIONS = {
+  general: '按通用会议纪要写：结论、讨论、决策、风险、待办均衡覆盖。',
+  review: '这是评审会：重点写清评审对象、通过/不通过/有条件通过的结论、需要修改的具体项与责任人。',
+  weekly: '这是周会/例会：重点写本周进展、未完成事项、下周计划、需要协调的风险。',
+  client: '这是客户/外部会议：重点写客户需求与关注点、我方承诺、待客户确认事项；措辞正式、避免内部黑话。',
+  retro: '这是复盘会：重点写发生了什么、原因分析、经验教训、改进项与跟进人，不要只罗列结论。',
+}
+
+/** 把会议模板转成 prompt 追加指令；未知模板回退通用。 */
+export function templateInstruction(template) {
+  return TEMPLATE_INSTRUCTIONS[template] ?? TEMPLATE_INSTRUCTIONS.general
+}
+
+/** 「周报汇总」的 system 指令：把一段时间内的会议纪要汇总成 Markdown 周报。 */
+export const DIGEST_PROMPT = [
+  '你是项目经理的会议汇总助手。你会读到一段时间内的多场会议纪要（标题、日期、结论、决策、风险、待办）。',
+  '请把这些会议汇总成一份中文 Markdown 周报，供发给团队或上级。',
+  '',
+  '结构要求（用 Markdown 标题）：',
+  '## 本周概览',
+  '3-6 句话概括这段时间的会议主线、关键结论与整体进展。',
+  '## 关键结论',
+  '按项目/主题分组列要点，每条一句话，尽量带会议标题或日期便于追溯。',
+  '## 待办进展',
+  '汇总各会议的待办：已完成/进行中/未开始（根据是否已写入 DSH 待办判断进度），标注负责人与截止日期。',
+  '## 风险与卡点',
+  '汇总各会议提到的风险、未决问题、需要协调的事项，按严重程度排序。',
+  '## 下周建议',
+  '3-5 条具体建议：优先处理什么、需要谁拍板、哪些会议可以合并/取消。',
+  '',
+  '硬性要求：',
+  '1. 只依据提供的会议纪要，不要编造会议或结论；没有的信息不要写。',
+  '2. 待办/负责人/截止日期原样引用，不要改人名和日期。',
+  '3. 总长度控制在 800-1500 字，信息密度优先。',
+  '4. 只输出 Markdown 正文，不要代码围栏、不要解释。',
+].join('\n')
+
+/** 周报的用户消息：把每场会议压成结构化摘要后交给模型。 */
+export function buildDigestUserPrompt(meetings, rangeLabel = '') {
+  const lines = []
+  if (rangeLabel !== '') lines.push('时间范围：' + rangeLabel)
+  for (const meeting of Array.isArray(meetings) ? meetings : []) {
+    const summary = meeting?.summary ?? {}
+    const decisions = (Array.isArray(summary.decisions) ? summary.decisions : []).map((item) => (typeof item === 'string' ? item : String(item?.text ?? ''))).filter((item) => item !== '')
+    const risks = (Array.isArray(summary.risks) ? summary.risks : []).map((item) => (typeof item === 'string' ? item : String(item?.text ?? ''))).filter((item) => item !== '')
+    const todos = (Array.isArray(summary.todos) ? summary.todos : []).map((todo) => {
+      const state = todo?.calendarTaskId ? '已写入待办' : '未写入待办'
+      return '· ' + String(todo?.title ?? '') + (todo?.owner ? '（' + todo.owner + '）' : '') + (todo?.due ? ' 截止 ' + todo.due : '') + ' [' + state + ']'
+    })
+    lines.push(
+      '===== ' + String(meeting?.title ?? '未命名会议') + '（' + String(meeting?.date ?? '') + '） =====',
+      '一句话结论：' + String(summary.oneLine ?? ''),
+      decisions.length > 0 ? '决策：' + decisions.join('；') : '',
+      risks.length > 0 ? '风险：' + risks.join('；') : '',
+      todos.length > 0 ? '待办：\n' + todos.join('\n') : '',
+      '',
+    )
+  }
+  return lines.filter((line) => line !== undefined).join('\n')
+}
+
 /**
  * 「从文件夹提取术语」的 system 指令：只输出排好序的术语 JSON。
  * 目标是给转写纠错用的术语表（专有名词/人名/系统名），不是会议摘要。
@@ -445,7 +507,7 @@ export function createSummarizer(options) {
       return callModel(messages, system, signal, options.selection ?? null)
     }
     const messages = [{ role: 'user', content: [{ type: 'text', text: buildUserPrompt(meeting) }] }]
-    const first = await callModelFn(messages, SYSTEM_PROMPT)
+    const first = await callModelFn(messages, SYSTEM_PROMPT + '\n\n' + templateInstruction(options.template))
     const parsed = parseSummaryJson(first.text)
     if (parsed !== null) {
       const withTodos = await ensureTodos(parsed, meeting, callModelFn)
@@ -482,12 +544,14 @@ export function createSummarizer(options) {
     if (raw.trim() === '') throw new Error('没有可纠错的转写文本')
     const custom = options.custom ?? null
     const terms = Array.isArray(options.terms) ? options.terms : []
+    const context = typeof options.context === 'string' ? options.context.trim() : ''
     const instruction = [
       '你是中文会议转写的校对员。请只修正错别字、同音字、专有名词（术语/系统名/人名）与明显断词，',
       '不要改写句式、不要删减内容、不要总结、不要添加原文没有的信息。',
       '保持原有的换行与说话人标记（如 S1：、A：）不变。',
       '如果原文没有标点（Paraformer 输出通常无标点），请补全逗号、句号、问号等标点并合理断句。',
       terms.length > 0 ? '优先使用这些术语的正确写法：' + terms.join('、') : '',
+      context !== '' ? '这些是相关历史会议的结论，仅用于帮助判断专有名词与同音词，不要照抄其内容：\n' + context : '',
       '只输出校对后的全文，不要解释。',
     ].filter((line) => line !== '').join('\n')
     const messages = [{ role: 'user', content: [{ type: 'text', text: buildUserPrompt({ ...meeting, transcript: raw }) }] }]
@@ -527,6 +591,23 @@ export function createSummarizer(options) {
     return todos
   }
 
+  /** 把一段时间内的多场会议汇总成 Markdown 周报。 */
+  async function generateDigest(meetings, options = {}) {
+    const list = Array.isArray(meetings) ? meetings : []
+    if (list.length === 0) throw new Error('所选时间范围内没有可汇总的会议')
+    const custom = options.custom ?? null
+    const signal = options.signal
+    const callModelFn = async (messages, system) => {
+      if (custom !== null) return callCustomModel(messages, system, custom, signal)
+      return callModel(messages, system, signal, options.selection ?? null)
+    }
+    const messages = [{ role: 'user', content: [{ type: 'text', text: buildDigestUserPrompt(list, String(options.rangeLabel ?? '')) }] }]
+    const result = await callModelFn(messages, DIGEST_PROMPT)
+    const markdown = String(result?.text ?? '').trim()
+    if (markdown === '') throw new Error('周报模型没有返回内容')
+    return { markdown, count: list.length }
+  }
+
   /** Current model route label for the panel footer. */
   function describeRoute(selection) {
     try {
@@ -537,5 +618,5 @@ export function createSummarizer(options) {
     }
   }
 
-  return { summarize, describeRoute, correctTranscript, extractTodos, extractTerms }
+  return { summarize, describeRoute, correctTranscript, extractTodos, extractTerms, generateDigest }
 }

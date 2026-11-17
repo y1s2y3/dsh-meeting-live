@@ -528,6 +528,43 @@ export function normalizeCorrection(value) {
   }
 }
 
+/**
+ * 为转写纠错挑几场「相关历史会议」的结论，帮助模型判断专有名词/同音词。
+ * 相关度：参会人重合优先，其次最近更新；最多 3 场、总字数受限。
+ */
+export function buildCorrectionContext(meetings, current, maxChars = 1200) {
+  const list = Array.isArray(meetings) ? meetings : []
+  const target = current !== null && typeof current === 'object' ? current : {}
+  const attendees = new Set(Array.isArray(target.attendees) ? target.attendees : [])
+  const candidates = []
+  for (const meeting of list) {
+    if (meeting === null || typeof meeting !== 'object') continue
+    if (meeting.id === target.id) continue
+    if (meeting.summary === null || meeting.summary === undefined) continue
+    const overlap = (Array.isArray(meeting.attendees) ? meeting.attendees : []).filter((name) => attendees.has(name)).length
+    candidates.push({ meeting, overlap, stamp: String(meeting.updatedAt ?? meeting.date ?? '') })
+  }
+  candidates.sort((left, right) => right.overlap - left.overlap || right.stamp.localeCompare(left.stamp))
+  const lines = []
+  let total = 0
+  for (const { meeting } of candidates.slice(0, 3)) {
+    const summary = meeting.summary ?? {}
+    const decisionText = (Array.isArray(summary.decisions) ? summary.decisions : [])
+      .map((item) => (typeof item === 'string' ? item : String(item?.text ?? '')))
+      .filter((item) => item !== '')
+      .slice(0, 2)
+      .join('；')
+    const line = '《' + String(meeting.title ?? '') + '》（' + String(meeting.date ?? '') + '）：'
+      + String(summary.oneLine ?? '')
+      + (decisionText === '' ? '' : '；决策：' + decisionText)
+    if (line.length < 10) continue
+    if (total + line.length > maxChars) break
+    lines.push(line)
+    total += line.length
+  }
+  return lines.join('\n')
+}
+
 /** 归一化「生成纪要使用的模型」：`{ provider, model }` 或 null（跟随 DSH 默认）。 */
 export function normalizeSummaryModel(value) {
   if (value === null || value === undefined || typeof value !== 'object') return null

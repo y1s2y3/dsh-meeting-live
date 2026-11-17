@@ -162,6 +162,16 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-modal .dsm-input:focus,.dsm-modal .dsm-textarea:focus{background:#FFFFFF}
 .dsm-modal .dsm-label{color:#64748B;font-weight:500}
 .dsm-filters{display:flex;gap:4px;flex-wrap:wrap}
+/* 全文搜索结果 / 周报输出 */
+.dsm-search-results{padding:2px 2px 8px;display:flex;flex-direction:column;gap:4px;max-height:calc(100vh - 320px);overflow:auto}
+.dsm-search-count{font-size:11px;color:#8A94A6;padding:4px 6px}
+.dsm-search-hit{display:flex;flex-direction:column;gap:2px;text-align:left;border:1px solid transparent;background:transparent;border-radius:8px;padding:7px 9px;cursor:pointer;font-family:inherit;width:100%}
+.dsm-search-hit:hover{background:#F6F9FF;border-color:#E3ECFF}
+.dsm-search-hit--active{background:#F0F5FF;border-color:#CFE0FF}
+.dsm-search-hit-title{font-size:12.5px;font-weight:600;color:#0F172A;line-height:18px}
+.dsm-search-hit-meta{font-size:11px;color:#8A94A6}
+.dsm-search-hit-snippet{font-size:11.5px;color:#475569;line-height:17px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.dsm-digest-output{max-height:52vh;overflow:auto;border:1px solid #E3EAF5;background:#FBFDFF;border-radius:10px;padding:12px 14px;font-size:12.5px;line-height:20px;white-space:pre-wrap;word-break:break-word;margin-top:10px;color:#1E293B}
 .dsm-filter{border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:6px;padding:2px 7px;font-size:11px;line-height:17px;font-family:inherit;cursor:pointer}
 .dsm-filter:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsm-filter--active{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 14%,transparent);color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 34%,transparent)}
@@ -4445,6 +4455,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               )
               : null,
           ),
+          h('div', { className: 'dsm-set-grid' },
+            h(Field, { label: '纪要风格' }, h(Select, {
+              value: settings.summaryTemplate ?? 'general',
+              onChange: (value) => { void patchSettings({ summaryTemplate: value }) },
+              options: [
+                { value: 'general', label: '通用（结论/决策/待办均衡）' },
+                { value: 'review', label: '评审会（评审结论与修改项）' },
+                { value: 'weekly', label: '周会/例会（进展与下周计划）' },
+                { value: 'client', label: '客户会（需求确认与承诺）' },
+                { value: 'retro', label: '复盘会（原因与改进项）' },
+              ],
+            })),
+          ),
           h('div', { className: 'dsm-set-cloud-actions' },
             h('button', { type: 'button', className: 'dsm-btn dsm-btn--sm', onClick: () => { void testSummaryModel() } }, '测试连接'),
             h('span', { className: 'dsm-hint' }, summaryMode === 'custom'
@@ -5988,6 +6011,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const { meetings, selectedId, search, onSearch, filter, onFilter, onSelect } = props
       const actions = props.actions || {}
       const total = Number(props.total) || meetings.length
+      const remoteMode = String(search ?? '').trim().length >= 2
+      const remote = Array.isArray(props.remoteResults) ? props.remoteResults : null
       const filters = [
         { id: 'all', label: '全部' },
         { id: 'summarized', label: '已总结' },
@@ -6043,7 +6068,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             h('input', {
               className: 'dsm-input dsm-input--search',
               value: search,
-              placeholder: '搜索标题、参会人…',
+              placeholder: '搜索标题、参会人、转写、纪要…',
               onChange: (event) => onSearch(event.target.value),
             }),
           ),
@@ -6058,9 +6083,35 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             }, item.label)),
           ),
         ),
+        remoteMode
+          ? h('div', { className: 'dsm-search-results' },
+            props.searching === true
+              ? h('div', { className: 'dsm-empty-list' }, h('span', { className: 'dsm-spin' }), ' 正在搜索全部转写与纪要…')
+              : remote === null
+                ? h('div', { className: 'dsm-empty-list' }, '输入关键词后搜索全部会议（标题 / 参会人 / 转写 / 纪要 / 待办）')
+                : remote.length === 0
+                  ? h('div', { className: 'dsm-empty-list' }, '没有匹配的会议，试试其他关键词。')
+                  : h('div', null,
+                    h('div', { className: 'dsm-search-count' }, '全文命中 ' + String(remote.length) + ' 场会议'),
+                    ...remote.map((item) => h('button', {
+                      key: 'hit-' + item.id,
+                      type: 'button',
+                      className: 'dsm-search-hit' + (item.id === selectedId ? ' dsm-search-hit--active' : ''),
+                      onClick: () => onSelect(item.id),
+                      title: item.title,
+                    },
+                    h('span', { className: 'dsm-search-hit-title' }, item.title || '未命名会议'),
+                    h('span', { className: 'dsm-search-hit-meta' }, humanDate(item.date) + ' · ' + (SOURCE_LABELS[item.sourceType] ?? '文本') + (item.hasSummary ? ' · 已总结' : '')),
+                    item.snippet !== '' && item.snippet !== undefined
+                      ? h('span', { className: 'dsm-search-hit-snippet' }, '…' + item.snippet + '…')
+                      : null,
+                    )),
+                  ),
+            )
+          : null,
         h(
           'div',
-          { className: 'dsm-list' },
+          { className: 'dsm-list', style: remoteMode ? { display: 'none' } : undefined },
           meetings.length === 0
             ? h(
               'div',
@@ -7284,6 +7335,82 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }, `语音识别：${speechPhaseLabel(phase)}`)
     }
 
+    /** 周报汇总：把近 N 天的会议纪要交给模型汇总成 Markdown。 */
+    function DigestModal(props) {
+      const [days, setDays] = useState(7)
+      const [busy, setBusy] = useState(false)
+      const [markdown, setMarkdown] = useState('')
+      const [error, setError] = useState(null)
+      const generate = async () => {
+        if (busy) return
+        setBusy(true)
+        setError(null)
+        try {
+          const payload = await requestJson('/digest', { method: 'POST', body: { days } })
+          const text = typeof payload?.markdown === 'string' ? payload.markdown : ''
+          setMarkdown(text)
+          notifySuccess('周报已生成', '汇总了 ' + String(payload?.count ?? 0) + ' 场会议')
+        } catch (caught) {
+          setError(messageOf(caught))
+          notify('warn', '生成周报失败', messageOf(caught))
+        } finally {
+          setBusy(false)
+        }
+      }
+      const copy = async () => {
+        try {
+          await copyText(markdown)
+          notifySuccess('已复制周报', '可以直接粘贴到飞书/企微/邮件')
+        } catch (caught) {
+          reportError(caught, '复制失败')
+        }
+      }
+      const download = () => {
+        if (markdown === '') return
+        const now = new Date()
+        const stamp = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0')
+        downloadTextFile('会议周报-' + stamp + '.md', markdown, 'text/markdown')
+      }
+      return h(Modal, {
+        title: '生成周报',
+        subtitle: '把一段时间内的会议纪要汇总成一份 Markdown 周报',
+        onClose: props.onClose,
+        wide: true,
+        footer: [
+          h('button', { key: 'close', type: 'button', className: 'dsm-btn', onClick: props.onClose }, '关闭'),
+          markdown !== ''
+            ? h('button', { key: 'download', type: 'button', className: 'dsm-btn', onClick: download }, '导出 Markdown')
+            : null,
+          markdown !== ''
+            ? h('button', { key: 'copy', type: 'button', className: 'dsm-btn', onClick: () => { void copy() } }, '复制')
+            : null,
+          h('button', {
+            key: 'generate',
+            type: 'button',
+            className: 'dsm-btn dsm-btn--primary',
+            disabled: busy,
+            onClick: () => { void generate() },
+          }, busy ? '生成中…' : '生成周报'),
+        ],
+      },
+      h('div', { className: 'dsm-set-grid' },
+        h(Field, { label: '时间范围' }, h(Select, {
+          value: String(days),
+          onChange: (value) => { setDays(Number(value) || 7); setMarkdown('') },
+          options: [
+            { value: '7', label: '近 7 天' },
+            { value: '30', label: '近 30 天' },
+            { value: '90', label: '近 90 天' },
+          ],
+        })),
+      ),
+      error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
+      markdown === ''
+        ? h('div', { className: 'dsm-hint', style: { marginTop: 10 } }, '选择时间范围后点「生成周报」：会汇总该范围内所有已生成纪要的会议（结论、决策、风险、待办），交给总结模型写成周报。')
+        : h('pre', { className: 'dsm-digest-output' }, markdown),
+      )
+    }
+
     function Toolbar(props) {
       const { state, handlers } = props
       const refreshing = props.refreshing === true
@@ -7311,6 +7438,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           title: refreshing === true ? '正在刷新…' : '刷新（重新拉取会议列表与当前详情）',
           'aria-label': '刷新',
         }, refreshing === true ? h('span', { className: 'dsm-spin' }) : h(Icon, { name: 'refresh', size: 14 })),
+        h(ToolbarButton, {
+          icon: 'list',
+          iconSize: 14,
+          label: '周报',
+          onClick: handlers.digest,
+          title: '把近 7/30/90 天的会议纪要汇总成一份周报（Markdown）',
+        }),
         h(ToolbarButton, {
           icon: 'sliders',
           iconSize: 14,
@@ -7436,6 +7570,32 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     function MeetingPanel() {
       const state = useSnapshot()
       const [search, setSearch] = useState('')
+      const [searchResults, setSearchResults] = useState(null)
+      const [searching, setSearching] = useState(false)
+      useEffect(() => {
+        const keyword = search.trim()
+        if (keyword.length < 2) {
+          setSearchResults(null)
+          setSearching(false)
+          return undefined
+        }
+        let cancelled = false
+        setSearching(true)
+        const timer = window.setTimeout(async () => {
+          try {
+            const payload = await requestJson('/search?q=' + encodeURIComponent(keyword) + '&limit=30')
+            if (!cancelled) setSearchResults(Array.isArray(payload?.results) ? payload.results : [])
+          } catch {
+            if (!cancelled) setSearchResults([])
+          } finally {
+            if (!cancelled) setSearching(false)
+          }
+        }, 300)
+        return () => {
+          cancelled = true
+          window.clearTimeout(timer)
+        }
+      }, [search])
       const [filter, setFilter] = useState('all')
       const [dialog, setDialog] = useState(null)
       const [recordTab, setRecordTab] = useState('record')
@@ -7743,6 +7903,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           setDialog('record')
         },
         importText: () => setDialog('import'),
+        digest: () => setDialog('digest'),
         summarize: () => { void openSummarize(selected?.id, Boolean(selected?.summary)) },
         export: (format) => { void openExport(format) },
         delete: () => setDeleteOpen(true),
@@ -7830,6 +7991,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             selectedId: state.selectedId,
             search,
             onSearch: setSearch,
+            remoteResults: search.trim().length >= 2 ? searchResults : null,
+            searching,
             filter,
             onFilter: setFilter,
             onSelect: (id) => { void selectMeeting(id) },
@@ -7881,6 +8044,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           : null,
         dialog === 'import'
           ? h(ImportTextModal, { meeting: selected, onClose: closeDialog })
+          : null,
+        dialog === 'digest'
+          ? h(DigestModal, { onClose: closeDialog })
           : null,
         dialog === 'auto'
           ? h(SettingsModal, {

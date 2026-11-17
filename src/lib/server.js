@@ -10,7 +10,7 @@
  * @module dsh-meeting-live/server
  */
 
-import { formatMoment, isGenericTitle, localDay, projectMeeting, todoProgress } from './model.js'
+import { buildCorrectionContext, formatMoment, isGenericTitle, localDay, projectMeeting, todoProgress } from './model.js'
 import { analyzeWavQuality } from './audio-quality.js'
 import { applyCorrectionChanges, diffTextLines } from './text-diff.js'
 import { sortMeetings } from './store.js'
@@ -937,6 +937,89 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
+      if (segments.length === 1 && segments[0] === 'digest' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const days = Math.max(1, Math.min(90, Math.round(Number(body.days) || 7)))
+        const since = new Date(Date.now() - days * 24 * 3600 * 1000)
+        const sinceDay = localDay(since)
+        const meetings = store.snapshot().meetings
+          .filter((item) => String(item.date ?? '') >= sinceDay || (item.updatedAt !== undefined && new Date(item.updatedAt) >= since))
+          .sort((left, right) => String(right.date ?? '').localeCompare(String(left.date ?? '')))
+          .slice(0, 30)
+        if (meetings.length === 0) throw new Error('所选时间范围内没有可汇总的会议')
+        const settingsNow = store.settings
+        const digest = await summarizer.generateDigest(meetings, {
+          selection: store.summaryModel,
+          custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
+          rangeLabel: '近 ' + String(days) + ' 天（' + sinceDay + ' 至今）',
+        })
+        sendJson(res, 200, { ok: true, markdown: digest.markdown, count: digest.count, days, rangeLabel: sinceDay })
+        return
+      }
+
+      if (segments.length === 1 && segments[0] === 'search' && method === 'GET') {
+        const query = String(url.searchParams.get('q') ?? '').trim()
+        const limit = Math.max(1, Math.min(50, Math.round(Number(url.searchParams.get('limit')) || 20)))
+        if (query === '') {
+          sendJson(res, 200, { ok: true, results: [] })
+          return
+        }
+        const needles = query.toLowerCase().split(/\s+/).filter((item) => item !== '')
+        const results = []
+        for (const meeting of store.snapshot().meetings) {
+          const summary = meeting.summary ?? {}
+          const summaryText = [
+            summary.oneLine,
+            summary.overview,
+            ...(Array.isArray(summary.keyPoints) ? summary.keyPoints : []),
+            ...(Array.isArray(summary.decisions) ? summary.decisions.map((item) => (typeof item === 'string' ? item : item?.text)) : []),
+            ...(Array.isArray(summary.risks) ? summary.risks.map((item) => (typeof item === 'string' ? item : item?.text)) : []),
+            ...(Array.isArray(summary.todos) ? summary.todos.map((item) => item?.title) : []),
+          ].filter(Boolean).join('\n')
+          const sections = [
+            { key: 'title', text: String(meeting.title ?? '') },
+            { key: 'attendees', text: (Array.isArray(meeting.attendees) ? meeting.attendees : []).join('、') },
+            { key: 'transcript', text: String(meeting.transcript ?? '') },
+            { key: 'summary', text: summaryText },
+          ]
+          let score = 0
+          let snippet = ''
+          let matchedAll = true
+          for (const needle of needles) {
+            let found = 0
+            for (const section of sections) {
+              const haystack = section.text.toLowerCase()
+              let index = haystack.indexOf(needle)
+              while (index >= 0) {
+                found += 1
+                if (snippet === '') {
+                  const start = Math.max(0, index - 40)
+                  snippet = section.text.slice(start, Math.min(section.text.length, index + needle.length + 80)).trim()
+                }
+                index = haystack.indexOf(needle, index + needle.length)
+              }
+              if (section.key === 'title' && haystack.includes(needle)) score += 20
+              if (section.key === 'summary') score += 2
+            }
+            if (found === 0) { matchedAll = false; break }
+            score += Math.min(20, found)
+          }
+          if (!matchedAll) continue
+          results.push({
+            id: meeting.id,
+            title: String(meeting.title ?? '未命名会议'),
+            date: String(meeting.date ?? ''),
+            sourceType: meeting.sourceType,
+            hasSummary: summary.oneLine !== undefined && summary.oneLine !== '',
+            snippet,
+            score,
+          })
+        }
+        results.sort((left, right) => right.score - left.score || right.date.localeCompare(left.date))
+        sendJson(res, 200, { ok: true, results: results.slice(0, limit), total: results.length })
+        return
+      }
+
       if (segments.length === 1 && segments[0] === 'meetings' && method === 'POST') {
         const body = await readJsonBody(req)
         const meeting = await store.add({
@@ -1041,6 +1124,7 @@ export function registerRoutes(ctx, deps) {
         const settingsNow = store.settings
         const summary = await summarizer.summarize(meeting, {
           selection: store.summaryModel,
+          template: settingsNow.summaryTemplate,
           custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
         })
         const patch = {}
@@ -1355,9 +1439,11 @@ export function registerRoutes(ctx, deps) {
               if (settingsNow.correctTranscript === true) {
                 const current = requireMeeting(store, id)
                 if (typeof current.transcript === 'string' && current.transcript.trim() !== '') {
+                  const correctionContext = buildCorrectionContext(store.snapshot().meetings, current)
                   const corrected = await summarizer.correctTranscript(current, {
                     selection: store.summaryModel,
                     terms: effectiveTerms(settingsNow),
+                    context: correctionContext,
                     custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
                   })
                   if (settingsNow.reviewCorrections !== false) {

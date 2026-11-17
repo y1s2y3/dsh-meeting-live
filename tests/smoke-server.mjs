@@ -68,7 +68,9 @@ function makeRes() {
 
 function makeStore() {
   const meeting = {
-    id: 'mt_test', title: '测试', transcript: '', transcriptSeconds: 0,
+    id: 'mt_test', title: '测试', date: new Date().toISOString().slice(0, 10),
+    attendees: [], sourceType: 'text', updatedAt: new Date().toISOString(),
+    transcript: '', transcriptSeconds: 0,
     summary: {
       oneLine: '', overview: '', keyPoints: [], decisions: [], risks: [], sections: [], attendees: [],
       todos: [
@@ -79,7 +81,7 @@ function makeStore() {
   };
   return {
     file: 'meeting-minutes.json',
-    snapshot() { return { meetings: [] }; },
+    snapshot() { return { meetings: [meeting], settings: this.settings, summaryModel: this.summaryModel, autoIngest: {} }; },
     async load() {},
     get(id) { return id === 'mt_test' ? meeting : null; },
     async patch(id, patch) {
@@ -673,6 +675,36 @@ check('二维码上传接口已移除（二维码写死在插件里）', noUploa
   await askHotwords('PATCH', '/dsh-meeting/settings', JSON.stringify({ settings: { transcribe: { provider: 'cloud-tencent' }, terms: '智慧工地平台\nBIM' } }), 'application/json')
   const hotwordTranscribe = await askHotwords('POST', '/dsh-meeting/meetings/mt_test/transcribe?language=zh', makeWav(2))
   check('云端转写会把术语表作为热词传入', hotwordTranscribe.status === 200 && Array.isArray(hotwordCaptured.args?.hotwords) && hotwordCaptured.args.hotwords.includes('智慧工地平台') && hotwordCaptured.args.hotwords.includes('BIM'), JSON.stringify(hotwordCaptured.args?.hotwords))
+}
+
+/* 25. 全文搜索 / 周报汇总 */
+{
+  const searchTitle = await uploadCase('GET', '/dsh-meeting/search?q=' + encodeURIComponent('测试'))
+  const searchPayload = JSON.parse(searchTitle.body)
+  check('全文搜索按标题命中会议', searchTitle.status === 200 && searchPayload.results?.length === 1 && searchPayload.results[0].id === 'mt_test', searchTitle.body.slice(0, 160))
+
+  const searchBody = await uploadCase('GET', '/dsh-meeting/search?q=' + encodeURIComponent('预算'))
+  const searchBodyPayload = JSON.parse(searchBody.body)
+  check('全文搜索命中纪要待办并返回片段', searchBody.status === 200 && searchBodyPayload.results?.length === 1 && searchBodyPayload.results[0].snippet.includes('预算'), searchBody.body.slice(0, 200))
+
+  const digestCalls = []
+  const digestAsk = await runRoute({
+    status: () => ({ available: true, providers: [], selection: {} }),
+    prepare: () => {},
+    async transcribeWav() { return { text: '', audioSeconds: 0 }; },
+  }, {
+    summarizer: {
+      describeRoute: () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }),
+      async generateDigest(meetings, options) {
+        digestCalls.push({ meetings, options });
+        return { markdown: '# 本周概览\n测试周报', count: meetings.length };
+      },
+    },
+  })
+  const digestCase = await digestAsk('POST', '/dsh-meeting/digest', JSON.stringify({ days: 7 }), 'application/json')
+  const digestPayload = JSON.parse(digestCase.body)
+  check('周报接口返回 Markdown 与会议数', digestCase.status === 200 && digestPayload.markdown.includes('本周概览') && digestPayload.count === 1, digestCase.body.slice(0, 160))
+  check('周报把时间范围传给模型', digestCalls.length === 1 && digestCalls[0].options.rangeLabel.includes('近 7 天'), JSON.stringify(digestCalls[0]?.options))
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

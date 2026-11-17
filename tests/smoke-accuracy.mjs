@@ -17,6 +17,7 @@ const diff = await imp('text-diff.js');
 const model = await imp('model.js');
 const summarize = await imp('summarize.js');
 const exportLib = await imp('export.js');
+const settingsLib = await imp('settings.js');
 
 let failures = 0;
 function check(label, condition, detail) {
@@ -94,7 +95,40 @@ function makeWav(samples) {
   check('纠错待审阅字段保留', meeting.correction !== null && meeting.correction.changes.length === 1)
 }
 
-/* 4. 纠错/纪要 prompt 使用说话人姓名 */
+/* 4.1 上下文增强纠错：挑相关历史会议结论 */
+{
+  const context = model.buildCorrectionContext([
+    { id: 'old-1', title: '机场平台周会', date: '2026-11-10', attendees: ['张三', '李四'], updatedAt: '2026-11-10T10:00:00Z', summary: { oneLine: '确认了 BIM 协调机制', decisions: ['上线时间定在 12 月'] } },
+    { id: 'old-2', title: '无关会议', date: '2026-11-09', attendees: ['王五'], updatedAt: '2026-11-09T10:00:00Z', summary: { oneLine: '别的项目' } },
+    { id: 'current', title: '当前会议', date: '2026-11-17', attendees: ['张三'], summary: { oneLine: '自己' } },
+    { id: 'no-summary', title: '没纪要', date: '2026-11-16', attendees: ['张三'] },
+  ], { id: 'current', attendees: ['张三', '李四'] })
+  check('纠错上下文优先同参会人的历史会议', context.includes('机场平台周会') && context.includes('BIM 协调机制') && !context.includes('当前会议') && !context.includes('没纪要'), context)
+  check('纠错上下文带决策摘要', context.includes('上线时间定在 12 月'))
+}
+
+/* 4.2 纪要模板 / 周报 prompt */
+{
+  check('纪要模板含评审/周会/客户/复盘', ['review', 'weekly', 'client', 'retro'].every((key) => typeof summarize.TEMPLATE_INSTRUCTIONS[key] === 'string' && summarize.TEMPLATE_INSTRUCTIONS[key].length > 10))
+  check('未知模板回退通用', summarize.templateInstruction('unknown') === summarize.TEMPLATE_INSTRUCTIONS.general)
+  const normalized = settingsLib.normalizeSettings ? null : null
+  const digestPrompt = summarize.buildDigestUserPrompt([
+    { title: '机场平台周会', date: '2026-11-10', summary: { oneLine: '确认 BIM 机制', decisions: ['12 月上线'], todos: [{ title: '补供应商清单', owner: '张三', due: '2026-11-20', calendarTaskId: 'ct1' }] } },
+  ], '近 7 天')
+  check('周报 prompt 汇总会议、决策与待办状态', digestPrompt.includes('机场平台周会') && digestPrompt.includes('12 月上线') && digestPrompt.includes('补供应商清单') && digestPrompt.includes('已写入待办'), digestPrompt)
+  check('周报 system prompt 有固定结构', summarize.DIGEST_PROMPT.includes('本周概览') && summarize.DIGEST_PROMPT.includes('待办进展') && summarize.DIGEST_PROMPT.includes('下周建议'))
+}
+
+/* 4.3 纪要风格设置归一化 */
+{
+  const settings = settingsLib.normalizeSettings({
+    summaryTemplate: 'review',
+    summary: { mode: 'dsh' },
+  })
+  check('纪要风格写入设置', settings.summaryTemplate === 'review', settings.summaryTemplate)
+  const fallback = settingsLib.normalizeSettings({ summaryTemplate: 'not-a-template', summary: { mode: 'dsh' } })
+  check('非法纪要风格回退通用', fallback.summaryTemplate === 'general', fallback.summaryTemplate)
+}
 {
   const prompt = summarize.buildUserPrompt({
     title: '测试', date: '2026-11-17', attendees: [], notes: '', transcript: 'S1：你好',
@@ -116,8 +150,14 @@ function makeWav(samples) {
   check('纠错逐行审阅与勾选', client.includes('转写纠错待确认') && client.includes('应用选中') && client.includes('dsm-diff-before'))
   check('设置页有审阅/预处理开关', client.includes('纠错后先审阅') && client.includes('音频预处理') && client.includes('reviewCorrections') && client.includes('preprocessAudio'))
   check('热词能力提示', client.includes('术语会作为热词传给云端识别') && client.includes('讯飞热词需在讯飞控制台'))
+  check('设置页有纪要风格选择', client.includes('纪要风格') && client.includes('评审会（评审结论与修改项）') && client.includes('summaryTemplate'))
+  check('工具栏周报入口与生成弹窗', client.includes('生成周报') && client.includes('DigestModal') && client.includes('/digest'))
+  check('全文搜索入口与结果渲染', client.includes('搜索标题、参会人、转写、纪要') && client.includes('/search?q=') && client.includes('全文命中'))
   const server = fs.readFileSync(path.join(repo, 'src', 'lib', 'server.js'), 'utf8')
   check('云端识别会带术语热词', server.includes('hotwords: effectiveTerms(store.settings)'))
+  check('纠错会带相关历史会议上下文', server.includes('buildCorrectionContext(store.snapshot().meetings'))
+  check('总结会按设置传纪要风格', server.includes('template: settingsNow.summaryTemplate'))
+  check('宿主有周报与全文搜索路由', server.includes("segments[0] === 'digest'") && server.includes("segments[0] === 'search'"))
   check('宿主有纠错应用/忽略路由', server.includes("segments[3] === 'apply'") && server.includes("segments[3] === 'discard'") && server.includes('applyCorrectionChanges'))
   check('会议 PATCH 支持 speakerNames', server.includes("'speakerNames'"))
   check('重转写会做音频预处理', server.includes('preprocessAudioWithFfmpeg'))

@@ -51,6 +51,8 @@ export const DEFAULT_SETTINGS = {
   },
   /** 转写结束后用 LLM 做一次语境纠错（错别字/人名/术语）。 */
   correctTranscript: true,
+  /** 纪要风格：general/review/weekly/client/retro（影响总结 prompt 的侧重）。 */
+  summaryTemplate: 'general',
   /** 纠错结果先审阅（逐句对比、勾选接受）还是直接替换转写。 */
   reviewCorrections: true,
   /** 音频预处理：转码/重转写前做音量归一化 + 高通滤波（需要 ffmpeg）。 */
@@ -65,6 +67,9 @@ function text(value, limit = 200) {
 
 /** 合法的术语分类（与提取 prompt 约定一致）。 */
 const TERM_CATEGORIES = ['术语', '产品/系统', '项目', '机构', '人名', '其他']
+
+/** 纪要风格（与 summarize.TEMPLATE_INSTRUCTIONS 对应）。 */
+const SUMMARY_TEMPLATES = ['general', 'review', 'weekly', 'client', 'retro']
 
 /** 生成术语条目的稳定 id（只用于前端删除/渲染，不参与业务）。 */
 function newTermId() {
@@ -210,6 +215,9 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
     termExtract: normalizeTermExtract(input.termExtract === undefined ? baseInput.termExtract : input.termExtract),
     correctTranscript: input.correctTranscript === undefined ? baseInput.correctTranscript !== false : input.correctTranscript !== false,
     reviewCorrections: input.reviewCorrections === undefined ? baseInput.reviewCorrections !== false : input.reviewCorrections !== false,
+    summaryTemplate: SUMMARY_TEMPLATES.includes(String(input.summaryTemplate ?? baseInput.summaryTemplate))
+      ? String(input.summaryTemplate ?? baseInput.summaryTemplate)
+      : 'general',
     preprocessAudio: input.preprocessAudio === undefined ? baseInput.preprocessAudio !== false : input.preprocessAudio !== false,
     // 真说话人分离固定开启：模型就绪就自动做，没装模型时自动跳过
     diarize: true,
