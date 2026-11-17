@@ -39,6 +39,16 @@ export const DEFAULT_SETTINGS = {
   },
   /** 术语表：每行一个词，用于转写后的 LLM 纠错提示。 */
   terms: '',
+  /**
+   * 从文件夹里解析出来的术语（按重要性排序，最多 50 个）。
+   * 结构：{ dir, at, items: [{ id, text, category, priority, evidence, count }], stats }
+   */
+  termExtract: {
+    dir: '',
+    at: '',
+    items: [],
+    stats: { files: 0, supported: 0, skipped: 0, chars: 0, truncated: false },
+  },
   /** 转写结束后用 LLM 做一次语境纠错（错别字/人名/术语）。 */
   correctTranscript: true,
   /** 用声纹做真说话人分离（需要 Paraformer + pyannote + cam++ 模型就绪）。 */
@@ -47,6 +57,65 @@ export const DEFAULT_SETTINGS = {
 
 function text(value, limit = 200) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
+}
+
+/** 合法的术语分类（与提取 prompt 约定一致）。 */
+const TERM_CATEGORIES = ['术语', '产品/系统', '项目', '机构', '人名', '其他']
+
+/** 生成术语条目的稳定 id（只用于前端删除/渲染，不参与业务）。 */
+function newTermId() {
+  return 'tm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
+
+/**
+ * 归一化「从文件夹提取的术语」列表：去重、按 priority 排序、最多 50 个，
+ * 并把 priority 重排成连续的 1..N（界面上就是 1、2、3…名）。
+ */
+export function normalizeTermItems(raw) {
+  const seen = new Set()
+  const items = []
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    if (entry === null || typeof entry !== 'object') continue
+    const value = singleLine(entry.text ?? entry.term, 40)
+    if (value === '' || value.length < 2) continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const priority = Number(entry.priority)
+    const count = Number(entry.count)
+    items.push({
+      id: typeof entry.id === 'string' && /^[A-Za-z0-9_-]{3,40}$/.test(entry.id) ? entry.id : newTermId(),
+      text: value,
+      category: TERM_CATEGORIES.includes(entry.category) ? entry.category : '术语',
+      priority: Number.isFinite(priority) ? Math.max(1, Math.min(999, Math.round(priority))) : items.length + 1,
+      evidence: singleLine(entry.evidence ?? entry.note, 80),
+      count: Number.isFinite(count) ? Math.max(1, Math.min(9999, Math.round(count))) : 1,
+    })
+    if (items.length >= 50) break
+  }
+  items.sort((a, b) => a.priority - b.priority)
+  return items.map((item, index) => ({ ...item, priority: index + 1 }))
+}
+
+/** 归一化「文件夹术语提取」整体结果（目录、时间、术语、统计）。 */
+export function normalizeTermExtract(raw) {
+  const input = raw !== null && typeof raw === 'object' ? raw : {}
+  const dir = singleLine(input.dir, 500)
+  const at = typeof input.at === 'string' && input.at !== '' ? input.at.slice(0, 40) : ''
+  const stats = input.stats !== null && typeof input.stats === 'object' ? input.stats : {}
+  const number = (value) => (Number.isFinite(Number(value)) ? Math.max(0, Math.min(1000000, Math.round(Number(value)))) : 0)
+  return {
+    dir,
+    at,
+    items: dir === '' ? [] : normalizeTermItems(input.items),
+    stats: {
+      files: number(stats.files),
+      supported: number(stats.supported),
+      skipped: number(stats.skipped),
+      chars: number(stats.chars),
+      truncated: stats.truncated === true,
+    },
+  }
 }
 
 function singleLine(value, limit = 200) {
@@ -123,6 +192,7 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
       },
     },
     terms: typeof termsInput === 'string' ? termsInput.slice(0, 4000) : '',
+    termExtract: normalizeTermExtract(input.termExtract === undefined ? baseInput.termExtract : input.termExtract),
     correctTranscript: input.correctTranscript === undefined ? baseInput.correctTranscript !== false : input.correctTranscript !== false,
     // 真说话人分离固定开启：模型就绪就自动做，没装模型时自动跳过
     diarize: true,
@@ -139,6 +209,25 @@ export function parseTerms(value) {
     seen.add(item)
   }
   return [...seen].slice(0, 200)
+}
+
+/**
+ * 纠正转写时实际使用的术语列表：先放「文件夹提取」的术语（已按重要性排序），
+ * 再补上手动术语表；去重后最多 120 条，避免 prompt 过长。
+ */
+export function effectiveTerms(settings) {
+  const merged = []
+  const seen = new Set()
+  const push = (value) => {
+    const item = singleLine(value, 60)
+    if (item === '' || seen.has(item.toLowerCase())) return
+    seen.add(item.toLowerCase())
+    merged.push(item)
+  }
+  const items = Array.isArray(settings?.termExtract?.items) ? settings.termExtract.items : []
+  for (const entry of items) push(entry?.text)
+  for (const item of parseTerms(settings?.terms)) push(item)
+  return merged.slice(0, 120)
 }
 
 /** 云端引擎的必填项校验；返回中文错误或 null。 */

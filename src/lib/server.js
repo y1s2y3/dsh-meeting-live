@@ -16,10 +16,14 @@ import { exportMeeting } from './export.js'
 import {
   CLOUD_PROVIDERS,
   TRANSCRIBE_PROVIDERS,
+  effectiveTerms,
+  normalizeTermExtract,
+  normalizeTermItems,
   parseTerms,
   validateCloudSettings,
   validateSummaryCustom,
 } from './settings.js'
+import { scanFolder } from './term-extract.js'
 import {
   dropTempVideo,
   isCapturing,
@@ -750,9 +754,36 @@ export function registerRoutes(ctx, deps) {
           ok: true,
           model: store.summaryModel,
           settings: store.settings,
-          terms: parseTerms(store.settings.terms),
+          terms: effectiveTerms(store.settings),
           warnings,
         })
+        return
+      }
+
+      // 从文件夹解析术语：扫描文本/Word → 请总结模型排序 → 持久化到设置里。
+      if (segments.length === 2 && segments[0] === 'terms' && segments[1] === 'extract' && method === 'POST') {
+        const body = await readJsonBody(req)
+        const dir = String(body?.dir ?? '').trim()
+        if (dir === '') throw new Error('请先选择要解析的文件夹')
+        const scanned = await scanFolder(dir)
+        if (scanned.text === '') {
+          throw new Error('这个文件夹里没有可解析的文本或 Word 文件（支持 .txt / .md / .json / .csv / .log / .html / .docx）')
+        }
+        const settingsNow = store.settings
+        const result = await summarizer.extractTerms(scanned.text, { ...scanned.stats, names: scanned.names }, {
+          selection: store.summaryModel,
+          custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
+        })
+        const items = normalizeTermItems(result.items)
+        const termExtract = normalizeTermExtract({
+          dir,
+          at: new Date().toISOString(),
+          items,
+          stats: scanned.stats,
+        })
+        await store.setSettings({ termExtract })
+        logger?.info?.('meeting-minutes: extracted ' + String(items.length) + ' term(s) from folder')
+        sendJson(res, 200, { ok: true, termExtract: store.settings.termExtract })
         return
       }
 
@@ -1245,7 +1276,7 @@ export function registerRoutes(ctx, deps) {
                 if (typeof current.transcript === 'string' && current.transcript.trim() !== '') {
                   const corrected = await summarizer.correctTranscript(current, {
                     selection: store.summaryModel,
-                    terms: parseTerms(settingsNow.terms),
+                    terms: effectiveTerms(settingsNow),
                     custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
                   })
                   await store.patch(id, { transcript: corrected })

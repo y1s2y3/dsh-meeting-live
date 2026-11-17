@@ -576,6 +576,48 @@ check('图片名做了白名单校验（拒绝路径穿越）', assetBad.status 
 const noUpload = await uploadCase('POST', '/dsh-meeting/feedback/qr', JSON.stringify({ dataUrl: 'data:image/png;base64,AAAA' }), 'application/json')
 check('二维码上传接口已移除（二维码写死在插件里）', noUpload.status === 404 && String(noUpload.body).includes('未知接口'), `${noUpload.status} ${noUpload.body.slice(0, 120)}`)
 
+/* 23. 文件夹术语解析：读取文件夹文本 → 模型排序 → 去重持久化（用桩模型，不联网） */
+{
+  const termOs = (await import('node:os')).default
+  const termFs = (await import('node:fs')).default
+  const termPath = (await import('node:path')).default
+  const termDir = termFs.mkdtempSync(termPath.join(termOs.tmpdir(), 'mm-terms-'))
+  termFs.writeFileSync(termPath.join(termDir, 'notes.txt'), '智慧工地平台\n张三负责 BIM 协调\n智慧工地平台二期', 'utf8')
+  const captured = { source: '' }
+  const askTerms = await runRoute({
+    status: () => ({ available: true, providers: [], selection: {} }),
+    prepare: () => {},
+    async transcribeWav() { return { text: '', audioSeconds: 0 }; },
+  }, {
+    summarizer: {
+      describeRoute: () => ({ provider: 'deepseek-official', model: 'deepseek-flash' }),
+      async extractTerms(source) {
+        captured.source = source
+        return {
+          items: [
+            { text: 'BIM', category: '术语', priority: 3, count: 1, evidence: '建筑信息模型' },
+            { text: '智慧工地平台', category: '产品/系统', priority: 1, count: 2, evidence: '平台名称' },
+            { text: '张三', category: '人名', priority: 2, count: 1 },
+            { text: '智慧工地平台', category: '术语', priority: 4, count: 2 },
+          ],
+        }
+      },
+    },
+  })
+  const termRes = await askTerms('POST', '/dsh-meeting/terms/extract', JSON.stringify({ dir: termDir }), 'application/json')
+  const termPayload = JSON.parse(termRes.body)
+  const termItems = termPayload.termExtract?.items ?? []
+  check('文件夹术语解析返回 200 并持久化', termRes.status === 200 && termPayload.ok === true && termItems.length === 3, termRes.body.slice(0, 160))
+  check('术语按优先级排序并去重', termItems[0]?.text === '智慧工地平台' && termItems[0]?.priority === 1 && termItems[1]?.text === '张三' && termItems[2]?.text === 'BIM', JSON.stringify(termItems.map((item) => item.text + ':' + item.priority)))
+  check('解析时读到文件夹里的文本', captured.source.includes('智慧工地平台') && captured.source.includes('张三'), captured.source.slice(0, 80))
+  check('术语解析保存了目录与文件统计', termPayload.termExtract?.dir === termDir && termPayload.termExtract?.stats?.supported === 1, JSON.stringify(termPayload.termExtract?.stats))
+  const emptyDir = termFs.mkdtempSync(termPath.join(termOs.tmpdir(), 'mm-terms-empty-'))
+  const emptyRes = await askTerms('POST', '/dsh-meeting/terms/extract', JSON.stringify({ dir: emptyDir }), 'application/json')
+  check('空文件夹给出中文提示', emptyRes.status === 400 && String(emptyRes.body).includes('没有可解析'), `${emptyRes.status} ${emptyRes.body.slice(0, 120)}`)
+  termFs.rmSync(termDir, { recursive: true, force: true })
+  termFs.rmSync(emptyDir, { recursive: true, force: true })
+}
+
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
 

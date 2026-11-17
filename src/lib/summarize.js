@@ -88,8 +88,7 @@ export const TODO_EXTRACT_PROMPT = [
   '输出形状：{"todos":[{"title":"交付物","owner":"","due":"","priority":"normal","notes":""}]}',
 ].join('\n')
 
-/** 行动项抽取的用户消息：会议信息 + 已识别决策/风险 + 转写全文。 */
-export function buildTodoExtractPrompt(meeting, summary = {}) {
+/** 行动项抽取的用户消息：会议信息 + 已识别决策/风险 + 转写全文。 */export function buildTodoExtractPrompt(meeting, summary = {}) {
   const decisions = Array.isArray(summary?.decisions) ? summary.decisions.map((item) => (typeof item === 'string' ? item : String(item?.text ?? ''))).filter(Boolean) : []
   const risks = Array.isArray(summary?.risks) ? summary.risks.map((item) => (typeof item === 'string' ? item : String(item?.text ?? ''))).filter(Boolean) : []
   const lines = [
@@ -144,6 +143,48 @@ export function buildUserPrompt(meeting) {
     '----- 会议文本开始 -----',
     clampTranscript(transcript),
     '----- 会议文本结束 -----',
+  ].filter((line) => line !== '')
+  return lines.join('\n')
+}
+
+/**
+ * 「从文件夹提取术语」的 system 指令：只输出排好序的术语 JSON。
+ * 目标是给转写纠错用的术语表（专有名词/人名/系统名），不是会议摘要。
+ */
+export const TERM_EXTRACT_PROMPT = [
+  '你是会议转写纠错的「术语库整理助手」。你会读到从用户文件夹里汇总的文本（可能是多份会议纪要、转写稿或方案文档）。',
+  '任务：从文本里抽取对「转写纠错」最有价值的专有名词，按重要性排序，最多 50 个。',
+  '',
+  '只输出一个 JSON 对象，不要输出 Markdown 代码围栏、解释或前言：',
+  '{"terms":[{"text":"术语","category":"术语","priority":1,"evidence":"一句话说明它是什么","count":3}]}',
+  '',
+  '硬性要求：',
+  '1. 只抽文本中真实出现的专有名词；category 只能取：术语、产品/系统、项目、机构、人名、其他。',
+  '2. 优先级从高到低：行业/业务/技术术语、产品与系统名、项目名、机构名、真实人名；不要抽“会议、项目、需求、问题、时间、工作、方案、系统、功能”这类通用词。',
+  '3. 人名只抽真实姓名（2-4 个汉字，且文本中出现过至少 2 次或带职务/称呼佐证）；不要把“张总、李工、王经理”这类称呼本身当成人名。',
+  '4. priority 从 1 开始连续编号，1 最重要（越容易写错、越核心、出现越多越靠前）；最多 50 个，内容不够就少给，不要凑数。',
+  '5. text 不超过 20 个字；evidence 不超过 30 个字（它是什么，可带出现文件）；count 给出现次数（估计值，至少 1）。',
+  '6. 同一个概念只保留一种写法（用文本里最常见、最规范的写法）；英文缩写与全称都常见时可保留缩写。',
+  '7. 纯文本里没有的专有名词不要编造；不确定是不是专有名词的通用短语不要输出。',
+].join('\n')
+
+/** 术语提取的用户消息：文件统计 + 汇总文本。 */
+export function buildTermUserPrompt(source, stats = {}) {
+  const text = typeof source === 'string' ? source : ''
+  const files = Number(stats?.supported ?? 0)
+  const chars = Number(stats?.chars ?? text.length)
+  const names = Array.isArray(stats?.names) ? stats.names.slice(0, 20) : []
+  const lines = [
+    `已读取 ${files} 个文件，共约 ${chars} 个字。`,
+    names.length > 0 ? '文件列表：' + names.join('、') : '',
+    stats?.truncated === true ? '（文件较多或较长，以下只是部分内容）' : '',
+    '',
+    '需要提取术语的文本如下：',
+    '----- 文本开始 -----',
+    text,
+    '----- 文本结束 -----',
+    '',
+    '请只输出 JSON：最多 50 个专有名词，priority 从 1 开始按重要性排序。',
   ].filter((line) => line !== '')
   return lines.join('\n')
 }
@@ -354,6 +395,35 @@ export function createSummarizer(options) {
   }
 
   /**
+   * 从文件夹汇总文本里提取术语（供转写纠错用）。
+   * @param source - 汇总后的文本。
+   * @param stats - `{ supported, chars, names, truncated }`。
+   * @param options - `{ custom, selection, signal }`。
+   * @returns `{ items }`（原始条目，由调用方 normalizeTermItems 归一化）。
+   */
+  async function extractTerms(source, stats = {}, options = {}) {
+    const text = typeof source === 'string' ? source.trim() : ''
+    if (text === '') throw new Error('文件夹里没有可解析的文本内容')
+    const custom = options.custom ?? null
+    const signal = options.signal
+    const callModelFn = async (messages, system) => {
+      if (custom !== null) return callCustomModel(messages, system, custom, signal)
+      return callModel(messages, system, signal, options.selection ?? null)
+    }
+    const messages = [{ role: 'user', content: [{ type: 'text', text: buildTermUserPrompt(text, stats) }] }]
+    const first = await callModelFn(messages, TERM_EXTRACT_PROMPT)
+    let parsed = parseSummaryJson(first.text)
+    if (parsed === null) {
+      logger?.warn?.('meeting-minutes: term extract returned non-JSON, retrying once')
+      const retry = await callModelFn(messages, TERM_EXTRACT_PROMPT + '\n\n注意：上一次输出无法解析为 JSON。请只输出一个 JSON 对象，不要代码围栏或解释。')
+      parsed = parseSummaryJson(retry.text)
+    }
+    if (parsed === null) throw new Error('模型没有返回可解析的术语 JSON，请稍后重试')
+    const items = Array.isArray(parsed.terms) ? parsed.terms : (Array.isArray(parsed.items) ? parsed.items : [])
+    return { items }
+  }
+
+  /**
    * Summarize one meeting.
    * @param meeting - canonical meeting with non-empty transcript.
    * @param options - `signal` (AbortSignal).
@@ -462,5 +532,5 @@ export function createSummarizer(options) {
     }
   }
 
-  return { summarize, describeRoute, correctTranscript, extractTodos }
+  return { summarize, describeRoute, correctTranscript, extractTodos, extractTerms }
 }

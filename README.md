@@ -29,7 +29,7 @@ src/                     插件源码（直接改这里）
   cordis.patch.yml       插件加载声明
   README.md              插件用户说明（随包分发）
   LICENSE                MIT 授权文本（随包分发）
-tests/                   离线自测（13 套，改完代码跑一遍）
+tests/                   离线自测（14 套，改完代码跑一遍）
 deploy.mjs               部署到 DSH Desktop profile
 package.mjs              打包成可分发的 .tgz
 INSTALL.md               给使用者的安装/升级/卸载说明
@@ -61,6 +61,7 @@ node tests/smoke-cloud-asr.mjs      # 云端转写协议层：三家签名/请�
 node tests/smoke-model-hash.mjs     # 模型文件 SHA-256 清单与本机已下载模型一致性（防镜像替换）
 node tests/smoke-update-check.mjs   # 版本更新检查（版本比较 / npm 优先 / GitHub 兜底 / 缓存）
 node tests/smoke-summary-rich.mjs   # 详细纪要结构：新字段规范化、prompt 要求、Word/HTML/Markdown 导出
+node tests/smoke-terms.mjs          # 文件夹术语提取：扫描 txt/docx、排序去重、设置归一化、前端入口
 ```
 
 改完何时生效：
@@ -120,6 +121,8 @@ node package.mjs --name dsh-meeting-live-pro --version 1.2.0
   关键词、决策依据、风险应对建议、待确认问题、发言人总结；卡片可展开查看，Word/HTML/Markdown 同步导出
 - AI 会议纪要卡片布局重做：结论/概述收进独立摘要区，关键要点与章节速览分区，决策与风险并排（语义色），
   待确认问题与发言人总结用轻量卡片；宽屏两列、窄屏自动堆叠，长纪要更好扫读
+- 转写纠错新增「从文件夹提取术语」：选文件夹（txt/md/json/csv/log/html/docx）→ 模型通读后抽取
+  专业术语/系统名/机构/人名并按重要性排序，最多 50 个；支持重新解析、逐个删除、清空，术语自动用于纠错
 - 配色改为浅灰底 + 白卡片 + 浅蓝主题
 
 **录音 / 转写**

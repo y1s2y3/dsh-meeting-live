@@ -471,6 +471,22 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-set-dot{width:6px;height:6px;border-radius:50%;background:#CBD5E1;display:inline-block;margin-right:4px}
 .dsm-set-dot--on{background:#22A06B}
 .dsm-set-cloud-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:2px}
+.dsm-set-divider{height:1px;background:#EEF2F8;margin:14px 0}
+.dsm-terms{margin-top:8px;border:1px solid #E4E9F2;border-radius:12px;background:#FBFDFF;overflow:hidden}
+.dsm-terms-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #EDF1F7;background:#F8FAFE}
+.dsm-terms-title{font-size:12px;font-weight:650;color:#0F172A}
+.dsm-terms-meta{font-size:10.5px;color:#8A94A6}
+.dsm-term-list{display:flex;flex-direction:column;max-height:280px;overflow:auto}
+.dsm-term-item{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid #F1F4F9}
+.dsm-term-item:last-child{border-bottom:0}
+.dsm-term-item:hover{background:#F7FAFF}
+.dsm-term-rank{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:20px;height:20px;border-radius:6px;background:#EEF4FF;color:#2563EB;font-size:10px;font-weight:700}
+.dsm-term-text{flex:0 0 auto;max-width:40%;font-size:12px;font-weight:650;color:#0F172A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-term-cat{flex:0 0 auto;font-size:10px;line-height:16px;padding:0 6px;border-radius:999px;background:#F1F4F9;color:#5A6474}
+.dsm-term-count{flex:0 0 auto;font-size:10px;color:#8A94A6}
+.dsm-term-evidence{flex:1 1 auto;min-width:0;font-size:11px;color:#8A94A6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-term-del{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:#94A3B8;padding:3px;border-radius:6px;cursor:pointer}
+.dsm-term-del:hover{background:#FEF2F2;color:#DC2626}
 .dsm-set-cloud{border:1px dashed #D9E2F0;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;background:#FFFFFF}
 .dsm-set-inline{display:flex;align-items:center;gap:10px}
 .dsm-set-tabs{display:flex;gap:4px}
@@ -3716,6 +3732,13 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [localTranscribeMode, setLocalTranscribeMode] = useState(null)
       const [termsText, setTermsText] = useState('')
       const [termsSaving, setTermsSaving] = useState(false)
+      // 从文件夹提取的术语（按重要性排序）与解析状态
+      const [termDir, setTermDir] = useState('')
+      const [termItems, setTermItems] = useState([])
+      const [termStats, setTermStats] = useState(null)
+      const [termAt, setTermAt] = useState('')
+      const [termBusy, setTermBusy] = useState(false)
+      const [termError, setTermError] = useState(null)
       // 版本与更新：appVersion 来自 /settings，updateInfo 来自 /update-check
       const [appVersion, setAppVersion] = useState('')
       const [updateState, setUpdateState] = useState('idle')
@@ -3753,6 +3776,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         const chosen = payload?.model
         setSummarySelection(chosen !== null && chosen !== undefined ? String(chosen.provider) + '|' + String(chosen.model) : '')
         if (termsTouchedRef.current !== true) setTermsText(payload?.settings?.terms ?? '')
+        const termExtract = nextSettings?.termExtract ?? null
+        setTermDir(typeof termExtract?.dir === 'string' ? termExtract.dir : '')
+        setTermItems(Array.isArray(termExtract?.items) ? termExtract.items : [])
+        setTermStats(termExtract?.stats ?? null)
+        setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
       }
 
       useEffect(() => {
@@ -3913,6 +3941,76 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           setTermsSaving(false)
         }
       }
+
+      /** 选择用于术语提取的文件夹（复用宿主的系统文件夹对话框）。 */
+      const pickTermDir = async () => {
+        setTermError(null)
+        try {
+          const payload = await requestJson('/dialog/pick-dir', {
+            method: 'POST',
+            body: { title: '选择要解析术语的文件夹（会议纪要、转写稿等）' },
+          })
+          const picked = typeof payload?.path === 'string' ? payload.path.trim() : ''
+          if (picked !== '') setTermDir(picked)
+        } catch (caught) {
+          setTermError(messageOf(caught))
+        }
+      }
+
+      /** 解析整个文件夹：读取文本/Word → 请模型抽取并按重要性排序 → 持久化。 */
+      const extractTermsFromFolder = async () => {
+        const dir = termDir.trim()
+        if (dir === '') { setTermError('请先选择要解析的文件夹'); return }
+        setTermBusy(true)
+        setTermError(null)
+        try {
+          const payload = await requestJson('/terms/extract', { method: 'POST', body: { dir } })
+          const termExtract = payload?.termExtract ?? null
+          if (!mountedRef.current) return
+          setTermDir(typeof termExtract?.dir === 'string' ? termExtract.dir : dir)
+          setTermItems(Array.isArray(termExtract?.items) ? termExtract.items : [])
+          setTermStats(termExtract?.stats ?? null)
+          setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
+          const count = Array.isArray(termExtract?.items) ? termExtract.items.length : 0
+          notifySuccess('术语解析完成', '已提取 ' + String(count) + ' 个术语，将用于转写纠错')
+        } catch (caught) {
+          if (mountedRef.current) setTermError(messageOf(caught))
+        } finally {
+          if (mountedRef.current) setTermBusy(false)
+        }
+      }
+
+      /** 删除单个术语：只改术语库，不动会议数据。 */
+      const removeTermItem = async (id) => {
+        const next = termItems.filter((item) => item?.id !== id)
+        setTermItems(next)
+        try {
+          await requestJson('/settings', {
+            method: 'PATCH',
+            body: { settings: { termExtract: { dir: termDir, at: termAt, items: next, stats: termStats ?? {} } } },
+          })
+        } catch (caught) {
+          setTermError(messageOf(caught))
+          void loadSettings().catch(() => {})
+        }
+      }
+
+      /** 一键清空提取结果（保留文件夹路径，方便再解析）。 */
+      const clearTermItems = async () => {
+        setTermItems([])
+        setTermAt('')
+        try {
+          await requestJson('/settings', {
+            method: 'PATCH',
+            body: { settings: { termExtract: { dir: termDir, at: '', items: [], stats: termStats ?? {} } } },
+          })
+        } catch (caught) {
+          setTermError(messageOf(caught))
+          void loadSettings().catch(() => {})
+        }
+      }
+
+
 
       const modelTitle = (kind) => (kind === 'paraformer' ? 'Paraformer 中文识别模型' : kind === 'segmentation' ? '说话人分段模型' : '说话人声纹模型')
 
@@ -4250,6 +4348,81 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             placeholder: '多个名词换行输入',
           })),
           termsSaving ? h('div', { className: 'dsm-hint' }, '术语保存中…') : null,
+          h('div', { className: 'dsm-set-divider' }),
+          h('div', { className: 'dsm-set-subhead' },
+            h('div', { className: 'dsm-set-section-head' },
+              h('span', { className: 'dsm-set-section-title' }, '从文件夹提取术语'),
+              h('span', { className: 'dsm-set-section-desc' }, '选一个放会议纪要/转写稿的文件夹，模型通读后抽取专业术语、系统名和人名，按重要性排序（最多 50 个），自动用于转写纠错。'),
+            ),
+          ),
+          h(Field, { label: '文件夹' }, h('div', { className: 'dsm-row' },
+            h(TextInput, {
+              value: termDir,
+              onChange: (value) => { setTermDir(value) },
+              placeholder: '例如 D:\\会议资料；支持 .txt / .md / .json / .csv / .log / .html / .docx',
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn',
+              disabled: termBusy,
+              style: { flex: '0 0 auto', whiteSpace: 'nowrap' },
+              onClick: () => { void pickTermDir() },
+            }, '选择文件夹…'),
+          )),
+          h('div', { className: 'dsm-set-cloud-actions' },
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--primary',
+              disabled: termBusy || termDir.trim() === '',
+              onClick: () => { void extractTermsFromFolder() },
+            }, termBusy ? '解析中…' : '解析文件夹'),
+            termStats !== null
+              ? h('span', { className: 'dsm-hint' },
+                '上次解析 ' + String(termStats.supported ?? 0) + ' 个文件'
+                + (Number(termStats.skipped) > 0 ? '，跳过 ' + String(termStats.skipped) + ' 个不支持的文件' : '')
+                + (termStats.truncated === true ? '（内容较多，只分析了部分）' : ''))
+              : null,
+          ),
+          termBusy ? h('div', { className: 'dsm-hint' }, '正在读取文件夹并请模型排序，通常 10–60 秒，请稍候…') : null,
+          termError !== null ? h('div', { className: 'dsm-inline-error' }, termError) : null,
+          termItems.length > 0
+            ? h('div', { className: 'dsm-terms' },
+              h('div', { className: 'dsm-terms-head' },
+                h('span', { className: 'dsm-terms-title' }, '已提取 ' + String(termItems.length) + ' 个术语（按重要性排序）'),
+                termAt !== '' ? h('span', { className: 'dsm-terms-meta' }, '解析于 ' + formatStamp(termAt)) : null,
+                h('span', { className: 'dsm-spacer' }),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  disabled: termBusy,
+                  onClick: () => { void extractTermsFromFolder() },
+                }, '重新解析'),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  disabled: termBusy,
+                  onClick: () => { void clearTermItems() },
+                }, '清空'),              ),
+              h('div', { className: 'dsm-term-list' },
+                ...termItems.map((item, index) => h('div', { key: String(item?.id ?? index), className: 'dsm-term-item' },
+                  h('span', { className: 'dsm-term-rank' }, String(index + 1)),
+                  h('span', { className: 'dsm-term-text' }, String(item?.text ?? '')),
+                  h('span', { className: 'dsm-term-cat' }, String(item?.category ?? '术语')),
+                  Number(item?.count) > 1 ? h('span', { className: 'dsm-term-count' }, '×' + String(item.count)) : null,
+                  typeof item?.evidence === 'string' && item.evidence !== ''
+                    ? h('span', { className: 'dsm-term-evidence', title: item.evidence }, item.evidence)
+                    : h('span', { className: 'dsm-term-evidence' }),
+                  h('button', {
+                    type: 'button',
+                    className: 'dsm-term-del',
+                    title: '删除这个术语',
+                    onClick: () => { void removeTermItem(item.id) },
+                  }, h(Icon, { name: 'close', size: 13 })),
+                )),
+              ),
+              h('div', { className: 'dsm-hint', style: { padding: '7px 12px' } }, '这些术语会和上面的「术语表」一起用于录音结束后的自动纠错；删除只影响术语库，不影响会议数据。'),
+            )
+            : null,
         ),
         error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
       )
