@@ -68,6 +68,7 @@ node tests/preview-transcript-live.mjs # 视觉预览：把「录音中 / 分离
 node tests/smoke-diarize-label.mjs  # 声纹分离结果 → 已有分段的说话人标签回填（时间容差/最近起点/文本重建）
 node tests/smoke-media-reveal.mjs   # 查看目录/播放：explorer 参数编码、不隐藏窗口、退出码 0/1 判定
 node tests/smoke-files-layout.mjs   # 会议文件行：只有音频时保持整行宽，操作提示渲染在网格外
+node tests/smoke-stop-fast.mjs      # 停止长会议不再卡：上传先返回、MP4/质量/分离全后台、自动分离轮询任务状态
 node tests/preview-files-layout.mjs # 视觉预览：文件行 + 状态条的排版（配 dsh-browser 截图）
 ```
 
