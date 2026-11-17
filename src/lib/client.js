@@ -4517,6 +4517,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                 )))
               : null,
           ),
+          termDirs.some((dir) => dir.includes('\uFFFD'))
+            ? h('div', { className: 'dsm-inline-error' }, '有文件夹路径显示为乱码（旧版文件夹选择器导致），请点该行的 × 移除后重新「选择文件夹…」；已保存的术语不会丢。')
+            : null,
           h('div', { className: 'dsm-set-cloud-actions' },
             h('button', {
               type: 'button',

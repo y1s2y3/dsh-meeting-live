@@ -116,7 +116,8 @@ export function normalizeTermExtract(raw) {
   return {
     dirs,
     at,
-    items: dirs.length === 0 ? [] : normalizeTermItems(input.items),
+    // 即使文件夹列表被删空，已保存的术语也保留：删文件夹不等于删术语
+    items: normalizeTermItems(input.items),
     stats: {
       folders: number(stats.folders),
       files: number(stats.files),

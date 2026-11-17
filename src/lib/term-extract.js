@@ -460,6 +460,7 @@ async function readOneFile(filePath) {
 export async function scanFolder(dir) {
   const folder = typeof dir === 'string' ? dir.trim() : ''
   if (folder === '') throw new Error('请先选择要解析的文件夹')
+  if (folder.includes('\uFFFD')) throw new Error('文件夹路径里有乱码（旧版文件夹选择器导致），请把该文件夹移除后重新「选择文件夹…」')
   let info = null
   try {
     info = await stat(folder)

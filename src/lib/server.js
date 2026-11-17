@@ -35,7 +35,7 @@ import {
 } from './screen.js'
 import { existsSync, readdirSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -65,8 +65,13 @@ function psQuote(text) {
 async function pickFolder(title) {
   const prompt = typeof title === 'string' && title.trim() !== '' ? title.trim() : '选择文件夹'
   if (process.platform === 'win32') {
+    // PowerShell 5.1 的 stdout 走系统 ANSI 代码页（中文 Windows 是 GBK），
+    // 直接 Write-Output 中文路径会被 Node 按 UTF-8 解码成乱码（����ƽ̨2��）。
+    // 所以让 PowerShell 用 UTF-8 写临时文件，Node 再按 UTF-8 读回来。
+    const outFile = join(tmpdir(), 'dsh-pick-dir-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.txt')
     const script = [
       'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
+      `$outFile = ${psQuote(outFile)}`,
       '$owner = New-Object System.Windows.Forms.Form',
       '$owner.Text = "选择目录"',
       '$owner.TopMost = $true',
@@ -81,15 +86,22 @@ async function pickFolder(title) {
       '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
       `$dialog.Description = ${psQuote(prompt)}`,
       '$dialog.ShowNewFolderButton = $false',
-      'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }',
+      'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {',
+      '  [System.IO.File]::WriteAllText($outFile, $dialog.SelectedPath, (New-Object System.Text.UTF8Encoding($false)))',
+      '}',
       '$owner.Close()',
     ].join('\n')
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script],
-      { timeout: 300_000, windowsHide: true, maxBuffer: 1024 * 1024 },
-    )
-    return String(stdout ?? '').trim()
+    try {
+      await execFileAsync(
+        'powershell.exe',
+        ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        { timeout: 300_000, windowsHide: true, maxBuffer: 1024 * 1024 },
+      )
+      const picked = await readFile(outFile, 'utf8').catch(() => '')
+      return picked.trim()
+    } finally {
+      await rm(outFile, { force: true }).catch(() => {})
+    }
   }
   if (process.platform === 'darwin') {
     const script = `POSIX path of (choose folder with prompt ${JSON.stringify(prompt)})`

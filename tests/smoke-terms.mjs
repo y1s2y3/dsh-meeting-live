@@ -111,7 +111,7 @@ function makeXlsx() {
   const empty = settings.normalizeSettings({});
   check('默认设置含空的文件夹术语结构', empty.termExtract.dirs.length === 0 && Array.isArray(empty.termExtract.items));
   const noDir = settings.normalizeTermExtract({ dirs: [], items: [{ text: '张三' }] });
-  check('没有目录时丢弃术语（避免误用上次文件夹）', noDir.items.length === 0);
+  check('删除文件夹后已保存术语保留（删文件夹≠删术语）', noDir.items.length === 1);
   const withStats = settings.normalizeTermExtract({ dirs: ['D:\\会议资料', 'E:\\项目文档'], at: '2026-11-17T02:00:00.000Z', items: [{ text: '张三', priority: 2 }, { text: '智慧工地平台', priority: 1 }], stats: { folders: 2, files: 5, supported: 3, skipped: 2, chars: 1200, truncated: true } });
   check('保留多个目录与解析时间', withStats.dirs.length === 2 && withStats.at !== '');
   check('保留统计信息（含文件夹数）', withStats.stats.folders === 2 && withStats.stats.supported === 3 && withStats.stats.skipped === 2 && withStats.stats.truncated === true, JSON.stringify(withStats.stats));
@@ -164,6 +164,18 @@ function makeXlsx() {
   check('Word 正文被解析为文本', scanned.text.includes('验收标准'), '');
   check('Excel 共享字符串被解析', scanned.text.includes('智慧工地平台\t实名制') || (scanned.text.includes('智慧工地平台') && scanned.text.includes('实名制')), '');
   check('PDF 文本层被解析', scanned.text.includes('术语样例') || scanned.text.includes('智慧工地平台二期'), scanned.text.includes('术语样例') ? '含标题' : '来自正文');
+
+  /* 中文目录：Windows 上常见路径（机场平台2期），必须能正常读取 */
+  const chineseParent = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-terms-cn-'));
+  const chineseFolder = path.join(chineseParent, '机场平台2期');
+  fs.mkdirSync(chineseFolder);
+  fs.writeFileSync(path.join(chineseFolder, '周会纪要.txt'), '机场扩建指挥部：智慧工地平台二期讨论实名制与旁站记录。', 'utf8');
+  const chineseScanned = await terms.scanFolder(chineseFolder);
+  check('中文目录名可以正常扫描', chineseScanned.text.includes('智慧工地平台') && chineseScanned.stats.supported === 1, JSON.stringify(chineseScanned.stats));
+  let garbledMessage = '';
+  try { await terms.scanFolder('C:\\Users\\13065\\Desktop\\' + '\uFFFD\uFFFDƽ̨2\uFFFD'); } catch (error) { garbledMessage = String(error?.message ?? error); }
+  check('乱码路径给出可操作的中文提示', garbledMessage.includes('乱码') && garbledMessage.includes('重新'), garbledMessage);
+  fs.rmSync(chineseParent, { recursive: true, force: true });
 
   const second = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-terms-scan2-'));
   fs.writeFileSync(path.join(second, '补充.txt'), '旁站记录由监理单位补齐，材料进场验收走数据中台。', 'utf8');
