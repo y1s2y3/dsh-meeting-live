@@ -812,6 +812,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-file-action:disabled{opacity:.5;cursor:not-allowed}
 .dsm-file-action--primary{border-color:#2563EB;background:#2563EB;color:#FFFFFF}
 .dsm-file-action--primary:hover:not(:disabled){border-color:#1D4ED8;background:#1D4ED8;color:#FFFFFF}
+/* 会议文件操作结果提示：「已打开 / 没找到文件 / 打开失败」 */
+.dsm-file-status{grid-column:1 / -1;font-size:11.5px;line-height:17px;color:#15803D;background:#F2FBF5;border:1px solid #CFEAD8;border-radius:9px;padding:6px 10px}
+.dsm-file-status--error{color:#B91C1C;background:#FEF2F2;border-color:#FBD5D5}
 
 /* ── 浅灰底 + 白色/浅蓝主题 ── */
 .dsm-root{--dsm-accent:#2F6BFF;--dsm-accent-strong:#2459E6;--dsm-accent-soft:#EAF1FF;--dsm-accent-line:#C7DAFF;--dsm-canvas:#F4F6FA;--dsm-surface:#FFFFFF;--dsm-line:#E4E9F2;--dsm-ink:#0F172A;--dsm-ink-2:#475569;--dsm-ink-3:#8A94A6;background:var(--dsm-canvas)}
@@ -2919,27 +2922,31 @@ nav[aria-label="Global panels"] > button > span:last-child{
     }
 
     async function revealMedia(meetingId, kind) {
-      if (meetingId === null || meetingId === undefined) return
+      if (typeof meetingId !== 'string' || meetingId === '') return { ok: false, revealed: false, error: '缺少会议 ID' }
       try {
         const payload = await requestJson('/meetings/' + encodeURIComponent(meetingId) + '/media/reveal', { method: 'POST', body: { kind } })
-        if (payload !== null && payload !== undefined && payload.revealed === false) {
-          notify('warn', '没找到这个文件', '它可能已被移动或删除；可以点「播放」确认，或重新录音生成')
-        }
+        const revealed = payload === null || payload === undefined ? true : payload.revealed !== false
+        if (revealed !== true) notify('warn', '没找到这个文件', '它可能已被移动或删除；可以点「播放」确认，或重新录音生成')
+        return { ok: true, revealed }
       } catch (error) {
         reportError(error, '打开文件夹失败')
+        return { ok: false, revealed: false, error: messageOf(error) }
       }
     }
 
     /** 用电脑默认播放软件打开录制的视频/音频。 */
     async function openMedia(meetingId, kind) {
-      if (meetingId === null || meetingId === undefined) return
+      if (typeof meetingId !== 'string' || meetingId === '') return { ok: false, opened: false, error: '缺少会议 ID' }
       try {
         const payload = await requestJson('/meetings/' + encodeURIComponent(meetingId) + '/media/open', { method: 'POST', body: { kind } })
-        if (payload !== null && payload !== undefined && payload.opened === false) {
+        const opened = payload === null || payload === undefined ? true : payload.opened !== false
+        if (opened !== true) {
           notify('warn', '文件打不开', '文件可能已被移动或删除，可点「查看目录」确认位置')
         }
+        return { ok: true, opened }
       } catch (error) {
         reportError(error, '打开文件失败')
+        return { ok: false, opened: false, error: messageOf(error) }
       }
     }
 
@@ -6367,10 +6374,37 @@ nav[aria-label="Global panels"] > button > span:last-child{
       )
     }
 
-    /** 会议文件：音频/视频一行一条，icon + 文件名 + 播放/查看目录（参考文件卡片样式）。 */
+    /**
+     * 会议文件：音频/视频一行一条，icon + 文件名 + 播放/查看目录（参考文件卡片样式）。
+     *
+     * 每个按钮点击后都有可见反馈（「打开中…」→「已在资源管理器中选中」/失败原因），
+     * 避免「点了没反应」时无法判断是没点中、请求失败、还是系统没打开。
+     */
     function MeetingFiles(props) {
       const media = Array.isArray(props.media) ? props.media : []
+      const [status, setStatus] = useState(null)
+      const statusTimer = useRef(null)
       if (media.length === 0) return null
+      const showStatus = (next) => {
+        setStatus(next)
+        if (statusTimer.current !== null) window.clearTimeout(statusTimer.current)
+        statusTimer.current = window.setTimeout(() => {
+          statusTimer.current = null
+          setStatus(null)
+        }, 6000)
+      }
+      const runAction = async (kind, item, mode) => {
+        showStatus({ kind, mode, phase: 'busy' })
+        if (mode === 'reveal') {
+          const result = await revealMedia(props.meetingId, kind)
+          if (result.revealed === true) showStatus({ kind, mode, phase: 'done', note: '已打开资源管理器并选中该文件' })
+          else showStatus({ kind, mode, phase: 'error', note: result.error ?? '没找到这个文件（可能已被移动或删除）' })
+        } else {
+          const result = await openMedia(props.meetingId, kind)
+          if (result.opened === true) showStatus({ kind, mode, phase: 'done', note: '已交给系统默认播放器打开' })
+          else showStatus({ kind, mode, phase: 'error', note: result.error ?? '文件打不开（可能已被移动或删除）' })
+        }
+      }
       return h(
         'div',
         { className: 'dsm-files' },
@@ -6381,6 +6415,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
           if (converting) metaParts.push('正在转换 MP4…')
           if (Number(item.bytes) > 0) metaParts.push(formatBytes(Number(item.bytes)))
           if (Number(item.seconds) > 0) metaParts.push(formatDuration(Number(item.seconds)))
+          const busy = status !== null && status.kind === item.kind && status.phase === 'busy' ? status.mode : null
           return h(
             'div',
             { key: 'file-' + String(index), className: 'dsm-file' },
@@ -6401,19 +6436,30 @@ nav[aria-label="Global panels"] > button > span:last-child{
               h('button', {
                 type: 'button',
                 className: 'dsm-file-action dsm-file-action--primary',
-                disabled: converting,
+                disabled: converting || busy !== null,
                 title: converting ? '正在转换 MP4，稍后即可播放' : '用电脑默认播放器打开',
-                onClick: () => { void openMedia(props.meetingId, item.kind) },
-              }, h(Icon, { name: 'play', size: 12 }), h('span', null, '播放')),
+                onClick: () => { void runAction(item.kind, item, 'open') },
+              }, busy === 'open'
+                ? h('span', { className: 'dsm-spin', style: { width: 11, height: 11, borderWidth: 1.5 } })
+                : h(Icon, { name: 'play', size: 12 }),
+              h('span', null, busy === 'open' ? '打开中…' : '播放')),
               h('button', {
                 type: 'button',
                 className: 'dsm-file-action',
                 title: '在文件夹中显示',
-                onClick: () => { void revealMedia(props.meetingId, item.kind) },
-              }, h(Icon, { name: 'folder', size: 12 }), h('span', null, '查看目录')),
+                onClick: () => { void runAction(item.kind, item, 'reveal') },
+              }, busy === 'reveal'
+                ? h('span', { className: 'dsm-spin', style: { width: 11, height: 11, borderWidth: 1.5 } })
+                : h(Icon, { name: 'folder', size: 12 }),
+              h('span', null, busy === 'reveal' ? '打开中…' : '查看目录')),
             ),
           )
         }),
+        status === null || status.phase === 'busy'
+          ? null
+          : h('div', {
+            className: 'dsm-file-status' + (status.phase === 'error' ? ' dsm-file-status--error' : ''),
+          }, status.note),
       )
     }
 

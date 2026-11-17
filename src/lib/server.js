@@ -41,7 +41,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { CURRENT_VERSION, checkForUpdate } from './update-check.js'
 
 const execFileAsync = promisify(execFile)
@@ -264,56 +264,102 @@ function transcodeToMp4(sourcePath, targetPath) {
 }
 
 /**
+ * Encode one Windows path as the target Explorer can receive intact（与 DSH 自带
+ * `@deepseek-ai/dsh-native-command` 的做法一致）：
+ * Explorer 自己解析命令行，会在逗号/等号处截断；非 ASCII 用百分号编码它反而不认。
+ * 所以先转 file URL，再把非 ASCII 的百分号编码还原成字面字符，最后只转义 `,` 和 `=`。
+ */
+function explorerTarget(target) {
+  return pathToFileURL(target, { windows: true }).href
+    .replace(/(?:%[89A-F][0-9A-F])+/gi, (escaped) => decodeURIComponent(escaped))
+    .replaceAll(',', '%2C')
+    .replaceAll('=', '%3D')
+}
+
+/**
+ * 启动一个 GUI 程序，并观察「早期失败」：
+ *   - `error` 事件（如找不到可执行文件）→ 失败；
+ *   - 退出码非 0/1 → 失败（Explorer 把请求转交给已运行的桌面进程后自己退出 1，算成功）；
+ *   - 超过 watchMs 还在运行 → 认为已交给系统，算成功。
+ * 注意：**不能**传 `windowsHide: true` —— 它会给 GUI 进程带 SW_HIDE，窗口起来但不可见。
+ */
+function launchGui(command, args, spawnImpl = spawn, watchMs = 1200) {
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) clearTimeout(timer)
+      resolve(value)
+    }
+    let child = null
+    try {
+      child = spawnImpl(command, args, { stdio: 'ignore', windowsHide: false })
+    } catch {
+      finish({ ok: false, code: null })
+      return
+    }
+    child.on('error', () => finish({ ok: false, code: null }))
+    child.on('exit', (code) => finish({ ok: code === 0 || code === 1, code }))
+    timer = setTimeout(() => finish({ ok: true, code: null }), watchMs)
+    if (timer !== null && typeof timer.unref === 'function') timer.unref()
+  })
+}
+
+/**
  * 在资源管理器里选中该文件（失败不影响主流程）。
  *
- * 2026-11-17 修复：以前用 `spawn('explorer.exe', ['/select,', target], { detached: true, ... })`，
- * 点击「查看目录」没反应。两个问题：
- *   ① `/select,` 必须和路径连成**同一个参数**（`/select,D:\a.wav`），分开传会被 explorer 当成空选择；
- *   ② Windows 上 `detached: true` + `unref()` 会出现「进程起来了但什么都不做」（2026-11-13 已踩过），
- *      这里保持普通 spawn（不 detached），并把 'error' 事件吃掉，避免宿主进程因 spawn 失败崩掉。
+ * 2026-11-17 二次修复：点击「查看目录」仍无反应。对照 DSH 自带的打开实现后改成：
+ *   ① 目标用 file URL 形式编码，`/select,<编码后的路径>` 必须是同一个参数；
+ *   ② Explorer 转交成功后自身退出码是 1，要按成功处理；
+ *   ③ 去掉 `windowsHide: true`（GUI 进程带 SW_HIDE 会「进程起来但窗口不可见」）；
+ *   ④ 启动失败/退出码异常返回 false，让界面给出「没找到文件/打开失败」提示。
  */
-export function revealMediaPath(target, spawnImpl = spawn) {
+export async function revealMediaPath(target, spawnImpl = spawn) {
+  if (typeof target !== 'string' || target === '' || !existsSync(target)) return false
   try {
-    if (typeof target !== 'string' || target === '' || !existsSync(target)) return false
     if (process.platform === 'win32') {
-      const child = spawnImpl('explorer.exe', ['/select,' + target], { stdio: 'ignore', windowsHide: true })
-      child.on('error', () => {})
-      if (typeof child.unref === 'function') child.unref()
-    } else if (process.platform === 'darwin') {
+      const result = await launchGui('explorer.exe', ['/select,' + explorerTarget(target)], spawnImpl)
+      return result.ok
+    }
+    if (process.platform === 'darwin') {
       const child = spawnImpl('open', ['-R', target], { stdio: 'ignore' })
       child.on('error', () => {})
       if (typeof child.unref === 'function') child.unref()
-    } else {
-      const child = spawnImpl('xdg-open', [dirname(target)], { stdio: 'ignore' })
-      child.on('error', () => {})
-      if (typeof child.unref === 'function') child.unref()
+      return true
     }
+    const child = spawnImpl('xdg-open', [dirname(target)], { stdio: 'ignore' })
+    child.on('error', () => {})
+    if (typeof child.unref === 'function') child.unref()
     return true
   } catch {
     return false
   }
 }
 
-/** 用系统默认关联程序打开文件（Windows 走 start，macOS 走 open，Linux 走 xdg-open）。 */
-export function openMediaPath(target, spawnImpl = spawn) {
+/**
+ * 用系统默认关联程序打开文件。
+ * Windows 上走 Explorer（双击的默认解析链，不闪控制台、支持中文路径），
+ * 与 DSH 自带实现一致；失败返回 false 由界面提示。
+ */
+export async function openMediaPath(target, spawnImpl = spawn) {
   if (process.env.DSH_MEETING_NO_OPEN === '1') return true
+  if (typeof target !== 'string' || target === '' || !existsSync(target)) return false
   try {
-    if (!existsSync(target)) return false
     if (process.platform === 'win32') {
-      // start 的第一个引号参数是窗口标题位，必须留空，否则带引号的路径会被当成标题。
-      // 同样不用 detached：detached + unref 在 Windows 上会「起来但不执行」。
-      const child = spawnImpl('cmd.exe', ['/c', 'start', '', target], { stdio: 'ignore', windowsHide: true })
-      child.on('error', () => {})
-      if (typeof child.unref === 'function') child.unref()
-    } else if (process.platform === 'darwin') {
+      const result = await launchGui('explorer.exe', [explorerTarget(target)], spawnImpl)
+      return result.ok
+    }
+    if (process.platform === 'darwin') {
       const child = spawnImpl('open', [target], { stdio: 'ignore' })
       child.on('error', () => {})
       if (typeof child.unref === 'function') child.unref()
-    } else {
-      const child = spawnImpl('xdg-open', [target], { stdio: 'ignore' })
-      child.on('error', () => {})
-      if (typeof child.unref === 'function') child.unref()
+      return true
     }
+    const child = spawnImpl('xdg-open', [target], { stdio: 'ignore' })
+    child.on('error', () => {})
+    if (typeof child.unref === 'function') child.unref()
     return true
   } catch {
     return false
@@ -1497,7 +1543,7 @@ export function registerRoutes(ctx, deps) {
         const kind = String(body.kind ?? '')
         const entry = (Array.isArray(meeting.media) ? meeting.media : []).find((item) => item && item.kind === kind)
         if (entry === undefined) throw new Error('这场会议还没有生成该类型的文件')
-        const revealed = revealMediaPath(entry.path)
+        const revealed = await revealMediaPath(entry.path)
         if (revealed !== true) logger?.warn?.('meeting-minutes: reveal media failed: ' + String(entry.path ?? ''))
         sendJson(res, 200, { ok: true, path: entry.path, revealed })
         return
@@ -1509,7 +1555,7 @@ export function registerRoutes(ctx, deps) {
         const kind = String(body.kind ?? '')
         const entry = (Array.isArray(meeting.media) ? meeting.media : []).find((item) => item && item.kind === kind)
         if (entry === undefined) throw new Error('这场会议还没有生成该类型的文件')
-        const opened = openMediaPath(entry.path)
+        const opened = await openMediaPath(entry.path)
         sendJson(res, 200, { ok: true, path: entry.path, opened })
         return
       }

@@ -1,10 +1,12 @@
 /**
- * 离线测试：「查看目录 / 播放」的进程启动参数。
+ * 离线测试：「查看目录 / 播放」的进程启动参数与失败判定。
  *
- * 背景（2026-11-17 实测）：点「查看目录」没反应。旧实现是
- *   spawn('explorer.exe', ['/select,', target], { detached: true, ... })
- * 两个坑：① /select, 必须与路径连成一个参数；② Windows 上 detached + unref 会「起来但不执行」。
- * 这里用可注入的 spawn 桩验证参数与降级行为（不真的打开资源管理器）。
+ * 背景（2026-11-17 两次实测）：点「查看目录」没反应。对照 DSH 自带
+ * `@deepseek-ai/dsh-native-command` 的实现后，要求：
+ *   ① 目标用 file URL 编码，`/select,<编码后的路径>` 必须是同一个参数；
+ *   ② 不用 `windowsHide: true`（GUI 进程带 SW_HIDE 会「进程起来但窗口不可见」）；
+ *   ③ Explorer 把请求转交给已运行的桌面进程后自身退出码是 1，算成功；其他非零退出算失败；
+ *   ④ 启动失败/文件不存在返回 false，界面据此提示。
  *
  * 用法：node tests/smoke-media-reveal.mjs [插件目录]
  */
@@ -24,68 +26,106 @@ function check(label, condition, detail) {
   if (!condition) failures += 1
 }
 
-function makeSpawn() {
+/** 假 spawn：记录参数；注册 on('exit') 后异步回调，让 launchGui 的 Promise 结束。 */
+function makeSpawn(exitCode = 0, options = {}) {
   const calls = []
-  const spawn = (command, args, options) => {
-    calls.push({ command, args, options })
-    return { on() {}, unref() {} }
+  const spawn = (command, args, spawnOptions) => {
+    if (options.throwOnSpawn === true) throw new Error('spawn blocked')
+    calls.push({ command, args, options: spawnOptions })
+    const child = {
+      on(event, callback) {
+        if (event === 'exit') setTimeout(() => callback(exitCode), 0)
+        return child
+      },
+      unref() {},
+    }
+    return child
   }
   return { spawn, calls }
 }
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsm-reveal-'))
-const mediaFile = path.join(tmpDir, '会议录音 20261117-1725.wav')
-fs.writeFileSync(mediaFile, 'fake-wav')
+const plainFile = path.join(tmpDir, 'meeting 20261117-1725.wav')
+fs.writeFileSync(plainFile, 'fake-wav')
+const chineseFile = path.join(tmpDir, '会议录音-20261117.wav')
+fs.writeFileSync(chineseFile, 'fake-wav')
 
-/* 1. 文件存在：Windows 上必须是单个 /select,<路径> 参数，且不带 detached */
+/* 1. 查看目录：Windows 下单参数 /select,<编码后目标>，不隐藏窗口，退出码 1 算成功 */
 {
-  const { spawn, calls } = makeSpawn()
-  const ok = revealMediaPath(mediaFile, spawn)
+  const { spawn, calls } = makeSpawn(1)
+  const ok = await revealMediaPath(chineseFile, spawn)
   const call = calls[0]
-  check('文件存在时返回成功', ok === true)
+  check('文件存在时返回成功（Explorer 退出码 1 = 已转交）', ok === true)
   check('调用 explorer.exe', call?.command === 'explorer.exe', String(call?.command))
   if (process.platform === 'win32') {
-    check('/select, 与路径是同一个参数', call?.args?.length === 1 && call.args[0] === '/select,' + mediaFile, JSON.stringify(call?.args))
-    check('不再使用 detached（Windows 上会起来但不执行）', call?.options?.detached !== true, JSON.stringify(call?.options))
+    check('/select, 与目标连成一个参数', call?.args?.length === 1 && String(call.args[0]).startsWith('/select,file:///'), JSON.stringify(call?.args))
+    check('中文路径不被百分号编码（Explorer 认字面中文）', String(call?.args?.[0]).includes('会议录音'), String(call?.args?.[0]))
+    check('不隐藏窗口（windowsHide 必须为 false）', call?.options?.windowsHide === false, JSON.stringify(call?.options))
+    check('不再使用 detached', call?.options?.detached !== true)
   }
 }
 
-/* 2. 文件不存在 / 空路径：直接返回 false，不发请求给 explorer */
+/* 2. Explorer 退出码 2：判定失败，界面能提示 */
 {
-  const { spawn, calls } = makeSpawn()
-  const missing = revealMediaPath(path.join(tmpDir, '不存在.wav'), spawn)
-  const empty = revealMediaPath('', spawn)
-  check('文件不存在时返回 false', missing === false)
+  const { spawn } = makeSpawn(2)
+  const ok = await revealMediaPath(plainFile, spawn)
+  check('Explorer 异常退出码判失败', ok === false)
+}
+
+/* 3. 路径里的逗号/等号要转义（Explorer 会按分隔符截断） */
+{
+  const { spawn, calls } = makeSpawn(1)
+  const tricky = path.join(tmpDir, 'a,b=c.wav')
+  fs.writeFileSync(tricky, 'x')
+  await revealMediaPath(tricky, spawn)
+  const arg = String(calls[0]?.args?.[0] ?? '')
+  check('逗号与等号被转义', arg.includes('%2C') && arg.includes('%3D'), arg)
+}
+
+/* 4. 文件不存在 / 空路径 / spawn 抛错：都安全返回 false */
+{
+  const a = makeSpawn(0)
+  const missing = await revealMediaPath(path.join(tmpDir, '不存在.wav'), a.spawn)
+  const empty = await revealMediaPath('', a.spawn)
+  const b = makeSpawn(0, { throwOnSpawn: true })
+  const blocked = await revealMediaPath(plainFile, b.spawn)
+  check('文件不存在返回 false', missing === false)
   check('空路径返回 false', empty === false)
-  check('无效路径不启动 explorer', calls.length === 0, `spawn 次数=${calls.length}`)
+  check('spawn 抛错时安全降级', blocked === false)
+  check('无效路径不启动 explorer', a.calls.length === 0, `spawn 次数=${a.calls.length}`)
 }
 
-/* 3. spawn 自身抛错（例如策略拦截）时不崩、返回 false */
+/* 5. 播放：Windows 上交给 Explorer 打开（不闪控制台、支持中文），退出码 0 算成功 */
 {
-  const spawn = () => { throw new Error('spawn blocked') }
-  const ok = revealMediaPath(mediaFile, spawn)
-  check('spawn 抛错时安全降级', ok === false)
-}
-
-/* 4. 播放：Windows 走 cmd /c start "" <path>（首参为空标题位） */
-{
-  const { spawn, calls } = makeSpawn()
-  const ok = openMediaPath(mediaFile, spawn)
+  const { spawn, calls } = makeSpawn(0)
+  const ok = await openMediaPath(plainFile, spawn)
   const call = calls[0]
   check('播放调用成功', ok === true)
   if (process.platform === 'win32') {
-    check('调用 cmd.exe /c start', call?.command === 'cmd.exe' && call?.args?.[0] === '/c' && call?.args?.[1] === 'start', JSON.stringify(call?.args))
-    check('start 的空标题位保留', call?.args?.[2] === '' && call?.args?.[3] === mediaFile, JSON.stringify(call?.args))
-    check('播放也不使用 detached', call?.options?.detached !== true)
+    check('播放也走 explorer.exe', call?.command === 'explorer.exe', String(call?.command))
+    check('播放目标是编码后的文件 URI（单个参数）', call?.args?.length === 1 && String(call.args[0]).startsWith('file:///'), JSON.stringify(call?.args))
+    check('播放不隐藏窗口', call?.options?.windowsHide === false)
   }
 }
 
-/* 5. 播放不存在的文件：返回 false 且不启动进程 */
+/* 6. 播放失败与不存在文件 */
 {
-  const { spawn, calls } = makeSpawn()
-  const ok = openMediaPath(path.join(tmpDir, 'missing.wav'), spawn)
-  check('播放不存在文件返回 false', ok === false)
-  check('播放不存在文件不启动进程', calls.length === 0)
+  const bad = makeSpawn(3)
+  const failed = await openMediaPath(plainFile, bad.spawn)
+  const none = makeSpawn(0)
+  const missing = await openMediaPath(path.join(tmpDir, 'missing.wav'), none.spawn)
+  check('播放异常退出码判失败', failed === false)
+  check('播放不存在文件返回 false', missing === false)
+  check('播放不存在文件不启动进程', none.calls.length === 0)
+}
+
+/* 7. 测试模式开关仍然生效 */
+{
+  const { spawn, calls } = makeSpawn(0)
+  process.env.DSH_MEETING_NO_OPEN = '1'
+  const ok = await openMediaPath(plainFile, spawn)
+  delete process.env.DSH_MEETING_NO_OPEN
+  check('DSH_MEETING_NO_OPEN=1 时不启动进程', ok === true && calls.length === 0)
 }
 
 fs.rmSync(tmpDir, { recursive: true, force: true })

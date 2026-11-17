@@ -371,5 +371,24 @@ try {
   }
 }
 
+/* 交互回归：会议文件按钮点击后必须有可见反馈（「打开中…」→ 结果提示） */
+{
+  const checks = [
+    ['查看目录按钮点击后显示「打开中…」', code.includes("busy === 'reveal' ? '打开中…' : '查看目录'")],
+    ['播放按钮点击后显示「打开中…」', code.includes("busy === 'open' ? '打开中…' : '播放'")],
+    ['点击结果有状态条（成功/失败）', code.includes('dsm-file-status') && code.includes('已打开资源管理器并选中该文件')],
+    ['失败时给出具体原因', code.includes('没找到这个文件（可能已被移动或删除）')],
+    ['revealMedia 返回结果而不是静默', code.includes('return { ok: true, revealed }') && code.includes('缺少会议 ID')],
+  ]
+  for (const [label, ok] of checks) {
+    if (ok) {
+      console.log('[OK]', label)
+    } else {
+      failures += 1
+      console.log('[FAIL]', label)
+    }
+  }
+}
+
 console.log(failures === 0 ? '\nDEEP RENDER ALL PASSED (执行组件 ' + executed + ' 次)' : '\n' + failures + ' 个组件渲染失败');
 process.exit(failures === 0 ? 0 : 1);
