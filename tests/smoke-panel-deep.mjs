@@ -269,11 +269,14 @@ try {
 {
   const checks = [
     ['单独决策清单模块已移除', !code.includes("title: '决策清单'") && !code.includes('dsm-decision')],
-    ['AI 会议纪要仍含决策事项', code.includes("renderList('决策事项'")],
-    ['AI 会议纪要展示详细结构（关键要点/章节/风险/待确认/发言人）', code.includes("renderList('关键要点'")
-      && code.includes("'章节速览'") && code.includes("renderList('风险与待确认'")
-      && code.includes("renderList('待确认问题'") && code.includes("'发言人总结'")
-      && code.includes('dsm-minutes-keyword') && code.includes('dsm-minutes-section-summary')],
+    ['AI 会议纪要仍含决策事项', code.includes("'决策事项'") && code.includes('dsm-minutes-panel--decision')],
+    ['AI 会议纪要展示详细结构（关键要点/章节/风险/待确认/发言人）', code.includes("blockHead('list'")
+      && code.includes("'章节速览'") && code.includes('dsm-chapter-summary')
+      && code.includes('dsm-minutes-panel--risk') && code.includes("blockHead('info'")
+      && code.includes("'发言人总结'") && code.includes('dsm-minutes-speaker')],
+    ['AI 会议纪要新版布局（摘要区/关键词/决策风险并排/计数）', code.includes('dsm-minutes-hero')
+      && code.includes('dsm-minutes-keyword') && code.includes('dsm-minutes-split')
+      && code.includes('dsm-minutes-block-count') && code.includes('dsm-minutes-level--high')],
   ]
   for (const [label, ok] of checks) {
     if (ok) {

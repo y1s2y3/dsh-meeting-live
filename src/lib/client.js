@@ -566,45 +566,90 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 @media (max-width:560px){.dsm-cover-head{flex-wrap:wrap}}
     @media (max-width:900px){.dsm-side{width:250px}.dsm-doc{padding:16px 16px 48px}.dsm-entries{grid-template-columns:1fr 1fr}.dsm-cover-title{font-size:21px;line-height:29px}}
 @media (max-width:720px){.dsm-body{flex-direction:column}.dsm-side{width:auto;max-height:250px;border-right:0;border-bottom:1px solid var(--dsw-alias-border-l1)}.dsm-entries{grid-template-columns:1fr}.dsm-toolbar{padding:8px 10px}.dsm-errorbar{margin:8px 10px 0}}
-/* ── AI 会议纪要卡片（浅灰底 + 白卡片 + 浅蓝主题） ── */
-.dsm-minutes{margin-top:14px;background:#FFFFFF;border:1px solid #E3E9F2;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.05);overflow:hidden}
-.dsm-minutes-head{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid #EDF1F7;background:linear-gradient(180deg,#F7FAFF,#FFFFFF)}
-.dsm-minutes-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:#E8F0FF;color:#2563EB;flex:0 0 auto}
-.dsm-minutes-title{font-size:12.5px;font-weight:650;color:#0F172A;letter-spacing:.1px}
-.dsm-minutes-meta{font-size:11px;color:#8A94A6}
+/* ── AI 会议纪要卡片：结论 → 概述 → 章节 → 决策/风险 → 待确认 → 发言人 ── */
+.dsm-minutes{margin-top:16px;background:#FFFFFF;border:1px solid #E3E9F2;border-radius:16px;box-shadow:0 2px 10px rgba(15,23,42,.04);overflow:hidden}
+.dsm-minutes-head{display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid #EEF2F8;background:linear-gradient(180deg,#F8FAFF,#FFFFFF)}
+.dsm-minutes-icon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:8px;background:#E8F0FF;color:#2563EB;flex:0 0 auto}
+.dsm-minutes-title{font-size:13px;font-weight:700;color:#0F172A;letter-spacing:.1px}
+.dsm-minutes-meta{font-size:11px;color:#98A2B3;margin-left:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
 .dsm-minutes-spacer{flex:1 1 auto}
-.dsm-minutes-action{display:inline-flex;align-items:center;gap:4px;border:1px solid transparent;background:transparent;color:#5A6474;font-family:inherit;font-size:11px;line-height:16px;padding:3px 7px;border-radius:7px;cursor:pointer}
+.dsm-minutes-action{display:inline-flex;align-items:center;gap:4px;border:1px solid transparent;background:transparent;color:#5A6474;font-family:inherit;font-size:11px;line-height:16px;padding:4px 8px;border-radius:8px;cursor:pointer;flex:0 0 auto}
 .dsm-minutes-action:hover{background:#EEF3FB;color:#2563EB}
 .dsm-minutes-action--primary{background:#2563EB;border-color:#2563EB;color:#FFFFFF}
 .dsm-minutes-action--primary:hover:not(:disabled){background:#1D4ED8;border-color:#1D4ED8;color:#FFFFFF}
 .dsm-minutes-action:disabled{opacity:.5;cursor:not-allowed}
 .dsm-minutes-caret{display:inline-block;font-size:12px;line-height:12px;transform:translateY(-1px);transition:transform .16s ease}
 .dsm-minutes-caret--up{transform:translateY(-3px) rotate(180deg)}
-.dsm-minutes-body{position:relative;height:120px;overflow:hidden;padding:11px 14px;transition:height .18s ease}
-.dsm-minutes--expanded .dsm-minutes-body{height:min(64vh,560px);overflow:auto}
-.dsm-minutes-body::after{content:"";position:absolute;left:0;right:0;bottom:0;height:26px;background:linear-gradient(180deg,rgba(255,255,255,0),#FFFFFF);pointer-events:none}
+.dsm-minutes-body{position:relative;display:flex;flex-direction:column;gap:16px;height:156px;overflow:hidden;padding:16px 18px 20px;transition:height .2s ease}
+.dsm-minutes--expanded .dsm-minutes-body{height:min(72vh,680px);overflow:auto;overscroll-behavior:contain}
+.dsm-minutes-body::after{content:"";position:absolute;left:0;right:0;bottom:0;height:34px;background:linear-gradient(180deg,rgba(255,255,255,0),#FFFFFF);pointer-events:none}
 .dsm-minutes--expanded .dsm-minutes-body::after{display:none}
-.dsm-minutes-oneline{font-size:12.5px;font-weight:600;line-height:20px;color:#0F172A}
-.dsm-minutes-overview{font-size:12px;line-height:20px;color:#475569;margin-top:6px;white-space:pre-wrap}
-.dsm-minutes-group{margin-top:10px}
-.dsm-minutes-group-title{font-size:11.5px;font-weight:650;color:#2563EB;margin-bottom:3px}
-.dsm-minutes-item{display:flex;gap:6px;font-size:12px;line-height:20px;color:#334155}
-.dsm-minutes-dot{flex:0 0 auto;width:5px;height:5px;margin-top:7px;border-radius:50%;background:#93B4F5}
+/* 结论 + 概述：一个安静的「摘要区」，不要和章节卡片抢层级 */
+.dsm-minutes-hero{border:1px solid #E6EDF9;border-radius:13px;background:linear-gradient(180deg,#F6F9FF,#FFFFFF);padding:13px 15px 12px}
+.dsm-minutes-oneline{font-size:14.5px;line-height:23px;font-weight:650;color:#0F172A;padding-left:11px;border-left:3px solid #2563EB}
+.dsm-minutes-overview{margin-top:9px;font-size:12.5px;line-height:21px;color:#475569;white-space:pre-wrap}
+.dsm-minutes-keywords{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.dsm-minutes-keyword{font-size:10.5px;line-height:18px;padding:0 9px;border-radius:999px;border:1px solid #DCE7FF;background:#F2F6FF;color:#3B66C4}
+/* 通用块 */
+.dsm-minutes-block{display:flex;flex-direction:column;gap:8px}
+.dsm-minutes-block-head{display:flex;align-items:center;gap:7px;padding-bottom:2px}
+.dsm-minutes-block-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:#EEF4FF;color:#2563EB;flex:0 0 auto}
+.dsm-minutes-block-icon--green{background:#EAF7EF;color:#15803D}
+.dsm-minutes-block-icon--amber{background:#FEF5E7;color:#B45309}
+.dsm-minutes-block-icon--slate{background:#F1F4F9;color:#5A6474}
+.dsm-minutes-block-title{font-size:12.5px;font-weight:700;color:#0F172A}
+.dsm-minutes-block-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:999px;background:#F1F4F9;color:#6B7A90;font-size:10px;font-weight:650}
+.dsm-minutes-block-sub{font-size:10.5px;color:#98A2B3;margin-left:auto}
+/* 关键要点：宽屏两列，减少长列表 */
+.dsm-minutes-points{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:4px 16px;margin:0;padding:0;list-style:none}
+.dsm-minutes-point{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border-radius:8px;font-size:12px;line-height:20px;color:#334155}
+.dsm-minutes-point:hover{background:#F7FAFF}
+.dsm-minutes-point-num{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:18px;height:18px;margin-top:1px;border-radius:50%;background:#EEF4FF;color:#2563EB;font-size:9.5px;font-weight:700}
+/* 章节速览：编号 + 摘要 + 要点，形成可扫读的「时间线」 */
+.dsm-minutes-chapters{display:flex;flex-direction:column;gap:10px}
+.dsm-chapter{border:1px solid #E9EEF7;border-radius:12px;background:#FCFDFF;padding:12px 14px}
+.dsm-chapter-head{display:flex;align-items:center;gap:8px}
+.dsm-chapter-index{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;min-width:26px;height:20px;padding:0 6px;border-radius:6px;background:#EEF4FF;color:#3B66C4;font-size:10px;font-weight:700;letter-spacing:.3px}
+.dsm-chapter-title{min-width:0;font-size:12.5px;font-weight:650;line-height:20px;color:#0F172A}
+.dsm-chapter-summary{margin:6px 0 0;font-size:12px;line-height:20px;color:#475569;white-space:pre-wrap}
+.dsm-chapter-points{display:flex;flex-direction:column;gap:2px;margin:7px 0 0;padding:0;list-style:none}
+.dsm-chapter-point{display:flex;gap:7px;align-items:flex-start;font-size:11.5px;line-height:19px;color:#5A6474}
+.dsm-chapter-dot{flex:0 0 auto;width:4px;height:4px;margin-top:7px;border-radius:50%;background:#B9C8E4}
+/* 决策 / 风险：并排两张语义色面板 */
+.dsm-minutes-split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media (max-width:720px){.dsm-minutes-split{grid-template-columns:1fr}}
+.dsm-minutes-panel{border:1px solid #E9EEF7;border-radius:12px;background:#FFFFFF;padding:11px 13px}
+.dsm-minutes-panel--decision{background:#F8FCF9;border-color:#DBEEDF}
+.dsm-minutes-panel--risk{background:#FFFCF4;border-color:#F2E4C6}
+.dsm-minutes-rows{display:flex;flex-direction:column;margin-top:2px}
+.dsm-minutes-row{display:flex;gap:8px;align-items:flex-start;padding:7px 0;font-size:12px;line-height:20px;color:#334155}
+.dsm-minutes-row + .dsm-minutes-row{border-top:1px dashed #EDF1F7}
+.dsm-minutes-row-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:16px;height:16px;margin-top:2px;border-radius:50%;background:#EAF7EF;color:#15803D}
+.dsm-minutes-row-body{min-width:0}
+.dsm-minutes-note{display:block;margin-top:2px;font-size:11px;line-height:18px;color:#8A94A6}
+.dsm-minutes-level{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;height:16px;margin-top:2px;padding:0 6px;border-radius:5px;font-size:9.5px;font-weight:650;border:1px solid #E4D3B3;background:#FFF7E5;color:#B45309}
+.dsm-minutes-level--high{border-color:#F1C9C9;background:#FEF1F1;color:#B91C1C}
+.dsm-minutes-level--low{border-color:#CBE6D5;background:#F2FBF6;color:#15803D}
+/* 待确认问题 */
+.dsm-minutes-questions{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+.dsm-question{display:flex;gap:9px;align-items:flex-start;padding:7px 8px;border-radius:8px;font-size:12px;line-height:20px;color:#334155}
+.dsm-question:hover{background:#F7FAFF}
+.dsm-question-index{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:18px;height:18px;margin-top:1px;border-radius:50%;background:#F1F4F9;color:#5A6474;font-size:9.5px;font-weight:700}
+/* 发言人总结 */
+.dsm-minutes-speakers{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px}
+.dsm-minutes-speaker{display:flex;gap:9px;align-items:flex-start;border:1px solid #E9EEF7;border-radius:12px;background:#FBFDFF;padding:11px 13px}
+.dsm-minutes-speaker-avatar{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:#EEF4FF;color:#3B66C4;font-size:11px;font-weight:700}
+.dsm-minutes-speaker-body{min-width:0}
+.dsm-minutes-speaker-name{font-size:12px;font-weight:650;color:#0F172A;line-height:18px}
+.dsm-minutes-speaker-text{margin-top:2px;font-size:11.5px;line-height:19px;color:#5A6474}
 .dsm-minutes-empty{font-size:12px;color:#8A94A6}
-/* 详细纪要：关键词 / 章节 / 依据 / 风险等级 / 发言人 */
-.dsm-minutes-keywords{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.dsm-minutes-keyword{font-size:10.5px;line-height:17px;padding:0 8px;border-radius:999px;border:1px solid #D6E4FF;background:#EEF4FF;color:#2563EB}
-.dsm-minutes-section{margin-top:8px;padding:9px 11px;border:1px solid #E9EEF7;border-radius:10px;background:#FBFDFF}
-.dsm-minutes-section-head{font-size:12px;font-weight:650;color:#0F172A;line-height:18px}
-.dsm-minutes-section-summary{font-size:11.5px;line-height:19px;color:#475569;margin-top:3px;white-space:pre-wrap}
-.dsm-minutes-note{font-size:11px;line-height:18px;color:#8A94A6;margin-left:4px}
-.dsm-minutes-level{display:inline-block;font-size:10px;line-height:16px;padding:0 6px;border-radius:6px;margin-right:5px;border:1px solid #D8DEE9;color:#5A6474;flex:0 0 auto}
-.dsm-minutes-level--high{border-color:#F0C4C4;background:#FEF2F2;color:#B91C1C}
-.dsm-minutes-level--medium{border-color:#F4D3A6;background:#FFFAF0;color:#B45309}
-.dsm-minutes-level--low{border-color:#BBDCC7;background:#F2FBF6;color:#15803D}
-.dsm-minutes-speaker{display:flex;gap:8px;font-size:12px;line-height:19px;color:#334155;margin-top:4px}
-.dsm-minutes-speaker-name{flex:0 0 auto;font-weight:650;color:#2563EB}
-.dsm-minutes-speaker-text{min-width:0}
+@media (max-width:560px){
+  .dsm-minutes-body{padding:14px 14px 18px;height:150px}
+  .dsm-minutes-head{padding:11px 13px;gap:7px}
+  .dsm-minutes-meta{display:none}
+  .dsm-minutes-action{padding:4px 6px}
+  .dsm-minutes-points{grid-template-columns:1fr}
+}
 /* ── 录音弹窗：关键信息更醒目 ── */
 .dsm-rec-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .dsm-rec-item--wide{grid-column:span 2}
@@ -6386,31 +6431,105 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           window.setTimeout(() => setCopied(false), 1600)
         } catch { }
       }
-      const renderList = (title, items, renderItem, extraClass) => items.length === 0 ? null : h(
+      /* ── 版块构件：每个区块都有统一的「图标 + 标题 + 计数」头部，便于扫读 ── */
+      const blockHead = (iconName, tone, title, count, sub) => h(
         'div',
-        { className: 'dsm-minutes-group' + (extraClass ? ' ' + extraClass : '') },
-        h('div', { className: 'dsm-minutes-group-title' }, title),
-        ...items.map((item, index) => h(
-          'div',
-          { key: title + '-' + String(index), className: 'dsm-minutes-item' },
-          h('span', { className: 'dsm-minutes-dot' }),
-          h('span', null, renderItem(item, index)),
-        )),
+        { className: 'dsm-minutes-block-head' },
+        h('span', { className: 'dsm-minutes-block-icon' + (tone ? ' dsm-minutes-block-icon--' + tone : '') }, h(Icon, { name: iconName, size: 11 })),
+        h('span', { className: 'dsm-minutes-block-title' }, title),
+        count > 0 ? h('span', { className: 'dsm-minutes-block-count' }, String(count)) : null,
+        sub ? h('span', { className: 'dsm-minutes-block-sub' }, sub) : null,
       )
-      const sectionBlocks = sections.map((section, index) => h(
+      const keyPointsBlock = keyPoints.length === 0 ? null : h(
         'div',
-        { key: 'section-' + String(index), className: 'dsm-minutes-section' },
-        h('div', { className: 'dsm-minutes-section-head' }, String(section?.heading ?? '议题')),
-        asText(section?.summary) !== '' ? h('div', { className: 'dsm-minutes-section-summary' }, asText(section.summary)) : null,
-        ...(Array.isArray(section?.bullets) ? section.bullets : []).map((bullet, bulletIndex) => h(
-          'div',
-          { key: 'section-' + String(index) + '-bullet-' + String(bulletIndex), className: 'dsm-minutes-item' },
-          h('span', { className: 'dsm-minutes-dot' }),
-          h('span', null, String(bullet)),
-        )),
-      ))
-      const emptyContent = oneLine === '' && overview === '' && keyPoints.length === 0 && sections.length === 0
-        && decisions.length === 0 && risks.length === 0 && openQuestions.length === 0 && speakerSummaries.length === 0
+        { className: 'dsm-minutes-block' },
+        blockHead('list', '', '关键要点', keyPoints.length),
+        h('ul', { className: 'dsm-minutes-points' },
+          ...keyPoints.map((point, index) => h('li', { key: 'kp-' + String(index), className: 'dsm-minutes-point' },
+            h('span', { className: 'dsm-minutes-point-num' }, String(index + 1)),
+            h('span', null, String(point)),
+          ))),
+      )
+      const chaptersBlock = sections.length === 0 ? null : h(
+        'div',
+        { className: 'dsm-minutes-block' },
+        blockHead('doc', '', '章节速览', sections.length, '按会议顺序'),
+        h('div', { className: 'dsm-minutes-chapters' },
+          ...sections.map((section, index) => h('article', { key: 'chapter-' + String(index), className: 'dsm-chapter' },
+            h('div', { className: 'dsm-chapter-head' },
+              h('span', { className: 'dsm-chapter-index' }, String(index + 1).padStart(2, '0')),
+              h('span', { className: 'dsm-chapter-title' }, String(section?.heading ?? '议题')),
+            ),
+            asText(section?.summary) !== '' ? h('p', { className: 'dsm-chapter-summary' }, asText(section.summary)) : null,
+            (Array.isArray(section?.bullets) && section.bullets.length > 0)
+              ? h('ul', { className: 'dsm-chapter-points' },
+                ...section.bullets.map((bullet, bulletIndex) => h('li', { key: 'chapter-' + String(index) + '-' + String(bulletIndex), className: 'dsm-chapter-point' },
+                  h('span', { className: 'dsm-chapter-dot' }),
+                  h('span', null, String(bullet)),
+                )))
+              : null,
+          ))),
+      )
+      const decisionsBlock = decisions.length === 0 ? null : h(
+        'div',
+        { className: 'dsm-minutes-panel dsm-minutes-panel--decision' },
+        blockHead('check', 'green', '决策事项', decisions.length),
+        h('div', { className: 'dsm-minutes-rows' },
+          ...decisions.map((item, index) => h('div', { key: 'dc-' + String(index), className: 'dsm-minutes-row' },
+            h('span', { className: 'dsm-minutes-row-mark' }, h(Icon, { name: 'check', size: 10 })),
+            h('div', { className: 'dsm-minutes-row-body' },
+              h('div', null, textOf(item)),
+              asText(item?.rationale) !== '' ? h('span', { className: 'dsm-minutes-note' }, '依据：' + asText(item.rationale)) : null,
+              asText(item?.owner) !== '' ? h('span', { className: 'dsm-minutes-note' }, '负责人：' + asText(item.owner)) : null,
+            ),
+          ))),
+      )
+      const risksBlock = risks.length === 0 ? null : h(
+        'div',
+        { className: 'dsm-minutes-panel dsm-minutes-panel--risk' },
+        blockHead('alert', 'amber', '风险与待确认', risks.length),
+        h('div', { className: 'dsm-minutes-rows' },
+          ...risks.map((item, index) => h('div', { key: 'rk-' + String(index), className: 'dsm-minutes-row' },
+            h('span', { className: 'dsm-minutes-level dsm-minutes-level--' + String(item?.level ?? 'medium') }, levelLabel[item?.level] ?? '中'),
+            h('div', { className: 'dsm-minutes-row-body' },
+              h('div', null, textOf(item)),
+              asText(item?.suggestion) !== '' ? h('span', { className: 'dsm-minutes-note' }, '建议：' + asText(item.suggestion)) : null,
+            ),
+          ))),
+      )
+      const decisionRiskBlock = (decisionsBlock === null && risksBlock === null)
+        ? null
+        : ((decisionsBlock !== null && risksBlock !== null)
+          ? h('div', { className: 'dsm-minutes-split' }, decisionsBlock, risksBlock)
+          : h('div', { className: 'dsm-minutes-block' }, decisionsBlock ?? risksBlock))
+      const questionsBlock = openQuestions.length === 0 ? null : h(
+        'div',
+        { className: 'dsm-minutes-block' },
+        blockHead('info', 'slate', '待确认问题', openQuestions.length),
+        h('ol', { className: 'dsm-minutes-questions' },
+          ...openQuestions.map((question, index) => h('li', { key: 'q-' + String(index), className: 'dsm-question' },
+            h('span', { className: 'dsm-question-index' }, String(index + 1)),
+            h('span', null, String(question)),
+          ))),
+      )
+      const speakersBlock = speakerSummaries.length === 0 ? null : h(
+        'div',
+        { className: 'dsm-minutes-block' },
+        blockHead('users', '', '发言人总结', speakerSummaries.length),
+        h('div', { className: 'dsm-minutes-speakers' },
+          ...speakerSummaries.map((item, index) => {
+            const speaker = String(item?.speaker ?? '发言人')
+            return h('div', { key: 'sp-' + String(index), className: 'dsm-minutes-speaker' },
+              h('span', { className: 'dsm-minutes-speaker-avatar' }, speaker.slice(0, 1).toUpperCase()),
+              h('div', { className: 'dsm-minutes-speaker-body' },
+                h('div', { className: 'dsm-minutes-speaker-name' }, speaker),
+                h('div', { className: 'dsm-minutes-speaker-text' }, String(item?.summary ?? '')),
+              ),
+            )
+          })),
+      )
+      const emptyContent = oneLine === '' && overview === '' && keyPointsBlock === null && chaptersBlock === null
+        && decisionRiskBlock === null && questionsBlock === null && speakersBlock === null
       return h(
         'section',
         { className: 'dsm-minutes' + (expanded ? ' dsm-minutes--expanded' : '') },
@@ -6419,7 +6538,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           { className: 'dsm-minutes-head' },
           h('span', { className: 'dsm-minutes-icon' }, h(Icon, { name: 'sparkle', size: 13 })),
           h('span', { className: 'dsm-minutes-title' }, 'AI 会议纪要'),
-          summary.generatedAt ? h('span', { className: 'dsm-minutes-meta' }, '生成于 ' + formatStamp(summary.generatedAt)) : null,
+          asText(summary.model) !== '' ? h('span', { className: 'dsm-minutes-meta' }, '由 ' + asText(summary.model) + ' 生成') : null,
           h('span', { className: 'dsm-minutes-spacer' }),
           props.canSummarize === true
             ? h(
@@ -6461,34 +6580,21 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         h(
           'div',
           { className: 'dsm-minutes-body' },
-          oneLine !== '' ? h('div', { className: 'dsm-minutes-oneline' }, oneLine) : null,
-          overview !== '' ? h('div', { className: 'dsm-minutes-overview' }, overview) : null,
-          keywords.length > 0
-            ? h('div', { className: 'dsm-minutes-keywords' },
-              ...keywords.map((keyword) => h('span', { key: String(keyword), className: 'dsm-minutes-keyword' }, String(keyword))))
-            : null,
-          renderList('关键要点', keyPoints, (item) => String(item)),
-          sections.length > 0
-            ? h('div', { className: 'dsm-minutes-group' },
-              h('div', { className: 'dsm-minutes-group-title' }, '章节速览'),
-              ...sectionBlocks)
-            : null,
-          renderList('决策事项', decisions, (item) => h('span', null,
-            textOf(item),
-            asText(item?.rationale) !== '' ? h('span', { className: 'dsm-minutes-note' }, '（依据：' + asText(item.rationale) + '）') : null)),
-          renderList('风险与待确认', risks, (item) => h('span', null,
-            h('span', { className: 'dsm-minutes-level dsm-minutes-level--' + String(item?.level ?? 'medium') }, levelLabel[item?.level] ?? '中'),
-            textOf(item),
-            asText(item?.suggestion) !== '' ? h('span', { className: 'dsm-minutes-note' }, '（建议：' + asText(item.suggestion) + '）') : null)),
-          renderList('待确认问题', openQuestions, (item) => String(item)),
-          speakerSummaries.length > 0
-            ? h('div', { className: 'dsm-minutes-group' },
-              h('div', { className: 'dsm-minutes-group-title' }, '发言人总结'),
-              ...speakerSummaries.map((item, index) => h('div', { key: 'speaker-' + String(index), className: 'dsm-minutes-speaker' },
-                h('div', { className: 'dsm-minutes-speaker-name' }, String(item?.speaker ?? '发言人')),
-                h('div', { className: 'dsm-minutes-speaker-text' }, String(item?.summary ?? '')),
-              )))
-            : null,
+          h(
+            'div',
+            { className: 'dsm-minutes-hero' },
+            oneLine !== '' ? h('div', { className: 'dsm-minutes-oneline' }, oneLine) : null,
+            overview !== '' ? h('div', { className: 'dsm-minutes-overview' }, overview) : null,
+            keywords.length > 0
+              ? h('div', { className: 'dsm-minutes-keywords' },
+                ...keywords.map((keyword) => h('span', { key: String(keyword), className: 'dsm-minutes-keyword' }, String(keyword))))
+              : null,
+          ),
+          keyPointsBlock,
+          chaptersBlock,
+          decisionRiskBlock,
+          questionsBlock,
+          speakersBlock,
           emptyContent ? h('div', { className: 'dsm-minutes-empty' }, '还没有生成的纪要内容') : null,
         ),
       )
