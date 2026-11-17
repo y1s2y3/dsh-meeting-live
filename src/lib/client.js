@@ -3868,6 +3868,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const [localTranscribeMode, setLocalTranscribeMode] = useState(null)
       const [termsText, setTermsText] = useState('')
       const [termsSaving, setTermsSaving] = useState(false)
+      // 纠错经验：一行一条的领域知识/易错点（与术语表分开保存，只用于转写纠错提示）
+      const [notesText, setNotesText] = useState('')
+      const [notesSaving, setNotesSaving] = useState(false)
       // 术语表 + 从文件夹提取的术语（统一显示在同一个输入框里；解析结果先追加进输入框，确认后保存）
       const [termDirs, setTermDirs] = useState([])
       const [termInput, setTermInput] = useState('')
@@ -3881,6 +3884,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const [updateState, setUpdateState] = useState('idle')
       const [updateInfo, setUpdateInfo] = useState(null)
       const termsTouchedRef = useRef(false)
+      const notesTouchedRef = useRef(false)
       const mountedRef = useRef(true)
 
       useEffect(() => {
@@ -3932,7 +3936,11 @@ nav[aria-label="Global panels"] > button > span:last-child{
             merged.push(line)
           }
           setTermsText(merged.join('\n'))
-        }        setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
+        }
+        if (notesTouchedRef.current !== true) {
+          setNotesText(typeof nextSettings?.correctionNotes === 'string' ? nextSettings.correctionNotes : '')
+        }
+        setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
       }
 
       useEffect(() => {
@@ -4001,6 +4009,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
         transcribe: { provider: 'sensevoice-local', cloud: { iflytek: {}, tencent: {}, aliyun: {} } },
         summary: { mode: 'dsh', custom: { baseUrl: '', apiKey: '', model: '', temperature: 0.3, maxTokens: 8192 } },
         terms: '',
+        correctionNotes: '',
         correctTranscript: true,
         diarize: true,
       }
@@ -4119,6 +4128,36 @@ nav[aria-label="Global panels"] > button > span:last-child{
           setError(messageOf(caught))
         } finally {
           if (mountedRef.current) setTermsSaving(false)
+        }
+      }
+
+      /**
+       * 保存纠错经验：一行一条（忽略空行与 # 注释），去重、单条限长、最多 60 条。
+       * 只用于录音结束后的 LLM 纠错提示，不下发云端识别热词。
+       */
+      const saveCorrectionNotes = async () => {
+        setNotesSaving(true)
+        try {
+          const lines = []
+          const seen = new Set()
+          for (const raw of notesText.split(/\r?\n/)) {
+            const line = raw.trim()
+            if (line === '' || line.startsWith('#')) continue
+            if (line.length > 160) throw new Error('单条纠错经验不能超过 160 字：' + line.slice(0, 20) + '…')
+            const key = line.toLowerCase()
+            if (seen.has(key)) continue
+            seen.add(key)
+            lines.push(line)
+            if (lines.length >= 60) break
+          }
+          await requestJson('/settings', { method: 'PATCH', body: { settings: { correctionNotes: lines.join('\n') } } })
+          notesTouchedRef.current = false
+          setNotesText(lines.join('\n'))
+          setSettingsData((previous) => (previous === null ? previous : { ...previous, correctionNotes: lines.join('\n') }))
+        } catch (caught) {
+          setError(messageOf(caught))
+        } finally {
+          if (mountedRef.current) setNotesSaving(false)
         }
       }
 
@@ -4348,6 +4387,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const transcribeMode = localTranscribeMode ?? (transcribeProvider.startsWith('cloud-') ? 'cloud' : 'local')
       const termLines = termsText.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#'))
       const termLineCount = termLines.length
+      const noteLineCount = notesText.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#')).length
       const termCandidateCount = termCandidates === null ? 0 : termCandidates.items.length
       const termCandidateChecked = termCandidates === null ? 0 : termCandidates.checked.filter((value) => value === true).length
       const termCandidateAllChecked = termCandidateCount > 0 && termCandidateChecked === termCandidateCount
@@ -4596,6 +4636,22 @@ nav[aria-label="Global panels"] > button > span:last-child{
               onClick: () => { void saveTerms() },
             }, termsSaving ? '保存中…' : '保存术语'),
             h('span', { className: 'dsm-hint' }, '共 ' + String(termLineCount) + ' 条；保存后自动用于转写纠错。'),
+          ),
+          h(Field, { label: '纠错经验（一行一条；只用于判断同音字/专名/断句，不要求逐字照抄）' }, h(TextArea, {
+            rows: 8,
+            value: notesText,
+            onChange: (value) => { notesTouchedRef.current = true; setNotesText(value) },
+            onBlur: () => { void saveCorrectionNotes() },
+            placeholder: '一行一条，例如：\n术语的规范写法（不是常见错写法）\n部门/人名/系统名的正确写法\n本项目固定使用的缩写含义',
+          })),
+          h('div', { className: 'dsm-set-cloud-actions' },
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn',
+              disabled: notesSaving,
+              onClick: () => { void saveCorrectionNotes() },
+            }, notesSaving ? '保存中…' : '保存纠错经验'),
+            h('span', { className: 'dsm-hint' }, '共 ' + String(noteLineCount) + ' 条；通用校对规则已内置（随插件更新，所有安装者生效）；术语表里的业务词会自动做同音/近音匹配。这里只填项目/业务经验（按顺序注入，最多 1200 字）。'),
           ),
           h('div', { className: 'dsm-check-row' },
             h('label', { className: 'dsm-check' },
@@ -7961,6 +8017,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
         if (typeof diarizeMeetingId !== 'string' || diarizeMeetingId === '') return undefined
         let cancelled = false
         let tries = 0
+        let idleTries = 0
         const autoStartedAt = Date.now()
         setDiarize({ meetingId: diarizeMeetingId, phase: 'running', elapsedSeconds: 0, stage: 'diarizing', auto: true })
         const finish = (next) => { if (cancelled !== true) setDiarize(next) }
@@ -7976,24 +8033,61 @@ nav[aria-label="Global panels"] > button > span:last-child{
           }
           return speakers
         }
+        // 轮询宿主的分离任务：自动分离现在跑在独立子进程里（长会议要几分钟），
+        // 这里显示「后台分离中 · 已运行 X 分」，最多等 30 分钟，不再 2 分钟就报超时。
         const timer = window.setInterval(() => {
           tries += 1
-          void loadMeeting(diarizeMeetingId, { silent: true, quiet: true }).catch(() => {})
-          window.setTimeout(() => {
+          void (async () => {
             if (cancelled === true) return
-            if (cancelled !== true) setDiarize((previous) => (previous === null ? previous : { ...previous, elapsedSeconds: Math.round((Date.now() - autoStartedAt) / 1000) }))
+            let job = null
+            try {
+              const payload = await requestJson(`/meetings/${encodeURIComponent(diarizeMeetingId)}/diarize`)
+              job = payload?.job ?? null
+            } catch {
+              job = null
+            }
+            if (cancelled === true) return
+            const status = job !== null && typeof job.status === 'string' ? job.status : 'idle'
+            if (status === 'running') {
+              idleTries = 0
+              setDiarize((previous) => (previous === null ? previous : {
+                ...previous,
+                phase: 'running',
+                elapsedSeconds: Number(job.elapsedSeconds) || Math.round((Date.now() - autoStartedAt) / 1000),
+                stage: typeof job.stage === 'string' ? job.stage : 'diarizing',
+                transcribeDone: Number(job.transcribeDone) || 0,
+                transcribeTotal: Number(job.transcribeTotal) || 0,
+              }))
+              if (tries % 4 === 0) void loadMeeting(diarizeMeetingId, { silent: true, quiet: true }).catch(() => {})
+              return
+            }
+            if (status === 'done') {
+              window.clearInterval(timer)
+              void loadMeeting(diarizeMeetingId, { silent: true, quiet: true }).catch(() => {})
+              finish({ meetingId: diarizeMeetingId, phase: 'done', speakers: Number(job.speakers) || 0, mode: job.mode === 'turns' ? 'turns' : 'relabel' })
+              return
+            }
+            if (status === 'error' || status === 'cancelled') {
+              window.clearInterval(timer)
+              finish({ meetingId: diarizeMeetingId, phase: 'error', note: typeof job.error === 'string' ? job.error : '声纹分离失败' })
+              return
+            }
+            // 没有任务在跑（例如设置里关闭了自动分离）：再等几轮，随后静默结束。
+            idleTries += 1
             const speakers = readSpeakers()
             if (speakers !== null && speakers.length > 0 && speakers.every((label) => /^S\d+$/.test(label))) {
               window.clearInterval(timer)
               finish({ meetingId: diarizeMeetingId, phase: 'done', speakers: speakers.length })
               return
             }
-            if (tries >= 24) {
+            if (idleTries >= 6) {
               window.clearInterval(timer)
-              finish({ meetingId: diarizeMeetingId, phase: 'timeout' })
+              finish(null)
+              return
             }
-          }, 800)
-        }, 5000)
+            setDiarize((previous) => (previous === null ? previous : { ...previous, elapsedSeconds: Math.round((Date.now() - autoStartedAt) / 1000) }))
+          })()
+        }, 4000)
         return () => {
           cancelled = true
           window.clearInterval(timer)

@@ -651,12 +651,20 @@ check('二维码上传接口已移除（二维码写死在插件里）', noUploa
   const discardCorrection = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/correction/discard', JSON.stringify({}), 'application/json')
   check('忽略纠错后只清空待审阅、不动转写', discardCorrection.status === 200 && JSON.parse(discardCorrection.body).meeting?.correction === null, discardCorrection.body.slice(0, 140))
 
-  // 录音质量：上传一段真实 WAV 后返回质量分析
+  // 录音质量：上传现在「先返回、后分析」（v1.11.0 停止长会议不再卡），质量结果随后写入会议
   const qualityWav = makeWav(2)
   const qualityUpload = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/media/upload?kind=audio&name=quality.wav&seconds=2', qualityWav, 'audio/wav')
   const qualityPayload = JSON.parse(qualityUpload.body)
-  check('音频上传后返回录音质量分析', qualityUpload.status === 200 && qualityPayload.quality !== null && typeof qualityPayload.quality.level === 'string', JSON.stringify(qualityPayload.quality))
-  check('录音质量带中文建议', Array.isArray(qualityPayload.quality?.suggestions) && qualityPayload.quality.suggestions.length > 0, JSON.stringify(qualityPayload.quality?.suggestions))
+  check('音频上传立即返回（带后台处理标记）', qualityUpload.status === 200 && qualityPayload.postProcessing === true, JSON.stringify({ postProcessing: qualityPayload.postProcessing }))
+  let qualityStored = null
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const stored = await uploadCase('GET', '/dsh-meeting/meetings/mt_test', null, null)
+    qualityStored = JSON.parse(stored.body).meeting?.audioQuality ?? null
+    if (qualityStored !== null) break
+  }
+  check('录音质量在后台分析后写入会议', qualityStored !== null && typeof qualityStored.level === 'string', JSON.stringify(qualityStored?.level))
+  check('录音质量带中文建议', Array.isArray(qualityStored?.suggestions) && qualityStored.suggestions.length > 0, JSON.stringify(qualityStored?.suggestions))
 
   // ASR 热词：切到腾讯云后，术语表会作为 hotwords 传进 transcribeCloud
   const hotwordCaptured = {}

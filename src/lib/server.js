@@ -18,6 +18,7 @@ import { exportMeeting } from './export.js'
 import {
   CLOUD_PROVIDERS,
   TRANSCRIBE_PROVIDERS,
+  effectiveCorrectionNotes,
   effectiveTerms,
   normalizeTermItems,
   parseTerms,
@@ -925,6 +926,32 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
   }
 }
 
+/**
+ * 启动一次声纹分离任务（同一会议同时只允许一个，正在跑时直接复用现有任务）。
+ *
+ * **一定要通过它来启动**——包括「音频上传后自动分离」。历史版本在上传回调里直接调用同步的
+ * `transcribeFileWithSpeakers`，长会议会**阻塞宿主事件循环 10+ 分钟**（页面与其它插件全卡住），
+ * 这是「停止长会议要等很久」的根因。现在统一走独立子进程 + 缓存，宿主只轮询状态。
+ */
+function startDiarizeJob({ deps, store, meetingId, audioPath, logger, speakers = 0, mode = 'relabel', reason = 'manual' }) {
+  const running = diarizeJobs.get(meetingId)
+  if (running !== undefined && running.status === 'running') return running
+  const job = {
+    status: 'running',
+    stage: 'starting',
+    mode: mode === 'turns' ? 'turns' : 'relabel',
+    speakers: 0,
+    forcedSpeakers: Number(speakers) > 0 ? Math.round(Number(speakers)) : 0,
+    reason,
+    error: null,
+    note: null,
+    startedAt: Date.now(),
+  }
+  diarizeJobs.set(meetingId, job)
+  void runDiarizeJob({ deps, store, meetingId, audioPath, logger, speakers: job.forcedSpeakers, mode: job.mode })
+  return job
+}
+
 /** Build the `/state` payload the panel renders. */
 export async function buildState(deps) {
   const { store, asr, summarizer, calendar, autoIngest } = deps
@@ -1727,25 +1754,8 @@ export function registerRoutes(ctx, deps) {
           || deps.paraformer.diarizationAvailable?.() !== true) {
           throw new Error('说话人分离模型未就绪：请到设置 → 模型配置里下载 pyannote 分段与 cam++ 声纹模型')
         }
-        const running = diarizeJobs.get(id)
-        if (running !== undefined && running.status === 'running') {
-          sendJson(res, 200, { ok: true, job: { ...running, elapsedSeconds: Math.max(0, Math.round((Date.now() - running.startedAt) / 1000)) } })
-          return
-        }
-        const job = {
-          status: 'running',
-          stage: 'starting',
-          mode: requestedMode,
-          speakers: 0,
-          forcedSpeakers,
-          error: null,
-          note: null,
-          startedAt: Date.now(),
-        }
-        diarizeJobs.set(id, job)
-        sendJson(res, 200, { ok: true, job: { ...job } })
-        // 后台子进程执行，立即返回；前端轮询 GET 拿 elapsedSeconds 显示「已运行 X 分 Y 秒」。
-        void runDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger, speakers: forcedSpeakers, mode: requestedMode })
+        const job = startDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger, speakers: forcedSpeakers, mode: requestedMode, reason: 'manual' })
+        sendJson(res, 200, { ok: true, job: { ...job, elapsedSeconds: Math.max(0, Math.round((Date.now() - job.startedAt) / 1000)) } })
         return
       }
 
@@ -1888,68 +1898,81 @@ export function registerRoutes(ctx, deps) {
           savedAt: new Date().toISOString(),
         }
         // 录屏由宿主 ffmpeg 采集成 mkv，等这段音频（WAV）上传后合成 MP4。
-        let muxed = null
+        // **不在这里等 mux/质量分析/声纹分离**：长会议的 MP4 合成要几十秒、分离要十几分钟，
+        // 全都放在响应之后后台做，否则「停止会议」会卡很久（历史上甚至阻塞宿主事件循环 10+ 分钟）。
+        let pendingMux = null
         if (kind === 'audio' && isCapturing(id) === false) {
           const pendingVideo = takePendingVideo(id)
           if (pendingVideo !== null) {
             const mp4Name = safeMediaName(fileName.replace(/\.wav$/i, '') + '.mp4', '会议录屏.mp4')
-            const mp4Path = join(directory, mp4Name)
-            const result = await muxScreenWithAudio({ videoPath: pendingVideo.tmpPath, audioPath: target, outPath: mp4Path, logger })
-            await dropTempVideo(pendingVideo.tmpPath)
-            if (result.ok === true) {
-              muxed = {
-                kind: 'video',
-                name: mp4Name,
-                path: mp4Path,
-                bytes: result.bytes,
-                seconds: Math.round(seconds),
-                savedAt: new Date().toISOString(),
-                converted: true,
-              }
-            } else {
-              logger?.warn?.('meeting-minutes: 合成录屏视频失败：' + String(result.error ?? '未知原因'))
-            }
+            pendingMux = { pendingVideo, mp4Name, mp4Path: join(directory, mp4Name) }
           }
         }
-        const stored = muxed === null ? entry : entry
-        const kept = previous.filter((item) => item.kind !== kind && (muxed === null || item.kind !== 'video'))
-        const media = [...kept, stored, ...(muxed === null ? [] : [muxed])]
-        // 录音质量分析：整段 WAV 上传后算音量/削波/信噪比，存进会议并返回给界面提示
-        let quality = null
-        if (kind === 'audio') {
-          const analyzed = analyzeWavQuality(bytes)
-          if (analyzed !== null) {
-            quality = { ...analyzed, analyzedAt: new Date().toISOString() }
-            await store.patch(id, { audioQuality: quality })
-          }
-        }
+        const kept = previous.filter((item) => item.kind !== kind && (pendingMux === null || item.kind !== 'video'))
+        // 先占位一个「转换中」的视频条目，界面据此轮询，合成完成后替换成真实文件。
+        const placeholderVideo = pendingMux === null
+          ? null
+          : { kind: 'video', name: pendingMux.mp4Name, converting: true, seconds: Math.round(seconds), savedAt: new Date().toISOString() }
+        const media = [...kept, entry, ...(placeholderVideo === null ? [] : [placeholderVideo])]
         const updated = await store.patch(id, { media })
-        sendJson(res, 200, { ok: true, media: (updated && updated.media) || media, entry: stored, quality })
-        // 音频落盘后做两件后台事（不阻塞响应）：
-        //  1) 若装了 Paraformer + pyannote + cam++，整段跑真说话人分离，替换启发式的 A/B/C/D；
-        //  2) 若开启纠错，用 LLM 只改错别字/术语/人名。
+        // 立即返回：录音已落盘、会议里已能看到这条音频。
+        sendJson(res, 200, { ok: true, media: (updated && updated.media) || media, entry, quality: null, postProcessing: true })
+        if (pendingMux !== null) {
+          void (async () => {
+            try {
+              const result = await muxScreenWithAudio({ videoPath: pendingMux.pendingVideo.tmpPath, audioPath: target, outPath: pendingMux.mp4Path, logger })
+              await dropTempVideo(pendingMux.pendingVideo.tmpPath)
+              const currentMedia = Array.isArray(store.get(id)?.media) ? store.get(id).media : media
+              if (result.ok === true) {
+                const replaced = currentMedia.map((item) => (item?.converting === true && item.kind === 'video'
+                  ? {
+                    kind: 'video',
+                    name: pendingMux.mp4Name,
+                    path: pendingMux.mp4Path,
+                    bytes: result.bytes,
+                    seconds: Math.round(seconds),
+                    savedAt: new Date().toISOString(),
+                    converted: true,
+                  }
+                  : item))
+                await store.patch(id, { media: replaced })
+                logger?.info?.('meeting-minutes: screen video muxed in background (' + String(Math.round(result.bytes / 1048576)) + 'MB)')
+              } else {
+                const removed = currentMedia.filter((item) => item?.converting !== true)
+                await store.patch(id, { media: removed })
+                logger?.warn?.('meeting-minutes: 合成录屏视频失败：' + String(result.error ?? '未知原因'))
+              }
+            } catch (error) {
+              logger?.warn?.('meeting-minutes: background mux failed: ' + (error instanceof Error ? error.message : String(error)))
+            }
+          })()
+        }
         if (kind === 'audio') {
+          // 质量分析（142MB 要 1.6 秒 CPU）：放到响应之后，避免拖慢停止。
+          void (async () => {
+            try {
+              const analyzed = analyzeWavQuality(bytes)
+              if (analyzed !== null) await store.patch(id, { audioQuality: { ...analyzed, analyzedAt: new Date().toISOString() } })
+            } catch (error) {
+              logger?.warn?.('meeting-minutes: audio quality analysis failed: ' + (error instanceof Error ? error.message : String(error)))
+            }
+          })()
+          // 说话人分离：走独立子进程（不再用同步的 transcribeFileWithSpeakers，长会议会把宿主卡住十分钟）。
           void (async () => {
             try {
               const settingsNow = store.settings
-              if (settingsNow.diarize === true && deps.paraformer !== undefined && deps.paraformer.diarizationAvailable() === true) {
-                const analyzed = await deps.paraformer.transcribeFileWithSpeakers(target)
-                const currentMeeting = store.get(id)
-                const batchText = typeof analyzed.text === 'string' ? analyzed.text : ''
-                const useBatch = shouldUseDiarizedTranscript(currentMeeting?.transcript, batchText)
-                if (useBatch && Array.isArray(analyzed.lines) && analyzed.lines.length > 0) {
-                  await store.patch(id, {
-                    transcript: batchText,
-                    transcriptSegments: analyzed.lines.map((line) => ({ speaker: line.speaker, text: line.text, at: Math.round(line.start) })),
-                  })
-                  logger?.info?.('meeting-minutes: speaker diarization done (' + String(analyzed.speakers) + ' speakers, ' + String(analyzed.lines.length) + ' lines)')
-                } else if (Array.isArray(analyzed.lines) && analyzed.lines.length > 0) {
-                  // 典型场景：18 分钟录音只认出 2 句（19 字），而流式转写已有 174 段。
-                  // 保留流式转写和它的分段，避免把已识别内容整段覆盖掉。
-                  logger?.warn?.('meeting-minutes: diarization result too short (' + String(batchText.replace(/\s+/g, '').length)
-                    + ' chars vs ' + String((currentMeeting?.transcript ?? '').replace(/\s+/g, '').length) + ' chars); keeping the streamed transcript')
-                }
+              if (settingsNow.diarize === true && deps.paraformer !== undefined && deps.paraformer !== null && deps.paraformer.diarizationAvailable() === true) {
+                startDiarizeJob({ deps, store, meetingId: id, audioPath: target, logger, mode: 'relabel', reason: 'auto' })
+                logger?.info?.('meeting-minutes: auto diarization started in background')
               }
+            } catch (error) {
+              logger?.warn?.('meeting-minutes: auto diarization start failed: ' + (error instanceof Error ? error.message : String(error)))
+            }
+          })()
+          // 转写纠错（LLM 调用本身是异步的，不会卡宿主）。
+          void (async () => {
+            try {
+              const settingsNow = store.settings
               if (settingsNow.correctTranscript === true) {
                 const current = requireMeeting(store, id)
                 if (typeof current.transcript === 'string' && current.transcript.trim() !== '') {
@@ -1957,11 +1980,11 @@ export function registerRoutes(ctx, deps) {
                   const corrected = await summarizer.correctTranscript(current, {
                     selection: store.summaryModel,
                     terms: effectiveTerms(settingsNow),
+                    notes: effectiveCorrectionNotes(settingsNow),
                     context: correctionContext,
                     custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
                   })
                   if (settingsNow.reviewCorrections !== false) {
-                    // 先存成「待审阅」的逐行差异，由界面勾选接受后再替换转写
                     const changes = diffTextLines(current.transcript, corrected)
                     if (changes.length > 0) {
                       await store.patch(id, {
@@ -1976,12 +1999,13 @@ export function registerRoutes(ctx, deps) {
                 }
               }
             } catch (error) {
-              logger?.warn?.('meeting-minutes: post-process audio failed: ' + (error instanceof Error ? error.message : String(error)))
+              logger?.warn?.('meeting-minutes: transcript correction failed: ' + (error instanceof Error ? error.message : String(error)))
             }
           })()
         }
         return
       }
+
 
       if (segments.length === 4 && segments[2] === 'media' && segments[3] === 'reveal' && method === 'POST') {
         const meeting = requireMeeting(store, id)
