@@ -226,9 +226,10 @@ function makeXlsx() {
   const client = fs.readFileSync(path.join(repo, 'src', 'lib', 'client.js'), 'utf8');
   check('设置页有文件夹术语入口', client.includes('从文件夹提取术语') && client.includes("requestJson('/terms/extract'"));
   check('支持多文件夹（列表 + 添加/移除）', client.includes('dsm-term-folders') && client.includes('addTermDir') && client.includes('removeTermDir'));
-  check('手动术语与解析结果共用同一个输入框', client.includes('extractTermsIntoBox') && client.includes('setTermsText(next)') && client.includes('setTermPending({ baseline, added'));
-  check('解析结果先加进输入框，确认后才保存', client.includes("'纳入并保存'") && client.includes("'撤销本次解析'") && client.includes("terms: lines.join('\\n')") && client.includes('items: []'));
-  check('独立预览列表/逐条编辑排序已移除', !client.includes('解析预览') && !client.includes('startTermEdit') && !client.includes('moveTermItem') && !client.includes('confirmPreview'));
+  check('手动术语与采纳结果共用上方输入框', client.includes("terms: lines.join('\\n')") && client.includes('value: termsText') && client.includes("termsTouchedRef.current = true; setTermsText(value)"));
+  check('解析结果在下方独立候选框展示（带勾选）', client.includes("'解析结果：'") && client.includes('dsm-term-check') && client.includes('toggleTermCandidate') && client.includes('setAllTermCandidates'));
+  check('勾选后「采纳选中」才进入上方输入框', client.includes("'采纳选中 '") && client.includes('adoptTermCandidates') && client.includes('setTermsText(next)') && client.includes("'保存术语'"));
+  check('旧的自动追加/纳入逻辑已移除', !client.includes('termPending') && !client.includes('纳入并保存') && !client.includes('撤销本次解析'));
   check('术语复用系统文件夹选择', client.includes("'/dialog/pick-dir'"));
   const server = fs.readFileSync(path.join(repo, 'src', 'lib', 'server.js'), 'utf8');
   check('宿主提供 /terms/extract 路由（返回预览）', server.includes("segments[1] === 'extract'") && server.includes('extractTerms') && server.includes('preview:'));

@@ -3760,7 +3760,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const [termAt, setTermAt] = useState('')
       const [termBusy, setTermBusy] = useState(false)
       const [termError, setTermError] = useState(null)
-      const [termPending, setTermPending] = useState(null)
+      const [termCandidates, setTermCandidates] = useState(null)
       // 版本与更新：appVersion 来自 /settings，updateInfo 来自 /update-check
       const [appVersion, setAppVersion] = useState('')
       const [updateState, setUpdateState] = useState('idle')
@@ -3801,7 +3801,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         setTermDirs(Array.isArray(termExtract?.dirs) ? termExtract.dirs : [])
         setTermStats(termExtract?.stats ?? null)
         setTermAt(typeof termExtract?.at === 'string' ? termExtract.at : '')
-        setTermPending(null)
+        setTermCandidates(null)
         if (termsTouchedRef.current !== true) {
           // 旧版把解析结果存在 termExtract.items；这里把它和手填术语合并成一份文本
           const legacyItems = Array.isArray(termExtract?.items)
@@ -3994,7 +3994,6 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           })
           termsTouchedRef.current = false
           setTermsText(lines.join('\n'))
-          setTermPending(null)
           // 本地副本同步清空旧版 items，避免之后再解析时把旧条目又写回元数据
           setSettingsData((previous) => (previous === null ? previous : {
             ...previous,
@@ -4008,16 +4007,58 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         }
       }
 
-      /** 撤销本次解析：恢复到解析前的输入框内容。 */
-      const undoTermPending = () => {
-        if (termPending === null) return
-        setTermsText(termPending.baseline)
-        setTermPending(null)
-        termsTouchedRef.current = true
+      /** 勾选/取消勾选一个解析候选。 */
+      const toggleTermCandidate = (index) => {
+        setTermCandidates((previous) => previous === null ? previous : {
+          ...previous,
+          checked: previous.checked.map((value, itemIndex) => (itemIndex === index ? value !== true : value)),
+        })
       }
 
-      /** 解析文件夹：候选术语直接追加到同一个输入框，等待用户删改后「纳入并保存」。 */
-      const extractTermsIntoBox = async () => {
+      /** 全选 / 全不选。 */
+      const setAllTermCandidates = (value) => {
+        setTermCandidates((previous) => previous === null ? previous : {
+          ...previous,
+          checked: previous.checked.map(() => value === true),
+        })
+      }
+
+      const clearTermCandidates = () => setTermCandidates(null)
+
+      /** 采纳：把勾选的候选追加到上方术语输入框（不直接写库，仍由「保存术语」保存）。 */
+      const adoptTermCandidates = () => {
+        if (termCandidates === null) return
+        const selected = termCandidates.items.filter((item, index) => termCandidates.checked[index] === true && String(item?.text ?? '').trim() !== '')
+        if (selected.length === 0) { setTermError('请先勾选要采纳的术语'); return }
+        const seen = new Set()
+        for (const raw of termsText.split(/\r?\n/)) {
+          const line = raw.trim()
+          if (line !== '' && !line.startsWith('#')) seen.add(line.toLowerCase())
+        }
+        const additions = []
+        for (const item of selected) {
+          const line = String(item.text ?? '').trim()
+          if (line === '' || seen.has(line.toLowerCase())) continue
+          seen.add(line.toLowerCase())
+          additions.push(line)
+        }
+        if (additions.length > 0) {
+          const next = [termsText.trimEnd(), ...additions].filter((part) => part !== '').join('\n')
+          setTermsText(next)
+          termsTouchedRef.current = true
+        }
+        // 采纳过的候选从列表移除，避免重复采纳；剩下没勾选的继续保留
+        const remaining = termCandidates.items.filter((item, index) => termCandidates.checked[index] !== true)
+        setTermCandidates(remaining.length === 0 ? null : { items: remaining, checked: remaining.map(() => false) })
+        if (additions.length === 0) {
+          notify('info', '这些术语已经在输入框里', '已从候选列表移除')
+        } else {
+          notifySuccess('已采纳到术语表', '加了 ' + String(additions.length) + ' 个；记得点「保存术语」写入术语库')
+        }
+      }
+
+      /** 解析文件夹：结果只显示在下方候选框，勾选并「采纳选中」后才进入上方输入框。 */
+      const extractTermsPreview = async () => {
         const dirs = termDirs.slice()
         if (dirs.length === 0) { setTermError('请先选择至少一个文件夹'); return }
         setTermBusy(true)
@@ -4027,40 +4068,19 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           const preview = payload?.preview ?? null
           if (!mountedRef.current) return
           if (preview === null) throw new Error('解析没有返回结果，请稍后重试')
-          const candidates = Array.isArray(preview.items) ? preview.items : []
-          const baseline = termPending !== null ? termPending.baseline : termsText
-          // 以「解析前的文本」为基线去重，重复解析不会把同一批候选叠加多次
-          const seen = new Set()
-          for (const raw of baseline.split(/\r?\n/)) {
-            const line = raw.trim()
-            if (line !== '' && !line.startsWith('#')) seen.add(line.toLowerCase())
-          }
-          const additions = []
-          for (const item of candidates) {
-            const line = String(item?.text ?? '').trim()
-            if (line === '' || line.startsWith('#') || line.length > 60) continue
-            const key = line.toLowerCase()
-            if (seen.has(key)) continue
-            seen.add(key)
-            additions.push(line)
-          }
-          const next = [baseline.trimEnd(), ...additions].filter((part) => part !== '').join('\n')
-          setTermsText(next)
-          termsTouchedRef.current = true
-          setTermPending({ baseline, added: additions.length })
+          const items = (Array.isArray(preview.items) ? preview.items : [])
+            .filter((item) => String(item?.text ?? '').trim() !== '')
+          setTermCandidates({ items, checked: items.map(() => true) })
           setTermAt(typeof preview.at === 'string' ? preview.at : '')
           setTermStats(preview.stats ?? null)
-          // 解析元数据先存下来（文件夹列表/时间/统计），条目等「纳入并保存」再写
+          // 解析元数据先存下来（文件夹列表/时间/统计），术语条目等「采纳 + 保存术语」再写
           const legacyItems = Array.isArray(settingsData?.termExtract?.items) ? settingsData.termExtract.items : []
           await requestJson('/settings', {
             method: 'PATCH',
             body: { settings: { termExtract: { dirs, at: preview.at, stats: preview.stats, items: legacyItems } } },
           }).catch(() => {})
           if (!mountedRef.current) return
-          notifySuccess(
-            '解析完成，已加入输入框',
-            '本次 ' + String(additions.length) + ' 个候选；删改后点「纳入并保存」才会写入术语库',
-          )
+          notifySuccess('解析完成', '得到 ' + String(items.length) + ' 个候选；勾选后点「采纳选中」加入上方术语表')
         } catch (caught) {
           if (mountedRef.current) setTermError(messageOf(caught))
         } finally {
@@ -4213,6 +4233,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       const transcribeMode = localTranscribeMode ?? (transcribeProvider.startsWith('cloud-') ? 'cloud' : 'local')
       const termLines = termsText.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#'))
       const termLineCount = termLines.length
+      const termCandidateCount = termCandidates === null ? 0 : termCandidates.items.length
+      const termCandidateChecked = termCandidates === null ? 0 : termCandidates.checked.filter((value) => value === true).length
+      const termCandidateAllChecked = termCandidateCount > 0 && termCandidateChecked === termCandidateCount
 
       const modelPage = h(
         'div',
@@ -4434,44 +4457,23 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             rows: 9,
             value: termsText,
             onChange: (value) => { termsTouchedRef.current = true; setTermsText(value) },
-            onBlur: () => { if (termPending === null) void saveTerms() },
-            placeholder: '每行一个术语，例如：\n智慧工地平台\nBIM\n张三\n\n解析结果会先加到同一个输入框里，删改后再点「纳入并保存」。',
+            onBlur: () => { void saveTerms() },
+            placeholder: '每行一个术语，例如：\n智慧工地平台\nBIM\n张三\n\n下方解析出的候选，勾选后点「采纳选中」会加到这里的末尾。',
           })),
           h('div', { className: 'dsm-set-cloud-actions' },
-            termPending === null
-              ? h('button', {
-                type: 'button',
-                className: 'dsm-btn',
-                disabled: termsSaving,
-                onClick: () => { void saveTerms() },
-              }, termsSaving ? '保存中…' : '保存术语')
-              : h('button', {
-                type: 'button',
-                className: 'dsm-btn dsm-btn--primary',
-                disabled: termsSaving,
-                onClick: () => { void saveTerms() },
-              }, termsSaving ? '保存中…' : '纳入并保存'),
-            termPending !== null
-              ? h('button', {
-                type: 'button',
-                className: 'dsm-btn',
-                disabled: termsSaving,
-                onClick: undoTermPending,
-              }, '撤销本次解析')
-              : null,
-            h('span', { className: 'dsm-hint' },
-              '共 ' + String(termLineCount) + ' 条'
-              + (termPending !== null ? '（含本次解析待纳入 ' + String(termPending.added) + ' 条）' : '')
-              + '；保存后自动用于转写纠错。'),
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn',
+              disabled: termsSaving,
+              onClick: () => { void saveTerms() },
+            }, termsSaving ? '保存中…' : '保存术语'),
+            h('span', { className: 'dsm-hint' }, '共 ' + String(termLineCount) + ' 条；保存后自动用于转写纠错。'),
           ),
-          termPending !== null
-            ? h('div', { className: 'dsm-hint', style: { padding: '2px 0' } }, '本次解析的候选已经加到上方输入框：删掉不要的行，点「纳入并保存」才会写入术语库；点「撤销本次解析」恢复原内容。')
-            : null,
           h('div', { className: 'dsm-set-divider' }),
           h('div', { className: 'dsm-set-subhead' },
             h('div', { className: 'dsm-set-section-head' },
               h('span', { className: 'dsm-set-section-title' }, '从文件夹提取术语'),
-              h('span', { className: 'dsm-set-section-desc' }, '可一次选多个文件夹，模型通读后抽取专业术语、系统名、机构与人名，按重要性排序（最多 50 个），解析结果会先追加到上方同一个输入框。'),
+              h('span', { className: 'dsm-set-section-desc' }, '可一次选多个文件夹，模型通读后抽取专业术语、系统名、机构与人名，按重要性排序（最多 50 个），结果显示在下方，勾选采纳后进入上方术语表。'),
             ),
           ),
           h(Field, { label: '文件夹（可多个，合并解析）' },
@@ -4517,7 +4519,7 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               type: 'button',
               className: 'dsm-btn dsm-btn--primary',
               disabled: termBusy || termDirs.length === 0,
-              onClick: () => { void extractTermsIntoBox() },
+              onClick: () => { void extractTermsPreview() },
             }, termBusy ? '解析中…' : (termDirs.length > 1 ? '解析 ' + String(termDirs.length) + ' 个文件夹' : '解析文件夹')),
             termStats !== null
               ? h('span', { className: 'dsm-hint' },
@@ -4528,6 +4530,51 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           ),
           termBusy ? h('div', { className: 'dsm-hint' }, '正在读取文件夹并请模型排序，通常 10–60 秒，请稍候…') : null,
           termError !== null ? h('div', { className: 'dsm-inline-error' }, termError) : null,
+          termCandidates !== null
+            ? h('div', { className: 'dsm-terms' },
+              h('div', { className: 'dsm-terms-head' },
+                h('span', { className: 'dsm-terms-title' }, '解析结果：' + String(termCandidateCount) + ' 个候选（勾选后采纳）'),
+                h('label', { className: 'dsm-check dsm-terms-checkall' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: termCandidateAllChecked,
+                    onChange: () => { setAllTermCandidates(!termCandidateAllChecked) },
+                  }),
+                  h('span', null, '全选'),
+                ),
+                h('span', { className: 'dsm-spacer' }),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  onClick: clearTermCandidates,
+                }, '清空候选'),
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                  disabled: termCandidateChecked === 0,
+                  onClick: adoptTermCandidates,
+                }, '采纳选中 ' + String(termCandidateChecked) + ' 个'),
+              ),
+              h('div', { className: 'dsm-term-list' },
+                ...termCandidates.items.map((item, index) => h('div', { key: 'candidate-' + String(index), className: 'dsm-term-item' },
+                  h('input', {
+                    type: 'checkbox',
+                    className: 'dsm-term-check',
+                    checked: termCandidates.checked[index] === true,
+                    onChange: () => { toggleTermCandidate(index) },
+                  }),
+                  h('span', { className: 'dsm-term-rank' }, String(index + 1)),
+                  h('span', { className: 'dsm-term-text' }, String(item?.text ?? '')),
+                  h('span', { className: 'dsm-term-cat' }, String(item?.category ?? '术语')),
+                  Number(item?.count) > 1 ? h('span', { className: 'dsm-term-count' }, '×' + String(item.count)) : null,
+                  typeof item?.evidence === 'string' && item.evidence !== ''
+                    ? h('span', { className: 'dsm-term-evidence', title: item.evidence }, item.evidence)
+                    : h('span', { className: 'dsm-term-evidence' }),
+                )),
+              ),
+              h('div', { className: 'dsm-hint', style: { padding: '7px 12px' } }, '「采纳选中」只是把术语加到上方输入框；点「保存术语」才会写入术语库。采纳过的候选会从列表移除。'),
+            )
+            : null,
         ),
         error !== null ? h('div', { className: 'dsm-inline-error' }, error) : null,
       )
