@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const installedDir = path.join(os.homedir(), '.dsh', 'profiles', 'desktop', 'node_modules', 'dsh-meeting-live')
 const pluginDir = process.argv[2] ?? (fs.existsSync(path.join(repoRoot, 'src', 'lib', 'server.js')) ? path.join(repoRoot, 'src') : installedDir)
-const { relabelSegmentsBySpeaker, buildTranscriptFromSegments } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'server.js')).href)
+const { relabelSegmentsBySpeaker, buildTranscriptFromSegments, diarizeCacheKey, readDiarizeCache, writeDiarizeCache } = await import(pathToFileURL(path.join(pluginDir, 'lib', 'server.js')).href)
 
 let failures = 0
 function check(label, condition, detail) {
@@ -91,6 +91,26 @@ function check(label, condition, detail) {
   const lines = [{ speaker: 'S4', text: 'x', start: 0, end: 30 }]
   const result = relabelSegmentsBySpeaker(segments, lines)
   check('同一说话人区间内多段标签一致', result.segments.every((s) => s.speaker === 'S4'), result.segments.map((s) => s.speaker).join(','))
+}
+
+/* 6. 声纹分离结果缓存：同一段音频重试时直接复用，不用再跑十分钟 */
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsm-diarize-cache-'))
+  const audioPath = path.join(tmpDir, 'meeting.wav')
+  fs.writeFileSync(audioPath, 'fake-audio-bytes')
+  const key1 = diarizeCacheKey(audioPath)
+  check('缓存键稳定（同文件同键）', key1 !== '' && key1 === diarizeCacheKey(audioPath), key1)
+  const lines = [{ speaker: 'S1', start: 0, end: 10 }, { speaker: 'S2', start: 10, end: 20 }]
+  const written = await writeDiarizeCache(audioPath, { numClusters: 4, speakers: 2, lines }, tmpDir)
+  check('写入缓存成功', written === true)
+  const cached = await readDiarizeCache(audioPath, tmpDir)
+  check('读回缓存的说话人数与区间', cached?.speakers === 2 && cached?.lines?.length === 2 && cached?.numClusters === 4, JSON.stringify(cached?.speakers))
+  // 音频变化后键会变（换文件等同换内容）
+  const otherPath = path.join(tmpDir, 'other.wav')
+  fs.writeFileSync(otherPath, 'another-bytes')
+  check('不同音频的缓存键不同', diarizeCacheKey(otherPath) !== key1)
+  check('没有缓存时返回 null', (await readDiarizeCache(otherPath, tmpDir)) === null)
+  fs.rmSync(tmpDir, { recursive: true, force: true })
 }
 
 console.log('')

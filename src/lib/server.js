@@ -35,7 +35,8 @@ import {
   stopScreenCapture,
   takePendingVideo,
 } from './screen.js'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
@@ -437,6 +438,55 @@ const diarizeChildren = new Map()
 const DIARIZE_MAX_MS = 30 * 60 * 1000
 /** 自动聚类超过这个人数基本是远场过度分割，界面会提示可指定人数重试。 */
 const DIARIZE_WARN_SPEAKERS = 12
+/** 声纹分离结果缓存目录：同一段音频（路径+大小+mtime 相同）重试时直接复用，避免每次再等十分钟。 */
+const DIARIZE_CACHE_DIR = join(homedir(), '.dsh', 'storages', 'meeting-minutes-diarize-cache')
+
+/**
+ * 声纹分离缓存键：音频路径 + 大小 + mtime。
+ * 音频文件没变时，同一段录音的分离结果可以直接复用。
+ * @param audioPath - 音频绝对路径。
+ * @returns 稳定缓存键（失败时返回空串）。
+ */
+export function diarizeCacheKey(audioPath) {
+  try {
+    const info = statSync(audioPath)
+    return createHash('sha1').update(String(audioPath) + '|' + String(info.size) + '|' + String(Math.round(info.mtimeMs))).digest('hex')
+  } catch {
+    return ''
+  }
+}
+
+/** 读声纹分离缓存：`{ ok: true, numClusters, speakers, lines }`，没有时返回 null。 */
+export async function readDiarizeCache(audioPath, cacheDir = DIARIZE_CACHE_DIR) {
+  const key = diarizeCacheKey(audioPath)
+  if (key === '') return null
+  try {
+    const parsed = JSON.parse(await readFile(join(cacheDir, key + '.json'), 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || parsed.ok !== true || !Array.isArray(parsed.lines)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+/** 写声纹分离缓存（失败不影响主流程）。 */
+export async function writeDiarizeCache(audioPath, payload, cacheDir = DIARIZE_CACHE_DIR) {
+  const key = diarizeCacheKey(audioPath)
+  if (key === '') return false
+  try {
+    await mkdir(cacheDir, { recursive: true })
+    await writeFile(join(cacheDir, key + '.json'), JSON.stringify({
+      ok: true,
+      numClusters: Number(payload?.numClusters) || 0,
+      speakers: Number(payload?.speakers) || 0,
+      lines: Array.isArray(payload?.lines) ? payload.lines : [],
+      createdAt: new Date().toISOString(),
+    }), 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
 
 
 /**
@@ -612,11 +662,42 @@ async function runRetranscribeJob({ deps, store, meetingId, audioPath, logger })
 }
 
 /**
+ * 把声纹分离得到的说话人区间回填到会议分段，并重建带 S1/S2 标记的转写文本。
+ * @param options - `{ store, meetingId, lines, speakers, job, logger, noteSuffix }`。
+ * @returns `{ assigned, total }`。
+ */
+async function applyDiarizeLines({ store, meetingId, lines, speakers, job, logger, noteSuffix = '' }) {
+  const rows = Array.isArray(lines) ? lines : []
+  const current = store.get(meetingId)
+  const segments = Array.isArray(current?.transcriptSegments) ? current.transcriptSegments : []
+  if (rows.length === 0) throw new Error('声纹分离没有识别出任何说话人片段（音频可能太短或太轻）')
+  if (segments.length === 0) {
+    throw new Error('这场会议还没有分段转写，无法回填说话人标签：请先点「整段重转写」再重新分离')
+  }
+  const { segments: relabeled, assigned, total } = relabelSegmentsBySpeaker(segments, rows)
+  if (relabeled === null || total === 0 || assigned < Math.max(1, Math.round(total * 0.5))) {
+    throw new Error('声纹分离结果与转写时间对不上（匹配 ' + String(assigned) + '/' + String(total) + ' 段），建议先「整段重转写」再试')
+  }
+  await store.patch(meetingId, {
+    transcriptSegments: relabeled,
+    transcript: buildTranscriptFromSegments(relabeled),
+  })
+  job.status = 'done'
+  job.stage = 'done'
+  job.speakers = Number(speakers) || [...new Set(rows.map((line) => line?.speaker).filter(Boolean))].length
+  const tooMany = job.speakers > DIARIZE_WARN_SPEAKERS
+  job.note = '已按声纹重新分离：' + String(job.speakers) + ' 位说话人，标注 ' + String(assigned) + '/' + String(total) + ' 段'
+    + (tooMany ? '。检测到的说话人数偏多（远场录音容易过度分割），可指定人数重试' : '')
+    + noteSuffix
+  return { assigned, total }
+}
+
+/**
  * 后台用声纹（pyannote + cam++）重新分离说话人：
  *   - **在独立子进程里跑**（sherpa 的分离是同步 CPU 计算，放在宿主进程会阻塞事件循环、
- *     页面拿不到进度、整个插件卡住；1 小时音频实测要 7–10 分钟）；
+ *     页面拿不到进度、整个插件卡住；1 小时音频实测约 9–10 分钟）；
  *   - 优先保留现有转写文本与时间，只给分段补 S1/S2 标签；
- *   - 已有分段太少或匹配率过低时，才用整段分离结果替换转写（沿用 shouldUseDiarizedTranscript 的保护）。
+ *   - 同一段音频算过一次就写进缓存，重试时直接复用（`readDiarizeCache`），不再等十分钟。
  */
 async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speakers = 0 }) {
   const job = diarizeJobs.get(meetingId)
@@ -631,6 +712,26 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       job.status = 'error'
       job.error = '说话人分离模型未就绪：请到设置 → 模型配置里下载 pyannote 分段与 cam++ 声纹模型'
       return
+    }
+    // 先查缓存：同一段音频算过一次就直接复用（自动/相同人数才复用，指定人数不同则重算）。
+    const cached = await readDiarizeCache(audioPath)
+    if (cached !== null && (Number(speakers) === 0 || Number(cached.numClusters) === Number(speakers))) {
+      job.stage = 'cached'
+      try {
+        await applyDiarizeLines({
+          store,
+          meetingId,
+          lines: cached.lines,
+          speakers: cached.speakers,
+          job,
+          logger,
+          noteSuffix: '（复用本机已算好的分离结果，未重新计算）',
+        })
+        logger?.info?.('meeting-minutes: diarize applied from cache (' + String(job.speakers) + ' speakers)')
+        return
+      } catch (error) {
+        logger?.warn?.('meeting-minutes: diarize cache not applicable, recomputing: ' + String(error instanceof Error ? error.message : error))
+      }
     }
     const models = deps.modelManager?.paths?.() ?? {}
     await writeFile(argsPath, JSON.stringify({
@@ -692,26 +793,16 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       throw new Error(reason)
     }
     const lines = Array.isArray(parsed.lines) ? parsed.lines : []
-    job.speakers = Number(parsed.speakers) || [...new Set(lines.map((line) => line?.speaker).filter(Boolean))].length
-    const current = store.get(meetingId)
-    const segments = Array.isArray(current?.transcriptSegments) ? current.transcriptSegments : []
-    if (lines.length === 0) throw new Error('声纹分离没有识别出任何说话人片段（音频可能太短或太轻）')
-    if (segments.length === 0) {
-      throw new Error('这场会议还没有分段转写，无法回填说话人标签：请先点「整段重转写」再重新分离')
-    }
-    const { segments: relabeled, assigned, total } = relabelSegmentsBySpeaker(segments, lines)
-    if (relabeled === null || total === 0 || assigned < Math.max(1, Math.round(total * 0.5))) {
-      throw new Error('声纹分离结果与转写时间对不上（匹配 ' + String(assigned) + '/' + String(total) + ' 段），建议先「整段重转写」再试')
-    }
-    await store.patch(meetingId, {
-      transcriptSegments: relabeled,
-      transcript: buildTranscriptFromSegments(relabeled),
+    const { assigned, total } = await applyDiarizeLines({
+      store,
+      meetingId,
+      lines,
+      speakers: parsed.speakers,
+      job,
+      logger,
     })
-    job.status = 'done'
-    job.stage = 'done'
-    const tooMany = job.speakers > DIARIZE_WARN_SPEAKERS
-    job.note = '已按声纹重新分离：' + String(job.speakers) + ' 位说话人，标注 ' + String(assigned) + '/' + String(total) + ' 段'
-      + (tooMany ? '。检测到的说话人数偏多（远场录音容易过度分割），可指定人数重试' : '')
+    // 记住这次结果，重试时直接复用（指定人数不同则走重新计算）。
+    await writeDiarizeCache(audioPath, { numClusters: Number(speakers) || 0, speakers: job.speakers, lines })
     logger?.info?.(`meeting-minutes: diarize relabeled ${assigned}/${total} segments (${job.speakers} speakers${Number(speakers) > 0 ? ', forced ' + String(speakers) : ''})`)
   } catch (error) {
     if (job.status !== 'cancelled') {
