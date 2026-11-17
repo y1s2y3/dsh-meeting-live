@@ -40,6 +40,11 @@ export const DEFAULT_SETTINGS = {
   /** 术语表：每行一个词，用于转写后的 LLM 纠错提示。 */
   terms: '',
   /**
+   * 纠错经验：每行一条领域知识 / 易错点（如「安质部（不是安置部）」），
+   * 转写纠错时作为领域参考注入提示词；只用于判断，不要求逐字照抄。
+   */
+  correctionNotes: '',
+  /**
    * 从文件夹里解析出来的术语（按重要性排序，最多 50 个）。
    * 结构：{ dir, at, items: [{ id, text, category, priority, evidence, count }], stats }
    */
@@ -51,6 +56,12 @@ export const DEFAULT_SETTINGS = {
   },
   /** 转写结束后用 LLM 做一次语境纠错（错别字/人名/术语）。 */
   correctTranscript: true,
+  /**
+   * 转写整理强度：
+   * - light（默认）：补标点、断句、改错字，不改写句式；
+   * - polish：进一步把口语整理成通顺书面句（去口头禅、合并重复），但不增删信息。
+   */
+  transcriptStyle: 'light',
   /** 纪要风格：general/review/weekly/client/retro（影响总结 prompt 的侧重）。 */
   summaryTemplate: 'general',
   /** 纠错结果先审阅（逐句对比、勾选接受）还是直接替换转写。 */
@@ -59,6 +70,15 @@ export const DEFAULT_SETTINGS = {
   preprocessAudio: true,
   /** 用声纹做真说话人分离（需要 Paraformer + pyannote + cam++ 模型就绪）。 */
   diarize: true,
+  /**
+   * 自动人数优选：自动聚类超过 4 人（明显过分割）时，补跑 4/3 人档，
+   * 用声纹质量评分选最稳的一档；耗时约为单档的 2~3 倍。
+   */
+  diarizeAutoSpeakers: true,
+  /** 相近音色二次合并（用每个说话人的声纹质心，把同一个人被拆开的簇合回去）。 */
+  diarizeMerge: true,
+  /** 二次合并阈值：质心余弦相似度 ≥ 阈值才合并；越大越保守（默认 0.68）。 */
+  diarizeMergeThreshold: 0.68,
 }
 
 function text(value, limit = 200) {
@@ -212,8 +232,12 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
       },
     },
     terms: typeof termsInput === 'string' ? termsInput.slice(0, 4000) : '',
+    correctionNotes: normalizeCorrectionNotes(input.correctionNotes === undefined ? baseInput.correctionNotes : input.correctionNotes),
     termExtract: normalizeTermExtract(input.termExtract === undefined ? baseInput.termExtract : input.termExtract),
     correctTranscript: input.correctTranscript === undefined ? baseInput.correctTranscript !== false : input.correctTranscript !== false,
+    transcriptStyle: input.transcriptStyle === 'polish' || input.transcriptStyle === 'light'
+      ? input.transcriptStyle
+      : (baseInput.transcriptStyle === 'polish' ? 'polish' : 'light'),
     reviewCorrections: input.reviewCorrections === undefined ? baseInput.reviewCorrections !== false : input.reviewCorrections !== false,
     summaryTemplate: SUMMARY_TEMPLATES.includes(String(input.summaryTemplate ?? baseInput.summaryTemplate))
       ? String(input.summaryTemplate ?? baseInput.summaryTemplate)
@@ -221,7 +245,86 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
     preprocessAudio: input.preprocessAudio === undefined ? baseInput.preprocessAudio !== false : input.preprocessAudio !== false,
     // 真说话人分离固定开启：模型就绪就自动做，没装模型时自动跳过
     diarize: true,
+    // 自动人数优选：默认开启，可在设置页关掉（关掉只跑自动聚类一次，省时间）
+    diarizeAutoSpeakers: input.diarizeAutoSpeakers === undefined
+      ? baseInput.diarizeAutoSpeakers !== false
+      : input.diarizeAutoSpeakers !== false,
+    // 相近音色二次合并：把「同一个人被拆成多个簇」按质心相似度合回去；默认开启
+    diarizeMerge: input.diarizeMerge === undefined
+      ? baseInput.diarizeMerge !== false
+      : input.diarizeMerge !== false,
+    // 合并阈值：0.55~0.85，默认 0.68（越大越保守）
+    diarizeMergeThreshold: normalizeMergeThreshold(
+      input.diarizeMergeThreshold === undefined ? baseInput.diarizeMergeThreshold : input.diarizeMergeThreshold,
+    ),
   }
+}
+
+/** 二次合并阈值归一化：0.55~0.85，非法值回落默认 0.68。 */
+function normalizeMergeThreshold(value) {
+  const threshold = Number(value)
+  if (!Number.isFinite(threshold)) return 0.68
+  return Math.min(0.85, Math.max(0.55, Math.round(threshold * 100) / 100))
+}
+
+/** 纠错经验在设置里最多保存多少字。 */
+export const CORRECTION_NOTES_MAX_CHARS = 4000
+/** 每次纠错实际注入提示词的经验字数上限（控制 token 与干扰）。 */
+export const CORRECTION_NOTES_IN_PROMPT_CHARS = 1200
+/** 最多保存多少条纠错经验。 */
+export const CORRECTION_NOTES_MAX_LINES = 60
+/** 单条纠错经验最多多少字。 */
+export const CORRECTION_NOTES_LINE_MAX_CHARS = 160
+
+/**
+ * 把「纠错经验」文本拆成条目：去空行、去 # 注释、去重、单条限长。
+ * @param value - 每行一条的文本。
+ * @returns 条目数组（保持用户书写顺序）。
+ */
+export function parseCorrectionNotes(value) {
+  if (typeof value !== 'string' || value.trim() === '') return []
+  const seen = new Set()
+  const items = []
+  for (const raw of value.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    if (line.length > CORRECTION_NOTES_LINE_MAX_CHARS) continue
+    const key = line.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push(line)
+    if (items.length >= CORRECTION_NOTES_MAX_LINES) break
+  }
+  return items
+}
+
+/** 归一化纠错经验：按条目拼回多行文本，总字数受限，保留顺序。 */
+export function normalizeCorrectionNotes(value) {
+  const items = parseCorrectionNotes(value)
+  const kept = []
+  let total = 0
+  for (const line of items) {
+    if (total + line.length > CORRECTION_NOTES_MAX_CHARS) break
+    kept.push(line)
+    total += line.length + 1
+  }
+  return kept.join('\n')
+}
+
+/**
+ * 纠错时实际注入提示词的经验文本：按顺序取，控制在
+ * CORRECTION_NOTES_IN_PROMPT_CHARS 以内，避免提示词过长。
+ */
+export function effectiveCorrectionNotes(settings) {
+  const items = parseCorrectionNotes(settings?.correctionNotes)
+  const kept = []
+  let total = 0
+  for (const line of items) {
+    if (total + line.length > CORRECTION_NOTES_IN_PROMPT_CHARS) break
+    kept.push(line)
+    total += line.length + 1
+  }
+  return kept.join('\n')
 }
 
 /** 把术语表拆成数组（去空行、去重、最多 200 条）。 */

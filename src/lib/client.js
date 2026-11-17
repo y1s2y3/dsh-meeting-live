@@ -14,7 +14,11 @@
  * Audio pipeline (browser side):
  *   - live: getUserMedia → AudioContext → ScriptProcessor(4096) → streaming
  *     resampler → 5 s PCM16 WAV chunks → rolling POST /transcribe (append).
- *   - file: decodeAudioData → 16 kHz mono → ≤90 s WAV slices → sequential POST.
+ *   - file (preferred, needs host ffmpeg): upload the whole file once →
+ *     `POST /audio/import` → host decodes with ffmpeg and transcribes slice by
+ *     slice in the background (no 60-minute browser decode limit).
+ *   - file (fallback, no ffmpeg): decodeAudioData → 16 kHz mono → ≤90 s WAV
+ *     slices → sequential POST (capped at 60 minutes of audio).
  *   The live recorder lives at module scope and survives modal/panel unmounts.
  */
 window.__ModuleLoader__.load({
@@ -36,6 +40,12 @@ window.__ModuleLoader__.load({
     const SPEECH_TIMEOUT_MS = 10 * 60 * 1000
     const TOAST_TTL_MS = 7000
     const AUDIO_MAX_SECONDS = 60 * 60
+    /**
+     * 文件导入（宿主解码模式）：整份文件交给宿主的 ffmpeg 解码，
+     * 不再受浏览器 decodeAudioData 的 60 分钟内存上限限制。
+     */
+    const IMPORT_POLL_MS = 1500
+    const IMPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
     // ── 输入设备选择（本地补丁）───────────────────────────────────────────
     // 原逻辑固定用系统默认输入设备；本机存在多个采集端（实体麦克风 / 阵列 /
@@ -382,8 +392,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-radio-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
 .dsm-radio{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .dsm-radio input{accent-color:var(--dsw-alias-button-primary-fill)}
-.dsm-file-pick{display:flex;flex-direction:column;gap:8px;border:1px dashed #D9E2F0;border-radius:10px;padding:10px;background:#FBFCFE}
-.dsm-file-first{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.dsm-file-pick{display:flex;flex-direction:column;gap:8px;border:1px dashed #D9E2F0;border-radius:10px;padding:10px;background:#FBFCFE;transition:border-color .15s ease,background .15s ease}
+.dsm-file-pick--drag{border-color:#2F6BFF;border-style:solid;background:#F2F7FF}
+.dsm-file-first{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dsm-file-drop-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:#EAF1FF;color:#2563EB}
+.dsm-file-pick--drag .dsm-file-drop-icon{background:#DCE8FF}
+.dsm-file-drop-body{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dsm-file-drop-title{font-size:12.5px;line-height:18px;font-weight:600;color:#0F172A}
+.dsm-file-drop-sub{font-size:11px;line-height:16px;color:#8A94A6}
 .dsm-file-selected{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid #E4E9F2;border-radius:10px;background:#FFFFFF}
 .dsm-file-selected .dsm-file-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:#E8F0FF;color:#2563EB}
 .dsm-file-selected .dsm-file-main{flex:1;min-width:0}
@@ -1828,7 +1844,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
     async function resampleTo16k(buffer) {
       const duration = Number(buffer.duration) || 0
       if (duration > AUDIO_MAX_SECONDS) {
-        throw new Error('音频超过 60 分钟，请分段后再导入')
+        // 只有「宿主没提供长音频导入、退回浏览器解码」时才会走到这里：一整份
+        // 长音频解进内存会占掉几个 GB，所以旧路径保留 60 分钟上限。
+        throw new Error('音频超过 60 分钟：当前没有启用宿主解码（没装 ffmpeg 或 DSH Desktop 还没重启），浏览器直接解码长音频会占满内存。装 ffmpeg 后完全退出并重启 DSH Desktop，或把音频分段后再导入。')
       }
       if (typeof OfflineAudioContext !== 'undefined') {
         try {
@@ -1971,6 +1989,62 @@ nav[aria-label="Global panels"] > button > span:last-child{
         return { text, audioSeconds, total }
       } finally {
         commit({ transcribing: null })
+      }
+    }
+
+    /**
+     * 长音频/视频导入：整份文件上传给宿主，由 ffmpeg 解码后分片识别。
+     *
+     * 与旧的「浏览器解码 → 切片 → 逐片 POST」相比：
+     * - 浏览器不再把整份音频解进内存，几小时的录音也能导入（旧做法 60 分钟就顶不住）；
+     * - 识别在宿主后台继续，页面关掉也会跑完，转写由宿主直接写进会议；
+     * - 这里只负责上传 + 轮询进度。
+     *
+     * @returns `{ cancelled, job }`；`cancelled` 表示页面已离开，任务仍在宿主继续。
+     */
+    async function importAudioViaHost(meetingId, file, options = {}) {
+      const name = encodeURIComponent(file.name || '导入音频')
+      let response
+      try {
+        response = await fetch(`${API}/meetings/${encodeURIComponent(meetingId)}/audio/import?name=${name}`, {
+          method: 'POST',
+          headers: { 'content-type': file.type || 'application/octet-stream' },
+          body: file,
+        })
+      } catch {
+        throw new Error('上传文件失败：无法连接会议纪要服务，请重新加载页面')
+      }
+      let payload = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+      if (payload === null) {
+        if (response.status === 404) throw new Error('会议纪要服务未启动，请重新加载页面')
+        throw new Error(`上传文件失败（HTTP ${response.status}）`)
+      }
+      if (payload.ok !== true) {
+        throw new Error(typeof payload.error === 'string' && payload.error !== ''
+          ? payload.error
+          : `上传文件失败（HTTP ${response.status}）`)
+      }
+      if (typeof options.onProgress === 'function') options.onProgress(payload.job ?? null)
+      const startedAt = Date.now()
+      for (;;) {
+        await sleep(IMPORT_POLL_MS)
+        // 弹窗关掉/页面切走：任务仍在宿主后台跑，转写会自己写进会议。
+        if (typeof options.isCancelled === 'function' && options.isCancelled() === true) {
+          return { cancelled: true, job: null }
+        }
+        const status = await requestJson(`/meetings/${encodeURIComponent(meetingId)}/audio/import`)
+        const job = status?.job ?? null
+        if (job === null) throw new Error('导入任务状态丢失，请重新导入')
+        if (typeof options.onProgress === 'function') options.onProgress(job)
+        if (job.status === 'done') return { cancelled: false, job }
+        if (job.status === 'failed') throw new Error(job.error || '音频转写失败')
+        if (job.status === 'idle') throw new Error('导入任务已丢失，请重新导入')
+        if (Date.now() - startedAt > 6 * 60 * 60 * 1000) throw new Error('导入超过 6 小时仍未完成，请重试')
       }
     }
 
@@ -4010,6 +4084,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
         summary: { mode: 'dsh', custom: { baseUrl: '', apiKey: '', model: '', temperature: 0.3, maxTokens: 8192 } },
         terms: '',
         correctionNotes: '',
+        transcriptStyle: 'light',
         correctTranscript: true,
         diarize: true,
       }
@@ -4671,6 +4746,38 @@ nav[aria-label="Global panels"] > button > span:last-child{
               h('span', null, '音频预处理（重转写/转码时音量归一化 + 高通滤波，需 ffmpeg）'),
             ),
           ),
+          h(Field, { label: '转写整理强度' }, h(Select, {
+            value: settings.transcriptStyle ?? 'light',
+            onChange: (value) => { void patchSettings({ transcriptStyle: value }) },
+            options: [
+              { value: 'light', label: '轻度（补标点、断句、改错字，不改句式）' },
+              { value: 'polish', label: '书面化（去口头禅、合并重复，整理成完整句）' },
+            ],
+          })),
+          h('label', { className: 'dsm-check' },
+            h('input', {
+              type: 'checkbox',
+              checked: settings.diarizeAutoSpeakers !== false,
+              onChange: (event) => { void patchSettings({ diarizeAutoSpeakers: event.target.checked }) },
+            }),
+            h('span', null, '自动人数优选（自动聚类超过 4 人时补跑 4/3 人档，选声纹质量最好的一档；耗时约 2~3 倍）'),
+          ),
+          h(Field, { label: '相近音色合并' }, h(Select, {
+            value: settings.diarizeMerge === false
+              ? 'off'
+              : String(Number(settings.diarizeMergeThreshold) > 0 ? Number(settings.diarizeMergeThreshold) : 0.68),
+            onChange: (value) => {
+              if (value === 'off') { void patchSettings({ diarizeMerge: false }) ; return }
+              void patchSettings({ diarizeMerge: true, diarizeMergeThreshold: Number(value) })
+            },
+            options: [
+              { value: 'off', label: '关闭（保留算法分出的所有说话人）' },
+              { value: '0.75', label: '严格（只合并非常像的，阈值 0.75）' },
+              { value: '0.68', label: '标准（推荐，阈值 0.68）' },
+              { value: '0.62', label: '宽松（更容易合并，阈值 0.62）' },
+            ],
+          })),
+          h('div', { className: 'dsm-hint' }, '相近音色合并：同一个人被拆成多个「说话人」时，按每人声纹质心的相似度合回去（阈值越大越保守）。只影响标签与分组，不改文字；改完阈值后对已缓存过的录音再点一次「重新分离说话人」会按新阈值重算，秒出。'),
           h('div', { className: 'dsm-hint' }, '术语会作为热词传给云端识别（腾讯云 / 阿里云支持请求级热词；讯飞热词需在讯飞控制台「个性化热词」上传，本地 Paraformer 暂不支持热词）。'),
           h('div', { className: 'dsm-set-divider' }),
           h('div', { className: 'dsm-set-subhead' },
@@ -5286,6 +5393,8 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const [fileStage, setFileStage] = useState('idle')
       const [fileError, setFileError] = useState(null)
       const [fileResult, setFileResult] = useState(null)
+      const [fileProgress, setFileProgress] = useState(null)
+      const [dragActive, setDragActive] = useState(false)
       const [processLabel, setProcessLabel] = useState('')
       const [pickedName, setPickedName] = useState('')
       const [pickedFile, setPickedFile] = useState(null)
@@ -5295,13 +5404,21 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const mountedRef = useRef(true)
       const runSeqRef = useRef(0)
       const createdRef = useRef(null)
+      // 窗口级拖拽用 ref 持有最新回调，避免每次渲染都重新绑定事件。
+      const pickFileRef = useRef(null)
 
       const speech = state.speech ?? state.data?.speech
       const speechAvailable = speechUsable(speech) || state.data?.transcribe?.ready === true
       const liveActive = liveIsActive(live)
       const liveStatus = live.status
       const fileBusy = fileStage === 'preparing' || fileStage === 'processing'
-      const dismissible = liveActive || fileStage !== 'processing'
+      // 宿主是否提供「长音频导入」（ffmpeg 解码 + /audio/import 接口）。
+      // 用 importLongAudio 而不是 ffmpegReady：旧宿主没有这个字段，前端会
+      // 自动留在旧的浏览器解码路径，避免「页面先刷新、宿主还没重启」时调到不存在的接口。
+      const hostImportReady = state.data?.screen?.importLongAudio === true
+      // 宿主导入在后台继续跑，处理中可以关掉弹窗去忙别的；浏览器兜底路径关掉就断了。
+      const canBackgroundImport = fileStage === 'processing' && hostImportReady
+      const dismissible = liveActive || fileStage !== 'processing' || canBackgroundImport
 
       // 录音一开始就收起白色弹窗：Windows 由桌面浮窗（球 + 气泡）接管，其它平台用页面底部录音条。
       useEffect(() => {
@@ -5310,6 +5427,65 @@ nav[aria-label="Global panels"] > button > span:last-child{
       }, [liveStatus])
 
       const update = (key) => (value) => setForm((previous) => ({ ...previous, [key]: value }))
+
+      /**
+       * 选中一个音频/视频文件（「选择文件」按钮与拖拽共用）：
+       * 校验类型/体积，按文件名自动生成标题，回到待转写状态。
+       */
+      function pickAudioFile(file) {
+        if (file === null || file === undefined) return
+        const name = String(file.name || '音频文件')
+        const type = String(file.type || '')
+        const byType = type.startsWith('audio/') || type.startsWith('video/')
+        const byName = /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma|amr|mp4|m4v|mov|mkv|webm|avi|3gp|ts)$/i.test(name)
+        if (!byType && !byName) {
+          setFileError('只能导入音频或视频文件（WAV / MP3 / M4A / MP4 / MOV / WebM 等）')
+          return
+        }
+        if (Number(file.size) > IMPORT_MAX_BYTES) {
+          setFileError('文件超过 2 GB，请先压缩或裁剪后再导入')
+          return
+        }
+        setPickedFile(file)
+        setPickedName(name)
+        setFileError(null)
+        setFileStage('idle')
+        setFileProgress(null)
+        update('title')(buildTitleFromFileName(name))
+      }
+      pickFileRef.current = pickAudioFile
+
+      // 弹窗停在「录音转写」页时，音频/视频可以直接拖到窗口任意位置导入。
+      // 用 window 级监听而不是只监听虚线框：拖拽落点差几像素也不会白拖一次。
+      useEffect(() => {
+        if (tab !== 'file' || fileBusy) return undefined
+        const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes('Files')
+        const onDragOver = (event) => {
+          if (!hasFiles(event)) return
+          event.preventDefault()
+          try { event.dataTransfer.dropEffect = 'copy' } catch { }
+          setDragActive(true)
+        }
+        const onDragLeave = (event) => {
+          if (event.relatedTarget === null || event.relatedTarget === undefined) setDragActive(false)
+        }
+        const onDrop = (event) => {
+          if (!hasFiles(event)) return
+          event.preventDefault()
+          setDragActive(false)
+          const files = event.dataTransfer?.files
+          if (files !== null && files !== undefined && files.length > 0) pickFileRef.current?.(files[0])
+        }
+        window.addEventListener('dragover', onDragOver)
+        window.addEventListener('dragleave', onDragLeave)
+        window.addEventListener('drop', onDrop)
+        return () => {
+          window.removeEventListener('dragover', onDragOver)
+          window.removeEventListener('dragleave', onDragLeave)
+          window.removeEventListener('drop', onDrop)
+        }
+      }, [tab, fileBusy])
+
       const [micTesting, setMicTesting] = useState(false)
       const [micLevel, setMicLevel] = useState(0)
       const micTestRef = useRef(null)
@@ -5458,6 +5634,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
         setPickedName(file.name)
         setFileError(null)
         setFileStage('preparing')
+        setFileProgress(null)
         try {
           await waitForSpeechReady()
           if (!alive()) return
@@ -5473,6 +5650,38 @@ nav[aria-label="Global panels"] > button > span:last-child{
           }
           createdRef.current = meeting.id
           setFileStage('processing')
+
+          // 首选：宿主 ffmpeg 解码（长音频没有 60 分钟上限，页面关了也能跑完）。
+          if (hostImportReady) {
+            setProcessLabel('正在上传文件…')
+            const outcome = await importAudioViaHost(meeting.id, file, {
+              isCancelled: () => !alive(),
+              onProgress: (job) => {
+                if (!alive() || job === null) return
+                setFileProgress(job)
+                setProcessLabel(job.stage === 'converting' ? '正在转码音频…' : '正在分段识别…')
+              },
+            })
+            // 页面/弹窗已经离开：宿主后台继续跑，转写会自己写进会议。
+            if (outcome.cancelled === true) return
+            const job = outcome.job
+            if (!job || Number(job.chars) <= 0) {
+              throw new Error('没有识别到文字，请确认音频中有清晰语音，或改用文本导入')
+            }
+            await refreshList()
+            await reloadMeetingQuietly(meeting.id)
+            if (!alive()) return
+            setFileResult({
+              meetingId: meeting.id,
+              chars: Number(job.chars) || 0,
+              seconds: Number(job.seconds) || 0,
+              chunks: Number(job.total) || 0,
+            })
+            setFileStage('done')
+            return
+          }
+
+          // 兜底：本机没有 ffmpeg，退回浏览器解码（此时长音频受 60 分钟上限限制）。
           setProcessLabel('正在解码音频…')
           const chunks = await audioBlobToWavChunks(file)
           if (!alive()) return
@@ -5499,6 +5708,16 @@ nav[aria-label="Global panels"] > button > span:last-child{
           setFileError(messageOf(caught))
           reportError(caught, '音频转写失败')
         }
+      }
+
+      /** 转写失败后不必删会议再重进：清掉这次建的空会议，留在弹窗里直接重试。 */
+      async function retryFileImport() {
+        const id = createdRef.current
+        createdRef.current = null
+        setFileError(null)
+        setFileProgress(null)
+        setFileStage('idle')
+        if (id !== null) await discardMeetingQuietly(id)
       }
 
       function closeModal() {
@@ -5740,18 +5959,33 @@ nav[aria-label="Global panels"] > button > span:last-child{
           h('div', { key: 'hint', className: 'dsm-hint' }, '语音模型就绪后自动转写音频文件。'),
         ]
       } else if (fileStage === 'processing') {
+        // 两条链路共用这块进度 UI：
+        // - 宿主导入（长音频）：fileProgress 由 /audio/import 轮询回来（stage=converting/transcribing）；
+        // - 浏览器兜底：state.transcribing 是逐片 POST 的进度。
         const active = state.transcribing
+        const progress = active !== null
+          ? { stage: 'transcribing', done: active.index, total: active.total, chars: active.chars, seconds: 0 }
+          : fileProgress
+        const transcribing = progress !== null && progress.stage === 'transcribing'
+        const total = progress !== null ? Number(progress.total) || 0 : 0
+        const done = progress !== null ? Number(progress.done) || 0 : 0
+        const chars = progress !== null ? Number(progress.chars) || 0 : 0
+        const seconds = progress !== null ? Number(progress.seconds) || 0 : 0
         body = [
           h(
             'div',
             { key: 'processing', className: 'dsm-record-stage' },
             h('span', { className: 'dsm-spin dsm-spin--lg' }),
-            h('div', { className: 'dsm-stage-title' }, active !== null ? '正在转写音频文件' : (processLabel || '正在处理音频')),
-            active !== null
-              ? h('div', { className: 'dsm-stage-text' }, `正在识别第 ${Math.min(active.index + 1, active.total)} / ${active.total} 段 · 已识别 ${formatChars(active.chars)}`)
-              : h('div', { className: 'dsm-stage-text' }, processLabel),
-            active !== null ? h(ProgressBar, { ratio: active.total > 0 ? active.index / active.total : 0 }) : null,
-            h('div', { className: 'dsm-hint' }, '文件转写可能需要几分钟，完成后会自动保存到会议。'),
+            h('div', { className: 'dsm-stage-title' }, transcribing ? '正在转写音频文件' : (processLabel || '正在处理音频')),
+            transcribing && total > 0
+              ? h('div', { className: 'dsm-stage-text' }, `正在识别第 ${Math.min(done + 1, total)} / ${total} 段 · 已识别 ${formatChars(chars)}${seconds > 0 ? ` · 音频总长 ${formatDuration(seconds)}` : ''}`)
+              : h('div', { className: 'dsm-stage-text' }, seconds > 0
+                ? `音频总长 ${formatDuration(seconds)}，正在切分…`
+                : (processLabel || '正在处理音频')),
+            transcribing && total > 0 ? h(ProgressBar, { ratio: done / total }) : null,
+            h('div', { className: 'dsm-hint' }, hostImportReady
+              ? '长音频识别要一段时间：可以关掉这个窗口去忙别的，识别在后台继续，完成后自动写进会议。'
+              : '文件转写需要几分钟，请保持页面打开。'),
           ),
         ]
       } else if (fileStage === 'done' && fileResult !== null) {
@@ -5768,7 +6002,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
       } else if (fileStage === 'error') {
         body = [
           h('div', { key: 'file-error', className: 'dsm-inline-error' }, fileError ?? '音频转写失败'),
-          h('div', { key: 'file-hint', className: 'dsm-hint' }, '可以改用「导入纪要」粘贴文本，或删除本次会议后重试。'),
+          h('div', { key: 'file-hint', className: 'dsm-hint' }, '点「重试」会清掉这次建的会议、保留已选文件，直接再转一次；也可以改用「导入纪要」粘贴文本。'),
         ]
       } else {
         body = [
@@ -5781,7 +6015,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
               { className: 'dsm-record-mode-body' },
               h('div', { className: 'dsm-record-mode-title' }, tab === 'file' ? '录音转写' : '实时录音/录屏'),
               h('div', { className: 'dsm-record-mode-text' }, tab === 'file'
-                ? '导入已有的音频 / 视频文件，自动转成文字并保存到会议'
+                ? (hostImportReady
+                  ? '导入已有的音频 / 视频文件：不限 60 分钟，自动转成文字并保存到会议'
+                  : '导入已有的音频 / 视频文件，自动转成文字并保存到会议（当前最长 60 分钟）')
                 : '打开麦克风边说边出字，关闭弹窗后仍在后台录音'),
             ),
           ),
@@ -5948,7 +6184,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
             { key: 'hint', className: 'dsm-rec-tip' },
             tab === 'record'
               ? '麦克风选择会记住；识别不出文字时，可先切换设备再试说一句。'
-              : '文件转写使用浏览器解码 → 16kHz 单声道 PCM16 WAV → 90 秒切片逐段识别；支持 WAV / MP3 / M4A / MP4 / WebM。',
+              : (hostImportReady
+                ? '整份文件交给本机 ffmpeg 解码 → 16kHz 单声道 → 分段识别：不限 60 分钟，几小时的录音也能导入（≤2 GB）；识别在后台进行，完成后自动存进会议。支持 WAV / MP3 / M4A / MP4 / MOV / WebM。'
+                : '当前没有启用「宿主长音频导入」（没装 ffmpeg，或 DSH Desktop 还没重启）：只能走浏览器解码，最长 60 分钟。装 ffmpeg（winget install Gyan.FFmpeg）后完全退出并重启 DSH Desktop，长音频即可直接导入。支持 WAV / MP3 / M4A / MP4 / WebM。'),
           ),
 
           speechAvailable
@@ -5962,22 +6200,28 @@ nav[aria-label="Global panels"] > button > span:last-child{
           tab === 'file'
             ? h(
               'div',
-              { key: 'file', className: 'dsm-file-pick' },
+              { key: 'file', className: 'dsm-file-pick' + (dragActive ? ' dsm-file-pick--drag' : '') },
               pickedFile === null
                 ? h('div', { className: 'dsm-file-first' },
+                  h('span', { className: 'dsm-file-drop-icon' }, h(Icon, { name: 'upload', size: 18 })),
+                  h('div', { className: 'dsm-file-drop-body' },
+                    h('div', { className: 'dsm-file-drop-title' }, dragActive ? '松开鼠标即可导入这个文件' : '把音频 / 视频文件拖到这里'),
+                    h('div', { className: 'dsm-file-drop-sub' }, hostImportReady
+                      ? '不限 60 分钟，最长 2 GB · 也可以点右侧按钮选择'
+                      : '未启用宿主导入，最长 60 分钟 · 也可以点右侧按钮选择'),
+                  ),
                   h('button', {
                     type: 'button',
                     className: 'dsm-btn dsm-btn--primary',
                     onClick: () => { fileRef.current?.click() },
                     disabled: !speechAvailable || fileBusy,
                   }, h(Icon, { name: 'upload', size: 13 }), h('span', null, '选择音频 / 视频文件')),
-                  h('span', { className: 'dsm-hint' }, '先选文件，标题会自动根据文件名生成（可修改），再点开始转写'),
                 )
                 : h('div', { className: 'dsm-file-selected' },
                   h('span', { className: 'dsm-file-icon' }, h(Icon, { name: 'doc', size: 14 })),
                   h('div', { className: 'dsm-file-main' },
                     h('div', { className: 'dsm-file-name' }, pickedFile.name),
-                    h('div', { className: 'dsm-file-meta' }, '已选择文件 · ' + Math.max(1, Math.round(pickedFile.size / 1024)) + ' KB'),
+                    h('div', { className: 'dsm-file-meta' }, '已选择文件 · ' + formatBytes(pickedFile.size) + (hostImportReady ? ' · 支持长音频' : ' · 最长 60 分钟')),
                   ),
                   h('button', {
                     type: 'button',
@@ -5990,19 +6234,17 @@ nav[aria-label="Global panels"] > button > span:last-child{
                 ref: fileRef,
                 type: 'file',
                 className: 'dsm-hidden',
-                accept: 'audio/*,video/*,.m4a,.mp4,.wav,.mp3,.webm',
+                accept: 'audio/*,video/*,.m4a,.mp4,.mov,.mkv,.wav,.mp3,.webm,.aac,.flac,.ogg',
                 onChange: (event) => {
                   const file = event.target.files?.[0]
                   event.target.value = ''
-                  if (!file) return
-                  setPickedFile(file)
-                  setPickedName(file.name)
-                  setFileError(null)
-                  setFileStage('idle')
-                  update('title')(buildTitleFromFileName(file.name))
+                  pickAudioFile(file)
                 },
               }),
             )
+            : null,
+          tab === 'file' && fileError !== null && fileStage !== 'error'
+            ? h('div', { key: 'file-pick-error', className: 'dsm-inline-error' }, fileError)
             : null,
           localError !== null
             ? h('div', { key: 'local-error', className: 'dsm-inline-error' }, localError)
@@ -6088,7 +6330,16 @@ nav[aria-label="Global panels"] > button > span:last-child{
           h('button', { key: 'cancel', type: 'button', className: 'dsm-btn', onClick: closeModal }, '取消'),
         ]
       } else if (fileStage === 'processing') {
-        footer = [h('span', { key: 'hint', className: 'dsm-hint' }, '正在处理，请保持页面打开…')]
+        footer = hostImportReady
+          ? [
+            h('button', {
+              key: 'background',
+              type: 'button',
+              className: 'dsm-btn',
+              onClick: closeModal,
+            }, '关闭窗口（后台继续识别）'),
+          ]
+          : [h('span', { key: 'hint', className: 'dsm-hint' }, '正在处理，请保持页面打开…')]
       } else if (fileStage === 'done' && fileResult !== null) {
         footer = [
           h('button', { key: 'close', type: 'button', className: 'dsm-btn', onClick: closeAfterFileDone }, '完成'),
@@ -6106,6 +6357,12 @@ nav[aria-label="Global panels"] > button > span:last-child{
       } else if (fileStage === 'error') {
         footer = [
           h('button', { key: 'fallback', type: 'button', className: 'dsm-btn', onClick: fallbackToTextImport }, '改用文本导入'),
+          h('button', {
+            key: 'retry',
+            type: 'button',
+            className: 'dsm-btn dsm-btn--primary',
+            onClick: () => { void retryFileImport() },
+          }, pickedFile === null ? '返回重选文件' : '重试转写'),
           h('button', { key: 'delete', type: 'button', className: 'dsm-btn dsm-btn--danger', onClick: deleteFileMeeting }, '删除会议并关闭'),
         ]
       } else {
@@ -6970,11 +7227,15 @@ nav[aria-label="Global panels"] > button > span:last-child{
           const countText = counts === null
             ? ''
             : '（' + Object.entries(counts).map(([label, value]) => (label === '（空）' ? '未标注 ' : label + ' ') + String(value) + ' 段').join('、') + '）'
+          const merge = diarizing.merge !== null && typeof diarizing.merge === 'object' ? diarizing.merge : null
+          const mergeText = merge === null
+            ? ''
+            : '相近音色合并 ' + String(Number(merge.before) || 0) + ' → ' + String(Number(merge.after) || 0) + ' 人。'
           const note = typeof diarizing.note === 'string' && diarizing.note !== '' ? ' ' + diarizing.note : ''
           if (mode === 'turns') {
             return {
               tone: 'ok',
-              text: '已按说话人切句：' + String(speakers) + ' 位说话人，一行一句。' + countText + ' 点「说话人重命名」可改成真实姓名。',
+              text: '已按说话人切句：' + String(speakers) + ' 位说话人，一行一句。' + countText + (mergeText === '' ? '' : ' ' + mergeText) + ' 点「说话人重命名」可改成真实姓名。',
               spin: false,
               actions: null,
             }
@@ -6992,7 +7253,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
           }
           return {
             tone: 'ok',
-            text: '已按音色重新分离：共 ' + String(speakers) + ' 位说话人（S1、S2…）。' + countText + note + ' 点「说话人重命名」可改成真实姓名。',
+            text: '已按音色重新分离：共 ' + String(speakers) + ' 位说话人（S1、S2…）。' + countText + (mergeText === '' ? '' : ' ' + mergeText) + note + ' 点「说话人重命名」可改成真实姓名。',
             spin: false,
             actions: null,
           }
@@ -8064,7 +8325,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
             if (status === 'done') {
               window.clearInterval(timer)
               void loadMeeting(diarizeMeetingId, { silent: true, quiet: true }).catch(() => {})
-              finish({ meetingId: diarizeMeetingId, phase: 'done', speakers: Number(job.speakers) || 0, mode: job.mode === 'turns' ? 'turns' : 'relabel' })
+              finish({ meetingId: diarizeMeetingId, phase: 'done', speakers: Number(job.speakers) || 0, mode: job.mode === 'turns' ? 'turns' : 'relabel', counts: job.counts ?? null, merge: job.merge ?? null, note: typeof job.note === 'string' ? job.note : null })
               return
             }
             if (status === 'error' || status === 'cancelled') {
@@ -8449,6 +8710,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
                   forcedSpeakers: forced,
                   mode,
                   counts: current.counts !== null && typeof current.counts === 'object' ? current.counts : null,
+                  merge: current.merge !== null && typeof current.merge === 'object' ? current.merge : null,
                 })
                 await refreshAll()
                 await loadMeeting(id, { quiet: true }).catch(() => {})

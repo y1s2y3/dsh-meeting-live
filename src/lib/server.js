@@ -26,6 +26,7 @@ import {
   validateSummaryCustom,
 } from './settings.js'
 import { scanFolders } from './term-extract.js'
+import { describeMerge, mergeSpeakerClusters } from './speaker-merge.js'
 import {
   dropTempVideo,
   isCapturing,
@@ -36,15 +37,18 @@ import {
   stopScreenCapture,
   takePendingVideo,
 } from './screen.js'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { createWriteStream, existsSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { CURRENT_VERSION, checkForUpdate } from './update-check.js'
+import { chooseBestCandidate } from './speaker-quality.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -430,6 +434,308 @@ export function mergeRetranscribeTexts(texts) {
   return lines.join('\n')
 }
 
+/* ── 音频/视频文件导入（长音频）：宿主 ffmpeg 解码，不受浏览器内存上限 ──
+ *
+ * 旧做法是浏览器 `decodeAudioData` 把整份文件解成内存里的 AudioBuffer：
+ * 1 小时立体声 44.1kHz 就要约 1.3 GB，所以只能硬性限制 60 分钟。
+ * 现在改成「整份上传 → 宿主 ffmpeg 只解音频轨成 16kHz 单声道 WAV →
+ * 按片识别」，内存里始终只有一片（几 MB），几小时的录音/录像都能处理。
+ * 识别完成的转写由宿主直接写进会议，页面关掉也会继续跑完。
+ */
+
+/** 进行中的文件导入任务：meetingId → { status, stage, done, total, chars, seconds, error } */
+const importAudioJobs = new Map()
+/** 导入文件体积上限：2 GB（ffmpeg 只解音频轨，几小时会议视频通常远小于它）。 */
+export const IMPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
+/** 切片长度：本地引擎 90 秒；云端一句话识别单次 ≤60 秒（腾讯/阿里），取 55 秒。 */
+const IMPORT_LOCAL_SLICE_SECONDS = 90
+const IMPORT_CLOUD_SLICE_SECONDS = 55
+/** 临时文件名前缀；正常结束即删，进程被杀留下的由启动时 sweep 清理。 */
+const IMPORT_TEMP_PREFIX = '.import-'
+/** 生成文件超过这个时长就认为卡死，主动停止。 */
+const IMPORT_CONVERT_TIMEOUT_MS = 30 * 60 * 1000
+
+/** 把请求体流式写到磁盘：几百 MB 的文件不在内存里再复制一份。 */
+async function streamBodyToFile(req, targetPath, limit = IMPORT_MAX_BYTES) {
+  const declared = Number(req.headers?.['content-length'] ?? 0)
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new Error(`文件超过 ${Math.round(limit / 1024 / 1024 / 1024)} GB 上限，请先压缩或裁剪后再导入`)
+  }
+  await mkdir(dirname(targetPath), { recursive: true })
+  let size = 0
+  const limiter = new Transform({
+    transform(chunk, _encoding, callback) {
+      size += chunk.length
+      if (size > limit) {
+        callback(new Error(`文件超过 ${Math.round(limit / 1024 / 1024 / 1024)} GB 上限，请先压缩或裁剪后再导入`))
+        return
+      }
+      callback(null, chunk)
+    },
+  })
+  // 测试里的 req 是异步迭代器而不是 stream，Readable.from 能同时兼容两种形态。
+  const source = typeof req.pipe === 'function' ? req : Readable.from(req)
+  try {
+    await pipeline(source, limiter, createWriteStream(targetPath))
+  } catch (error) {
+    await rm(targetPath, { force: true }).catch(() => { })
+    throw error
+  }
+  return size
+}
+
+/** 用宿主 ffmpeg 把任意音频/视频文件转成 16kHz 单声道 PCM16 WAV（只解音频轨）。 */
+async function decodeAudioToWav(sourcePath, targetPath) {
+  const ffmpeg = findFfmpeg()
+  if (ffmpeg === null) {
+    throw new Error('本机没有找到 ffmpeg，无法解码音频/视频文件。请先安装 ffmpeg（Windows：winget install Gyan.FFmpeg），或改用「导入纪要」粘贴文本。')
+  }
+  const args = [
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+    '-i', sourcePath,
+    '-vn', '-sn', '-dn',
+    '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
+    '-map_metadata', '-1',
+    targetPath,
+  ]
+  // stderr 写到文件而不是管道：宿主沙箱里「管道 + 子进程」会 EPERM，
+  // 文件描述符则没问题；顺带把 ffmpeg 的真实报错留给失败提示。
+  const logPath = `${targetPath}.ffmpeg.log`
+  const logHandle = await open(logPath, 'w')
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'ignore', logHandle.fd] })
+      const timer = setTimeout(() => {
+        try { child.kill() } catch { }
+        reject(new Error('音频解码超过 30 分钟仍未结束，已停止（请先裁剪或转成 MP3 再导入）'))
+      }, IMPORT_CONVERT_TIMEOUT_MS)
+      child.once('error', (error) => { clearTimeout(timer); reject(error) })
+      child.once('exit', (code) => {
+        clearTimeout(timer)
+        if (code === 0) { resolve(); return }
+        readFile(logPath, 'utf8').then((text) => {
+          const detail = String(text).trim().split('\n').map((line) => line.trim()).filter(Boolean).pop() ?? ''
+          reject(new Error('音频/视频解码失败（ffmpeg 退出码 ' + String(code) + '）'
+            + (detail === '' ? '，请确认文件里有音轨' : '：' + detail.slice(0, 300))))
+        }, () => {
+          reject(new Error('音频/视频解码失败（ffmpeg 退出码 ' + String(code) + '）'))
+        })
+      })
+    })
+  } finally {
+    await logHandle.close().catch(() => { })
+    await rm(logPath, { force: true }).catch(() => { })
+  }
+}
+
+/** 读 WAV 头，拿到 data 起点与总帧数；只读头部，不把整份音频读进内存。 */
+async function readWavLayout(filePath) {
+  const handle = await open(filePath, 'r')
+  try {
+    const fileSize = (await handle.stat()).size
+    const head = Buffer.alloc(Math.min(1024 * 1024, Math.max(44, fileSize)))
+    const { bytesRead } = await handle.read(head, 0, head.length, 0)
+    if (bytesRead < 44 || head.toString('ascii', 0, 4) !== 'RIFF' || head.toString('ascii', 8, 12) !== 'WAVE') {
+      throw new Error('音频转码结果不是有效的 WAV 文件')
+    }
+    let offset = 12
+    let format = null
+    let dataOffset = -1
+    let dataBytes = -1
+    while (offset + 8 <= bytesRead) {
+      const id = head.toString('ascii', offset, offset + 4)
+      const size = head.readUInt32LE(offset + 4)
+      const body = offset + 8
+      if (id === 'fmt ') {
+        format = {
+          channels: head.readUInt16LE(body + 2),
+          sampleRate: head.readUInt32LE(body + 4),
+          bitsPerSample: head.readUInt16LE(body + 14),
+        }
+      } else if (id === 'data') {
+        dataOffset = body
+        dataBytes = Math.min(size, Math.max(0, fileSize - body))
+        break
+      }
+      offset = body + size + (size % 2)
+    }
+    if (format === null || dataOffset < 0 || dataBytes < 0) throw new Error('音频转码结果缺少 WAV 头信息')
+    if (format.sampleRate !== 16000 || format.channels !== 1 || format.bitsPerSample !== 16) {
+      throw new Error(`音频转码结果格式异常（${format.sampleRate} Hz / ${format.channels} 声道 / ${format.bitsPerSample} bit）`)
+    }
+    return {
+      dataOffset,
+      sampleRate: format.sampleRate,
+      samples: Math.floor(dataBytes / 2),
+      fileSize,
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+/** 从磁盘按帧范围读出一片，并补上 canonical 44 字节 WAV 头。 */
+async function readWavSlice(filePath, layout, startFrame, endFrame) {
+  const frames = Math.max(0, Math.min(layout.samples, endFrame) - Math.max(0, startFrame))
+  const payloadBytes = frames * 2
+  const buffer = Buffer.alloc(44 + payloadBytes)
+  buffer.write('RIFF', 0, 'ascii')
+  buffer.writeUInt32LE(36 + payloadBytes, 4)
+  buffer.write('WAVE', 8, 'ascii')
+  buffer.write('fmt ', 12, 'ascii')
+  buffer.writeUInt32LE(16, 16)
+  buffer.writeUInt16LE(1, 20)
+  buffer.writeUInt16LE(1, 22)
+  buffer.writeUInt32LE(16000, 24)
+  buffer.writeUInt32LE(32000, 28)
+  buffer.writeUInt16LE(2, 32)
+  buffer.writeUInt16LE(16, 34)
+  buffer.write('data', 36, 'ascii')
+  buffer.writeUInt32LE(payloadBytes, 40)
+  if (payloadBytes > 0) {
+    const handle = await open(filePath, 'r')
+    try {
+      let read = 0
+      const position = layout.dataOffset + Math.max(0, startFrame) * 2
+      while (read < payloadBytes) {
+        const result = await handle.read(buffer, 44 + read, payloadBytes - read, position + read)
+        if (result.bytesRead <= 0) break
+        read += result.bytesRead
+      }
+      if (read < payloadBytes) buffer.writeUInt32LE(read, 40)
+    } finally {
+      await handle.close()
+    }
+  }
+  return buffer
+}
+
+/**
+ * 识别一片 16kHz 单声道 PCM16 WAV，按当前转写引擎路由。
+ * 空结果（静音片）降级成空文本而不抛错，与实时转写、整段重转写保持一致。
+ */
+async function transcribeWavBytes({ deps, store, bytes, language, providerId, logger }) {
+  const transcribeSettings = store.settings.transcribe
+  const engine = transcribeSettings.provider
+  try {
+    if (engine === 'paraformer-local' && deps.paraformer !== undefined && deps.paraformer !== null && deps.paraformer.available() === true) {
+      return await deps.paraformer.transcribeWav(bytes)
+    }
+    if (engine.startsWith('cloud-') === true) {
+      const cloudKey = engine.replace('cloud-', '')
+      const cloudResult = await deps.cloudAsr.transcribeCloud({
+        provider: cloudKey,
+        config: transcribeSettings.cloud[cloudKey] ?? {},
+        wavBuffer: bytes,
+        // 术语表直接作为云端 ASR 热词（腾讯/阿里支持请求级热词；讯飞需控制台配置）
+        hotwords: effectiveTerms(store.settings),
+      })
+      if (cloudResult.ok !== true) throw new Error(cloudResult.error ?? '云端语音识别失败')
+      const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
+      return { text: cloudResult.text, audioSeconds: Math.round(audioSeconds * 100) / 100, inferenceSeconds: 0 }
+    }
+    return await deps.asr.transcribeWav(bytes, { language, providerId })
+  } catch (error) {
+    // 静音片、被中断的分片、刚开头还没开口都属于正常现象：按空结果继续，
+    // 否则一片失败会让整场导入中断。真故障仍然抛出并写日志。
+    const failureMessage = error instanceof Error ? error.message : String(error)
+    const benignFailure = failureMessage === '语音识别没有识别出任何文字'
+      || failureMessage === '音频数据无效'
+      || failureMessage === '音频数据不是 WAV 格式'
+      || failureMessage === '只支持 16bit PCM WAV'
+      || failureMessage === '音频数据里没有找到 PCM 数据段'
+    if (!benignFailure) {
+      logger?.warn?.(`meeting-minutes: transcribe failed: ${failureMessage}`)
+      throw error
+    }
+    const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
+    logger?.info?.(`meeting-minutes: chunk had no usable audio (${audioSeconds.toFixed(1)}s, ${failureMessage}); keeping the session`)
+    return { text: '', audioSeconds: Math.round(audioSeconds * 100) / 100, inferenceSeconds: 0 }
+  }
+}
+
+/** 后台跑一次文件导入：转码 → 按片识别 → 把转写写进会议。 */
+async function runImportAudioJob({ deps, store, meetingId, sourcePath, logger }) {
+  const job = importAudioJobs.get(meetingId)
+  const directory = dirname(sourcePath)
+  const wavPath = join(directory, `${IMPORT_TEMP_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`)
+  try {
+    if (job === undefined) return
+    job.stage = 'converting'
+    logger?.info?.(`meeting-minutes: import ${meetingId} converting ${Math.round((Number(job.bytes) || 0) / 1048576)}MB`)
+    await decodeAudioToWav(sourcePath, wavPath)
+    const layout = await readWavLayout(wavPath)
+    const seconds = layout.samples / layout.sampleRate
+    if (!(seconds > 0.3)) throw new Error('音频太短，无法识别')
+    job.seconds = Math.round(seconds)
+    job.stage = 'transcribing'
+    const provider = String(store.settings?.transcribe?.provider ?? '')
+    const sliceSeconds = provider.startsWith('cloud-') ? IMPORT_CLOUD_SLICE_SECONDS : IMPORT_LOCAL_SLICE_SECONDS
+    const slices = planRetranscribeSlices(layout.samples, layout.sampleRate, sliceSeconds)
+    job.total = slices.length
+    logger?.info?.(`meeting-minutes: import ${meetingId} decoding done (${job.seconds}s, ${job.total} slices)`)
+    const texts = []
+    for (const slice of slices) {
+      if (store.get(meetingId) === null) throw new Error('这场会议已被删除，导入已停止')
+      const wav = await readWavSlice(wavPath, layout, slice.startFrame, slice.endFrame)
+      const result = await transcribeWavBytes({ deps, store, bytes: wav, logger })
+      const text = String(result?.text ?? '').replace(/\s+/g, ' ').trim()
+      if (text !== '') texts.push(text)
+      job.done += 1
+      job.chars = mergeRetranscribeTexts(texts).length
+    }
+    const text = mergeRetranscribeTexts(texts)
+    if (text === '') throw new Error('没有识别到文字，请确认音频中有清晰语音，或改用文本导入')
+    await store.patch(meetingId, { transcript: text, transcriptSeconds: Math.round(seconds) })
+    job.chars = text.length
+    job.status = 'done'
+    job.stage = 'done'
+    job.finishedAt = Date.now()
+    logger?.info?.(`meeting-minutes: import ${meetingId} done (${job.chars} chars, ${job.total} slices)`)
+  } catch (error) {
+    if (job !== undefined) {
+      job.status = 'failed'
+      job.stage = 'failed'
+      job.error = error instanceof Error ? error.message : String(error)
+      job.finishedAt = Date.now()
+    }
+    logger?.warn?.(`meeting-minutes: import failed: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    await rm(wavPath, { force: true }).catch(() => { })
+    await rm(sourcePath, { force: true }).catch(() => { })
+  }
+}
+
+/** 进程被杀会留下临时文件；启动时清掉 6 小时前的残留（长任务保护期）。 */
+function sweepStaleImportFiles(logger) {
+  try {
+    const root = mediaRoot()
+    if (!existsSync(root)) return
+    const cutoff = Date.now() - 6 * 60 * 60 * 1000
+    for (const name of readdirSync(root)) {
+      const directory = join(root, name)
+      let entries = []
+      try {
+        entries = readdirSync(directory)
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (!entry.startsWith(IMPORT_TEMP_PREFIX)) continue
+        const full = join(directory, entry)
+        try {
+          if (statSync(full).mtimeMs < cutoff) void rm(full, { force: true }).catch(() => { })
+        } catch {
+          // 单个文件删不掉不影响启动。
+        }
+      }
+    }
+  } catch (error) {
+    logger?.warn?.(`meeting-minutes: sweep import temp files failed: ${String(error?.message ?? error)}`)
+  }
+}
+
+
 /* ── 声纹重新分离（给已有分段补 S1/S2 标签） ─────────────────────────── */
 /** 进行中的声纹分离任务：meetingId → { status, stage, speakers, error, note, startedAt } */
 const diarizeJobs = new Map()
@@ -482,6 +788,8 @@ export async function writeDiarizeCache(audioPath, payload, cacheDir = DIARIZE_C
       speakers: Number(payload?.speakers) || 0,
       lines: Array.isArray(payload?.lines) ? payload.lines : [],
       textLines: Array.isArray(payload?.textLines) ? payload.textLines : [],
+      quality: payload?.quality !== null && typeof payload?.quality === 'object' ? payload.quality : null,
+      speakerEmbeddings: payload?.speakerEmbeddings !== null && typeof payload?.speakerEmbeddings === 'object' ? payload.speakerEmbeddings : null,
       createdAt: new Date().toISOString(),
     }), 'utf8')
     return true
@@ -565,14 +873,50 @@ export function relabelSegmentsBySpeaker(segments, lines) {
 }
 
 /** 由分段重建带说话人标记的转写全文（与 store 的自愈逻辑保持一致）。 */
-export function buildTranscriptFromSegments(segments) {
-  return (Array.isArray(segments) ? segments : [])
+export function buildTranscriptFromSegments(segments, options = {}) {
+  const merged = options.mergeSpeakerTurns === true ? mergeSegmentsBySpeaker(segments) : null
+  return (merged !== null ? merged : (Array.isArray(segments) ? segments : []))
     .map((segment) => {
       const speaker = typeof segment?.speaker === 'string' ? segment.speaker.trim() : ''
       const text = String(segment?.text ?? '')
       return speaker === '' ? text : `${speaker}：${text}`
     })
     .join('\n')
+}
+
+/**
+ * 合并「连续同一说话人」的分段：更接近听悟那种「一段发言」的排版。
+ *
+ * 说明：只合并相邻且同一 speaker 的段；中间隔太久（默认 5 分钟）或换人就开新段，
+ * 所以插话、来回讨论仍保留原来的说话人顺序。
+ *
+ * @param segments - `[{ speaker, text, at }]`。
+ * @param options - `{ maxGapSeconds }`：超过这个间隔就开新段。
+ */
+export function mergeSegmentsBySpeaker(segments, options = {}) {
+  const rows = Array.isArray(segments) ? segments : []
+  const maxGapSeconds = Number(options.maxGapSeconds) > 0 ? Number(options.maxGapSeconds) : 300
+  const merged = []
+  let previousAt = null
+  for (const segment of rows) {
+    const speaker = typeof segment?.speaker === 'string' ? segment.speaker.trim() : ''
+    const text = String(segment?.text ?? '').trim()
+    if (text === '') continue
+    const at = Number(segment?.at)
+    const hasAt = Number.isFinite(at)
+    const previous = merged[merged.length - 1]
+    const gapTooLarge = previous !== undefined && previousAt !== null && hasAt && at - previousAt > maxGapSeconds
+    if (previous !== undefined && previous.speaker === speaker && !gapTooLarge) {
+      // 同一人连续发言：拼成一段；原文没有结尾标点时补一个句号，避免两句连在一起。
+      const needsJoiner = !/[。！？；，、]$/.test(previous.text) && !/^[。！？；，、]/.test(text)
+      previous.text = previous.text + (needsJoiner ? '。' : '') + text
+      if (hasAt) previousAt = at
+      continue
+    }
+    merged.push({ ...segment, speaker, text })
+    previousAt = hasAt ? at : null
+  }
+  return merged
 }
 
 /** Float32（[-1,1]，16k 单声道）→ PCM16 WAV Buffer。 */
@@ -710,7 +1054,7 @@ async function applyDiarizeLines({ store, meetingId, lines, speakers, job, logge
   }
   await store.patch(meetingId, {
     transcriptSegments: relabeled,
-    transcript: buildTranscriptFromSegments(relabeled),
+    transcript: buildTranscriptFromSegments(relabeled, { mergeSpeakerTurns: true }),
   })
   job.status = 'done'
   job.stage = 'done'
@@ -731,6 +1075,25 @@ function countSpeakers(segments) {
     counts[key] = (counts[key] || 0) + 1
   }
   return counts
+}
+
+/**
+ * 按设置把「同一个人被拆成多个簇」合并回去（相近音色二次合并）。
+ * @param options - `{ lines, centers, settings }`。
+ * @returns `{ lines, merge }`；没有可合并内容时 merge 为 null。
+ */
+function mergeDiarizePayload({ lines, centers, settings }) {
+  const rows = Array.isArray(lines) ? lines : []
+  if (settings?.diarizeMerge === false) return { lines: rows, merge: null }
+  if (centers === null || centers === undefined) return { lines: rows, merge: null }
+  const threshold = Number(settings?.diarizeMergeThreshold) > 0 ? Number(settings.diarizeMergeThreshold) : 0.68
+  try {
+    const merged = mergeSpeakerClusters({ lines: rows, centers, threshold })
+    if (merged.merged !== true) return { lines: rows, merge: null }
+    return { lines: merged.lines, merge: { before: merged.before, after: merged.after, threshold, groups: merged.groups } }
+  } catch {
+    return { lines: rows, merge: null }
+  }
 }
 
 /**
@@ -768,6 +1131,93 @@ export async function applyTurnLines({ store, meetingId, lines, speakers, job, l
 }
 
 /**
+ * 跑一次声纹分离子进程（自动人数优选会对同一段音频跑多档）。
+ *
+ * @param options - `{ audioPath, models, numClusters, splitTurns, job, logger, meetingId }`。
+ * @returns 子进程写出的结果 `{ ok, speakers, lines, quality, speakerEmbeddings }`。
+ */
+async function runDiarizeWorkerOnce({ audioPath, models, numClusters, splitTurns, job, logger, meetingId }) {
+  const outputPath = join(tmpdir(), 'dsh-diarize-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.json')
+  const argsPath = outputPath + '.args.json'
+  let child = null
+  let stderrTail = ''
+  try {
+    await writeFile(argsPath, JSON.stringify({
+      audioPath,
+      models,
+      numClusters: Number(numClusters) > 0 ? Math.round(Number(numClusters)) : 0,
+      outputPath,
+      splitTurns,
+    }), 'utf8')
+    const workerPath = fileURLToPath(new URL('./diarize-worker.js', import.meta.url))
+    job.stage = 'starting'
+    try {
+      child = spawn(process.execPath, [workerPath, argsPath], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (error) {
+      throw new Error('无法启动声纹分离进程：' + (error instanceof Error ? error.message : String(error)))
+    }
+    diarizeChildren.set(meetingId, child)
+    child.stdout?.on('data', (chunk) => {
+      const text = String(chunk)
+      if (text.includes('STAGE loading')) job.stage = 'loading'
+      if (text.includes('STAGE diarizing')) job.stage = 'diarizing'
+      if (text.includes('STAGE embedding')) job.stage = 'embedding'
+      for (const line of text.split('\n')) {
+        if (line.startsWith('STAGE transcribing')) {
+          job.stage = 'transcribing'
+          const match = /(\d+)\s*\/\s*(\d+)/.exec(line)
+          if (match !== null) {
+            job.transcribeDone = Number(match[1])
+            job.transcribeTotal = Number(match[2])
+          }
+        }
+        if (line.startsWith('STAGE done')) job.stage = splitTurns ? 'rebuilding' : 'relabeling'
+      }
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderrTail = (stderrTail + String(chunk)).slice(-800)
+    })
+    const exited = await new Promise((resolve) => {
+      let settled = false
+      const finish = (value) => { if (!settled) { settled = true; resolve(value) } }
+      child.on('error', (error) => finish({ code: -1, errorMessage: error instanceof Error ? error.message : String(error) }))
+      child.on('exit', (code) => finish({ code }))
+      setTimeout(() => {
+        try { child.kill() } catch { /* ignore */ }
+        finish({ code: -2, timeout: true })
+      }, DIARIZE_MAX_MS)
+    })
+    diarizeChildren.delete(meetingId)
+    if (job.status === 'cancelled') throw new Error('已取消声纹分离（原转写保持不变）')
+    if (exited.timeout === true) throw new Error('声纹分离超过 ' + String(Math.round(DIARIZE_MAX_MS / 60000)) + ' 分钟仍未结束，已停止（可改用指定人数重试）')
+    let parsed = null
+    try {
+      parsed = JSON.parse(await readFile(outputPath, 'utf8'))
+    } catch {
+      parsed = null
+    }
+    if (parsed === null || parsed.ok !== true) {
+      const reason = parsed !== null && typeof parsed.error === 'string' && parsed.error !== ''
+        ? parsed.error
+        : (stderrTail.trim() !== '' ? stderrTail.trim().split('\n').slice(-2).join(' ') : '分离进程异常退出（code ' + String(exited.code) + '）')
+      throw new Error(reason)
+    }
+    return parsed
+  } finally {
+    if (child !== null) {
+      diarizeChildren.delete(meetingId)
+      try { child.kill() } catch { /* already exited */ }
+    }
+    await rm(outputPath, { force: true }).catch(() => {})
+    await rm(argsPath, { force: true }).catch(() => {})
+  }
+}
+
+/**
  * 后台用声纹（pyannote + cam++）重新分离说话人：
  *   - **在独立子进程里跑**（sherpa 的分离是同步 CPU 计算，放在宿主进程会阻塞事件循环、
  *     页面拿不到进度、整个插件卡住；1 小时音频实测约 9–10 分钟）；
@@ -795,22 +1245,29 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
     if (cachedMatch) {
       job.stage = 'cached'
       try {
+        const cachedSettings = store.settings
         if (splitTurns) {
           // 切句模式需要带文本的缓存；没有就回落到 worker 重新算。
           if (Array.isArray(cached.textLines) && cached.textLines.length > 0) {
-            await applyTurnLines({ store, meetingId, lines: cached.textLines, speakers: cached.speakers, job, logger })
+            const mergedTurns = mergeDiarizePayload({ lines: cached.textLines, centers: cached.speakerEmbeddings, settings: cachedSettings })
+            if (mergedTurns.merge !== null) job.merge = mergedTurns.merge
+            await applyTurnLines({ store, meetingId, lines: mergedTurns.lines, speakers: cached.speakers, job, logger })
+            if (job.merge !== undefined && job.merge !== null) job.note = String(job.note ?? '') + '（' + describeMerge(job.merge) + '）'
             logger?.info?.('meeting-minutes: diarize turns applied from cache (' + String(job.speakers) + ' speakers)')
             return
           }
         } else {
+          const mergedLines = mergeDiarizePayload({ lines: cached.lines, centers: cached.speakerEmbeddings, settings: cachedSettings })
+          if (mergedLines.merge !== null) job.merge = mergedLines.merge
           await applyDiarizeLines({
             store,
             meetingId,
-            lines: cached.lines,
+            lines: mergedLines.lines,
             speakers: cached.speakers,
             job,
             logger,
-            noteSuffix: '（复用本机已算好的分离结果，未重新计算）',
+            noteSuffix: '（复用本机已算好的分离结果，未重新计算）'
+              + (job.merge !== undefined && job.merge !== null ? '（' + describeMerge(job.merge) + '）' : ''),
           })
           logger?.info?.('meeting-minutes: diarize applied from cache (' + String(job.speakers) + ' speakers)')
           return
@@ -820,82 +1277,55 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       }
     }
     const models = deps.modelManager?.paths?.() ?? {}
-    await writeFile(argsPath, JSON.stringify({
-      audioPath,
-      models,
-      numClusters: Number(speakers) > 0 ? Math.round(Number(speakers)) : 0,
-      outputPath,
-      splitTurns,
-    }), 'utf8')
-    const workerPath = fileURLToPath(new URL('./diarize-worker.js', import.meta.url))
-    job.stage = 'starting'
-    let exited = null
-    try {
-      child = spawn(process.execPath, [workerPath, argsPath], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      })
-    } catch (error) {
-      throw new Error('无法启动声纹分离进程：' + (error instanceof Error ? error.message : String(error)))
-    }
-    diarizeChildren.set(meetingId, child)
-    child.stdout?.on('data', (chunk) => {
-      const text = String(chunk)
-      if (text.includes('STAGE loading')) job.stage = 'loading'
-      if (text.includes('STAGE diarizing')) job.stage = 'diarizing'
-      for (const line of text.split('\n')) {
-        if (line.startsWith('STAGE transcribing')) {
-          job.stage = 'transcribing'
-          const match = /(\d+)\s*\/\s*(\d+)/.exec(line)
-          if (match !== null) {
-            job.transcribeDone = Number(match[1])
-            job.transcribeTotal = Number(match[2])
-          }
+    const requestedClusters = Number(speakers) > 0 ? Math.round(Number(speakers)) : 0
+    const autoSpeakers = requestedClusters === 0 && !splitTurns
+      && store.settings?.diarizeAutoSpeakers !== false
+    let usedClusters = requestedClusters
+    let parsed = await runDiarizeWorkerOnce({ audioPath, models, numClusters: requestedClusters, splitTurns, job, logger, meetingId })
+    // 自动人数优选：首档是自动聚类；若明显过分割（>4 人），补跑 4/3 人档，按声纹质量选最优。
+    if (autoSpeakers && parsed.quality !== null && parsed.quality !== undefined
+      && Number(parsed.quality.embedded) > 0 && Number(parsed.quality.speakers) > 4) {
+      const candidates = [{ parsed, numClusters: 0 }]
+      for (const forced of [4, 3]) {
+        if (forced >= Number(parsed.quality?.speakers ?? 0)) continue
+        if (job.status === 'cancelled') break
+        job.stage = 'diarizing ' + String(forced) + ' 人'
+        try {
+          const candidate = await runDiarizeWorkerOnce({ audioPath, models, numClusters: forced, splitTurns, job, logger, meetingId })
+          if (candidate.quality !== null && candidate.quality !== undefined) candidates.push({ parsed: candidate, numClusters: forced })
+        } catch (error) {
+          logger?.warn?.('meeting-minutes: diarize auto candidate failed (' + String(forced) + '): ' + String(error instanceof Error ? error.message : error))
         }
-        if (line.startsWith('STAGE done')) job.stage = splitTurns ? 'rebuilding' : 'relabeling'
       }
-    })
-    child.stderr?.on('data', (chunk) => {
-      stderrTail = (stderrTail + String(chunk)).slice(-800)
-    })
-    exited = await new Promise((resolve) => {
-      let settled = false
-      const finish = (value) => { if (!settled) { settled = true; resolve(value) } }
-      child.on('error', (error) => finish({ code: -1, errorMessage: error instanceof Error ? error.message : String(error) }))
-      child.on('exit', (code) => finish({ code }))
-      setTimeout(() => {
-        try { child.kill() } catch { /* ignore */ }
-        finish({ code: -2, timeout: true })
-      }, DIARIZE_MAX_MS)
-    })
-    diarizeChildren.delete(meetingId)
-    if (job.status === 'cancelled') {
-      job.error = '已取消声纹分离（原转写保持不变）'
-      return
+      const best = chooseBestCandidate(candidates)
+      if (best !== null && best.parsed !== parsed) {
+        logger?.info?.('meeting-minutes: diarize auto picked ' + String(best.numClusters) + ' clusters (score '
+          + String(best.parsed.quality?.score) + ' vs ' + String(parsed.quality?.score) + ')')
+        parsed = best.parsed
+        usedClusters = best.numClusters
+      }
     }
-    if (exited.timeout === true) throw new Error('声纹分离超过 ' + String(Math.round(DIARIZE_MAX_MS / 60000)) + ' 分钟仍未结束，已停止（可改用指定人数重试）')
-    let parsed = null
-    try {
-      parsed = JSON.parse(await readFile(outputPath, 'utf8'))
-    } catch {
-      parsed = null
+    const rawLines = Array.isArray(parsed.lines) ? parsed.lines : []
+    // 相近音色二次合并：用每个说话人的声纹质心，把同一个人被拆开的簇合回去。
+    const mergedPayload = mergeDiarizePayload({ lines: rawLines, centers: parsed.speakerEmbeddings, settings: store.settings })
+    const lines = mergedPayload.lines
+    if (mergedPayload.merge !== null) {
+      job.merge = mergedPayload.merge
+      job.speakers = mergedPayload.merge.after
+      logger?.info?.('meeting-minutes: ' + describeMerge(mergedPayload.merge))
     }
-    if (parsed === null || parsed.ok !== true) {
-      const reason = parsed !== null && typeof parsed.error === 'string' && parsed.error !== ''
-        ? parsed.error
-        : (stderrTail.trim() !== '' ? stderrTail.trim().split('\n').slice(-2).join(' ') : '分离进程异常退出（code ' + String(exited.code) + '）')
-      throw new Error(reason)
-    }
-    const lines = Array.isArray(parsed.lines) ? parsed.lines : []
     if (splitTurns) {
-      await applyTurnLines({ store, meetingId, lines, speakers: parsed.speakers, job, logger })
+      await applyTurnLines({ store, meetingId, lines, speakers: job.speakers || parsed.speakers, job, logger })
+      if (job.merge !== undefined && job.merge !== null) job.note = String(job.note ?? '') + '（' + describeMerge(job.merge) + '）'
       // 缓存里同时保存「回合区间」与「带文本的逐句结果」，下次切句可直接复用。
+      // 注意：缓存的是**合并前**的原始簇 + 质心，这样以后改阈值也能直接复用缓存重新合并。
       await writeDiarizeCache(audioPath, {
-        numClusters: Number(speakers) || 0,
-        speakers: job.speakers,
-        lines: lines.map((line) => ({ speaker: line.speaker, start: line.start, end: line.end })),
-        textLines: lines.map((line) => ({ speaker: line.speaker, text: line.text, start: line.start, end: line.end })),
+        numClusters: usedClusters,
+        speakers: parsed.speakers,
+        lines: rawLines.map((line) => ({ speaker: line.speaker, start: line.start, end: line.end })),
+        textLines: rawLines.map((line) => ({ speaker: line.speaker, text: line.text, start: line.start, end: line.end })),
+        quality: parsed.quality ?? null,
+        speakerEmbeddings: parsed.speakerEmbeddings ?? null,
       })
       return
     }
@@ -903,12 +1333,19 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       store,
       meetingId,
       lines,
-      speakers: parsed.speakers,
+      speakers: job.speakers || parsed.speakers,
       job,
       logger,
     })
-    // 记住这次结果，重试时直接复用（指定人数不同则走重新计算）。
-    await writeDiarizeCache(audioPath, { numClusters: Number(speakers) || 0, speakers: job.speakers, lines })
+    if (job.merge !== undefined && job.merge !== null) job.note = String(job.note ?? '') + '（' + describeMerge(job.merge) + '）'
+    // 记住这次结果，重试时直接复用（指定人数不同则走重新计算）。同样缓存合并前的原始簇。
+    await writeDiarizeCache(audioPath, {
+      numClusters: usedClusters,
+      speakers: parsed.speakers,
+      lines: rawLines,
+      quality: parsed.quality ?? null,
+      speakerEmbeddings: parsed.speakerEmbeddings ?? null,
+    })
     logger?.info?.(`meeting-minutes: diarize relabeled ${assigned}/${total} segments (${job.speakers} speakers${Number(speakers) > 0 ? ', forced ' + String(speakers) : ''})`)
   } catch (error) {
     if (job.status !== 'cancelled') {
@@ -1002,6 +1439,10 @@ export async function buildState(deps) {
     // 宿主能否找到 ffmpeg：录屏 / 非 WAV 音视频转码依赖它，首次引导据此提示安装
     screen: {
       ffmpegReady: findFfmpeg() !== null,
+      // 浏览器据此决定「录音转写」走宿主解码（长音频、不限 60 分钟）还是旧的浏览器解码。
+      // 用单独字段而不是 ffmpegReady：页面先刷新、宿主还没重启时，旧宿主没有这个字段，
+      // 前端会自动留在旧路径，不会调到不存在的接口。
+      importLongAudio: findFfmpeg() !== null,
       platform: process.platform,
     },
     calendar: calendarStatus,
@@ -1030,6 +1471,9 @@ function requireMeeting(store, id) {
  */
 export function registerRoutes(ctx, deps) {
   const { store, asr, summarizer, calendar, autoIngest, logger } = deps
+
+  // 清掉上次进程被杀时留下的导入临时文件（异步删，不阻塞启动）。
+  sweepStaleImportFiles(logger)
 
     /** 后台把刚上传的 WebM 转成 MP4，成功后替换媒体条目并删掉 WebM。 */
     async function convertMeetingVideo(meetingId, sourcePath, sourceName, seconds) {
@@ -1631,47 +2075,7 @@ export function registerRoutes(ctx, deps) {
         const providerId = url.searchParams.get('provider') ?? undefined
         const bytes = await readRawBody(req)
         if (bytes.length === 0) throw new Error('音频为空：没有收到可识别的数据。')
-        const transcribeSettings = store.settings.transcribe
-        const engine = transcribeSettings.provider
-        let result
-        try {
-          if (engine === 'paraformer-local' && deps.paraformer !== undefined && deps.paraformer.available() === true) {
-            result = await deps.paraformer.transcribeWav(bytes)
-          } else if (engine.startsWith('cloud-') === true) {
-            const cloudKey = engine.replace('cloud-', '')
-            const cloudResult = await deps.cloudAsr.transcribeCloud({
-              provider: cloudKey,
-              config: transcribeSettings.cloud[cloudKey] ?? {},
-              wavBuffer: bytes,
-              // 术语表直接作为云端 ASR 热词（腾讯/阿里支持请求级热词；讯飞需控制台配置）
-              hotwords: effectiveTerms(store.settings),
-            })
-            if (cloudResult.ok !== true) throw new Error(cloudResult.error ?? '云端语音识别失败')
-            const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
-            result = { text: cloudResult.text, audioSeconds: Math.round(audioSeconds * 100) / 100, inferenceSeconds: 0 }
-          } else {
-            result = await asr.transcribeWav(bytes, { language, providerId })
-          }
-        } catch (error) {
-          // 实时转写是每 5 秒切一片滚动送识别的；某一片里没有可识别语音
-          // （静音、环境噪声、说话太轻、刚点录音还没开口）属于正常现象，
-          // 识别服务把它当致命错误会让整场录音当场中断，这里降级成空结果继续。
-          // 另外个别分片可能因请求被中断、音频头不完整而解码失败，同理按空结果处理。
-          const failureMessage = error instanceof Error ? error.message : String(error)
-          const benignFailure = failureMessage === '语音识别没有识别出任何文字'
-            || failureMessage === '音频数据无效'
-            || failureMessage === '音频数据不是 WAV 格式'
-            || failureMessage === '只支持 16bit PCM WAV'
-            || failureMessage === '音频数据里没有找到 PCM 数据段'
-          if (!benignFailure) {
-            // 真故障写进宿主日志，便于事后定位（原插件在这里静默抛出）。
-            logger?.warn?.(`meeting-minutes: transcribe failed: ${failureMessage}`)
-            throw error
-          }
-          const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
-          logger?.info?.(`meeting-minutes: chunk had no usable audio (${audioSeconds.toFixed(1)}s, ${failureMessage}); keeping the session`)
-          result = { text: '', audioSeconds: Math.round(audioSeconds * 100) / 100, inferenceSeconds: 0 }
-        }
+        const result = await transcribeWavBytes({ deps, store, bytes, language, providerId, logger })
         const updated = await store.appendTranscript(id, result.text, result.audioSeconds)
         sendJson(res, 200, {
           ok: true,
@@ -1681,6 +2085,54 @@ export function registerRoutes(ctx, deps) {
           transcript: updated?.transcript ?? '',
           transcriptSeconds: updated?.transcriptSeconds ?? 0,
         })
+        return
+      }
+
+      // 音频/视频文件导入（长音频）：POST 上传并启动后台任务，GET 查进度。
+      // 宿主用 ffmpeg 分片解码+识别，不占浏览器内存，也不受 60 分钟上限限制；
+      // 识别完成的转写直接写进会议，页面关掉也会继续跑完。
+      if (segments.length === 4 && segments[2] === 'audio' && segments[3] === 'import' && (method === 'POST' || method === 'GET')) {
+        requireMeeting(store, id)
+        if (method === 'GET') {
+          const job = importAudioJobs.get(id)
+          sendJson(res, 200, {
+            ok: true,
+            job: job === undefined
+              ? { status: 'idle', stage: 'idle', done: 0, total: 0, chars: 0, seconds: 0 }
+              : { ...job },
+          })
+          return
+        }
+        const running = importAudioJobs.get(id)
+        if (running !== undefined && running.status === 'running') {
+          sendJson(res, 200, { ok: true, job: { ...running } })
+          return
+        }
+        if (findFfmpeg() === null) {
+          throw new Error('本机没有找到 ffmpeg，无法解码音频/视频文件。请先安装 ffmpeg（Windows：winget install Gyan.FFmpeg）后重启 DSH Desktop，或改用「导入纪要」粘贴文本。')
+        }
+        const name = safeMediaName(url.searchParams.get('name'), '导入音频')
+        const directory = join(mediaRoot(), id)
+        await mkdir(directory, { recursive: true })
+        const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const sourcePath = join(directory, `${IMPORT_TEMP_PREFIX}${stamp}-${name}`)
+        const bytes = await streamBodyToFile(req, sourcePath)
+        if (bytes === 0) throw new Error('没有收到文件内容')
+        const job = {
+          status: 'running',
+          stage: 'converting',
+          done: 0,
+          total: 0,
+          chars: 0,
+          seconds: 0,
+          bytes,
+          error: null,
+          startedAt: Date.now(),
+        }
+        importAudioJobs.set(id, job)
+        // 先返回：上传/转码/识别都在响应之后进行，长音频不会让请求超时。
+        sendJson(res, 200, { ok: true, job: { ...job } })
+        void runImportAudioJob({ deps, store, meetingId: id, sourcePath, logger })
         return
       }
 
@@ -1981,6 +2433,7 @@ export function registerRoutes(ctx, deps) {
                     selection: store.summaryModel,
                     terms: effectiveTerms(settingsNow),
                     notes: effectiveCorrectionNotes(settingsNow),
+                    style: settingsNow.transcriptStyle,
                     context: correctionContext,
                     custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
                   })
