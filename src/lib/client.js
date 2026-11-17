@@ -812,8 +812,9 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-file-action:disabled{opacity:.5;cursor:not-allowed}
 .dsm-file-action--primary{border-color:#2563EB;background:#2563EB;color:#FFFFFF}
 .dsm-file-action--primary:hover:not(:disabled){border-color:#1D4ED8;background:#1D4ED8;color:#FFFFFF}
-/* 会议文件操作结果提示：「已打开 / 没找到文件 / 打开失败」 */
-.dsm-file-status{grid-column:1 / -1;font-size:11.5px;line-height:17px;color:#15803D;background:#F2FBF5;border:1px solid #CFEAD8;border-radius:9px;padding:6px 10px}
+/* 会议文件操作结果提示：「已打开 / 没找到文件 / 打开失败」。
+   注意：它渲染在 .dsm-files 网格之外（放里面会被 auto-fit 当成第二列，只有音频时会把文件行挤成半宽）。 */
+.dsm-file-status{margin-top:8px;font-size:11.5px;line-height:17px;color:#15803D;background:#F2FBF5;border:1px solid #CFEAD8;border-radius:9px;padding:6px 10px}
 .dsm-file-status--error{color:#B91C1C;background:#FEF2F2;border-color:#FBD5D5}
 
 /* ── 浅灰底 + 白色/浅蓝主题 ── */
@@ -6405,10 +6406,20 @@ nav[aria-label="Global panels"] > button > span:last-child{
           else showStatus({ kind, mode, phase: 'error', note: result.error ?? '文件打不开（可能已被移动或删除）' })
         }
       }
+      // 状态提示必须放在 .dsm-files 网格**外面**：网格是 auto-fit 列布局，
+      // 多塞一个子项会把它算成第二列，只有音频时文件行就只剩半行宽（点击后变窄的根因）。
+      const statusNode = status === null || status.phase === 'busy'
+        ? null
+        : h('div', {
+          className: 'dsm-file-status' + (status.phase === 'error' ? ' dsm-file-status--error' : ''),
+        }, status.note)
       return h(
-        'div',
-        { className: 'dsm-files' },
-        ...media.map((item, index) => {
+        React.Fragment,
+        null,
+        h(
+          'div',
+          { className: 'dsm-files' },
+          ...media.map((item, index) => {
           const isVideo = item.kind === 'video'
           const converting = item.converting === true
           const metaParts = [isVideo ? '视频' : '音频']
@@ -6454,12 +6465,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
               h('span', null, busy === 'reveal' ? '打开中…' : '查看目录')),
             ),
           )
-        }),
-        status === null || status.phase === 'busy'
-          ? null
-          : h('div', {
-            className: 'dsm-file-status' + (status.phase === 'error' ? ' dsm-file-status--error' : ''),
-          }, status.note),
+          }),
+        ),
+        statusNode,
       )
     }
 
