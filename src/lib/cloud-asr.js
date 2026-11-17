@@ -537,7 +537,9 @@ export function buildTencentHotwordList(hotwords) {
   const seen = new Set()
   for (const raw of Array.isArray(hotwords) ? hotwords : []) {
     const text = String(raw ?? '').replace(/[,|，；;]/g, '').trim()
+    // 腾讯约束：单个热词不超过 10 个汉字；超长词下发会被服务端判参数错误，这里直接跳过
     if (text === '' || text.length > 30 || seen.has(text)) continue
+    if (/[\u4e00-\u9fa5]/.test(text) && text.length > 10) continue
     seen.add(text)
     items.push(text + '|5')
     if (items.length >= 128) break

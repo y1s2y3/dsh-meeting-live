@@ -155,6 +155,7 @@ const originalWebSocket = globalThis.WebSocket
   check('腾讯云请求到 asr.tencentcloudapi.com', calls.length === 1 && calls[0].url.replace(/\/+$/, '') === 'https://asr.tencentcloudapi.com', calls[0]?.url)
   check('腾讯云请求体 VoiceFormat=pcm（回归修复）', calls[0]?.body.VoiceFormat === 'pcm', String(calls[0]?.body.VoiceFormat))
   check('腾讯云术语作为临时热词表（HotwordList）下发', String(calls[0]?.body.HotwordList ?? '') === '智慧工地平台|5,BIM|5,张三带逗号|5', String(calls[0]?.body.HotwordList))
+  check('腾讯云热词过滤超长中文词（避免服务端参数错误）', cloud.buildTencentHotwordList(['智慧工地平台', '这是一个超过十个汉字的超长术语']) === '智慧工地平台|5', cloud.buildTencentHotwordList(['智慧工地平台', '这是一个超过十个汉字的超长术语']))
   check('腾讯云请求体 SourceType=1、DataLen=PCM 长度、引擎 16k_zh', calls[0]?.body.SourceType === 1 && calls[0]?.body.DataLen === wav.length - 44 && calls[0]?.body.EngSerViceType === '16k_zh', JSON.stringify({ source: calls[0]?.body.SourceType, len: calls[0]?.body.DataLen }))
   check('腾讯云 Authorization 为 TC3-HMAC-SHA256', String(calls[0]?.options.headers.Authorization).startsWith('TC3-HMAC-SHA256 Credential=AKIDtest/'), String(calls[0]?.options.headers.Authorization).slice(0, 48))
   check('腾讯云结果去除首尾空白', result.ok === true && result.text === '腾讯云识别结果', JSON.stringify(result))
