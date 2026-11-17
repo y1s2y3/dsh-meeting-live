@@ -63,8 +63,9 @@ node tests/smoke-update-check.mjs   # 版本更新检查（版本比较 / npm �
 node tests/smoke-summary-rich.mjs   # 详细纪要结构：新字段规范化、prompt 要求、Word/HTML/Markdown 导出
 node tests/smoke-terms.mjs          # 文件夹术语提取：扫描 txt/docx、排序去重、设置归一化、前端入口
 node tests/smoke-accuracy.mjs       # 转写准确率：录音质量分析、纠错 diff、说话人重命名、prompt/导出映射
-node tests/smoke-transcript-live.mjs # 原始转写卡片：默认展开、录音实时条（计时/字数/暂停/停止）、声纹分离进度
+node tests/smoke-transcript-live.mjs # 原始转写卡片：默认展开、时间戳、录音实时条（计时/字数/暂停/停止）、声纹分离进度
 node tests/preview-transcript-live.mjs # 视觉预览：把「录音中 / 分离完成」两种状态渲染成静态 HTML（配 dsh-browser 截图）
+node tests/smoke-diarize-label.mjs  # 声纹分离结果 → 已有分段的说话人标签回填（时间容差/最近起点/文本重建）
 node tests/smoke-media-reveal.mjs   # 查看目录/播放：explorer 参数编码、不隐藏窗口、退出码 0/1 判定
 node tests/smoke-files-layout.mjs   # 会议文件行：只有音频时保持整行宽，操作提示渲染在网格外
 node tests/preview-files-layout.mjs # 视觉预览：文件行 + 状态条的排版（配 dsh-browser 截图）

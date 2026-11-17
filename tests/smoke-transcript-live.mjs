@@ -166,6 +166,49 @@ check('原始转写默认展开（dsm-transcript-lines--open）', hasClass(expan
 check('分段行按说话人渲染', classes(expandedTree).filter((name) => name.includes('dsm-speaker ')).length >= 2
   || classes(expandedTree).some((name) => name.includes('dsm-speaker--d')), JSON.stringify(classes(expandedTree).slice(0, 12)))
 check('有分段时不会出现「收起」态提示', !hasClass(expandedTree, 'dsm-transcript-live'))
+check('每一段都显示时间戳（mm:ss）', classes(expandedTree).filter((name) => name.includes('dsm-transcript-time')).length === 2
+  && joinedText(expandedTree).includes('00:00') && joinedText(expandedTree).includes('00:05'), JSON.stringify(classes(expandedTree).slice(0, 12)))
+const diarizeButtonTree = render(hooks.TranscriptSection, {
+  transcript: 'A：x', segments, speakerNames: {}, live: null, diarizing: null, hasAudio: true, onDiarize() {},
+})
+/** 操作按钮在 Section 组件的 props.actions 里（函数组件不展开），需要按 props.title 找到它。 */
+function sectionActionsText(tree, title) {
+  const stack = [tree]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (node === null || node === undefined) continue
+    if (Array.isArray(node)) { stack.push(...node); continue }
+    if (typeof node !== 'object' || node.isElement !== true) continue
+    if (node.props?.title === title) return joinedText(node.props?.actions)
+    stack.push(node.props?.children)
+  }
+  return ''
+}
+const diarizeActionsText = sectionActionsText(diarizeButtonTree, '原始转写')
+const plainActionsText = sectionActionsText(expandedTree, '原始转写')
+check('传了 onDiarize 且有音频时显示「重新分离说话人」', !plainActionsText.includes('重新分离说话人')
+  && diarizeActionsText.includes('重新分离说话人'), diarizeActionsText.slice(0, 120))
+check('没有音频文件时不显示「重新分离说话人」', !plainActionsText.includes('重新分离说话人'), plainActionsText.slice(0, 120))
+
+/* 1.b 长会议时间戳带小时位；没有 at 的旧数据不显示时间 */
+{
+  const hoursTree = render(hooks.TranscriptSection, {
+    transcript: 'A：x\nB：y',
+    segments: [{ speaker: 'A', text: '第一段', at: 3725 }, { speaker: 'B', text: '第二段', at: 60 }],
+    speakerNames: {},
+    live: null,
+    diarizing: null,
+  })
+  check('超过 1 小时显示 1:02:05', joinedText(hoursTree).includes('1:02:05'), joinedText(hoursTree).slice(0, 80))
+  const legacyTree = render(hooks.TranscriptSection, {
+    transcript: 'A：x',
+    segments: [{ speaker: 'A', text: '旧数据没有时间' }],
+    speakerNames: {},
+    live: null,
+    diarizing: null,
+  })
+  check('旧分段没有 at 时不显示假时间', classes(legacyTree).filter((name) => name.includes('dsm-transcript-time')).length === 0)
+}
 
 /* 2. 录音中：实时条 + 计时 + 已转写字数 + 暂停/停止按钮 */
 const liveTree = render(hooks.TranscriptSection, {
@@ -202,7 +245,7 @@ const runningTree = render(hooks.TranscriptSection, {
   live: null,
   diarizing: { phase: 'running' },
 })
-check('声纹分离进行中显示进度条文案', joinedText(runningTree).includes('正在按声纹重新分离说话人'))
+check('声纹分离进行中显示进度条文案', joinedText(runningTree).includes('正在用声纹（音色）重新分离说话人'))
 
 const doneTree = render(hooks.TranscriptSection, {
   transcript: 'S1：一\nS2：二',
@@ -211,7 +254,7 @@ const doneTree = render(hooks.TranscriptSection, {
   live: null,
   diarizing: { phase: 'done', speakers: 2 },
 })
-check('声纹分离完成提示人数', joinedText(doneTree).includes('已按声纹重新分离') && joinedText(doneTree).includes('2 位说话人'), joinedText(doneTree).slice(-160))
+check('声纹分离完成提示人数', joinedText(doneTree).includes('已按音色重新分离') && joinedText(doneTree).includes('2 位说话人'), joinedText(doneTree).slice(-160))
 check('S1/S2 标签不再提示「A/B/C/D 估算」', !joinedText(doneTree).includes('A/B/C/D 为按音色自动分组'), joinedText(doneTree).slice(-200))
 
 const timeoutTree = render(hooks.TranscriptSection, {
@@ -222,6 +265,15 @@ const timeoutTree = render(hooks.TranscriptSection, {
   diarizing: { phase: 'timeout' },
 })
 check('声纹分离超时给出黄色提示', hasClass(timeoutTree, 'dsm-transcript-status--warn') && joinedText(timeoutTree).includes('声纹分离还没完成'))
+
+const errorTree = render(hooks.TranscriptSection, {
+  transcript: 'A：一\nD：二',
+  segments,
+  speakerNames: {},
+  live: null,
+  diarizing: { phase: 'error', note: '说话人分离模型未就绪' },
+})
+check('声纹分离失败显示原因', hasClass(errorTree, 'dsm-transcript-status--warn') && joinedText(errorTree).includes('说话人分离模型未就绪'), joinedText(errorTree).slice(-120))
 
 /* 4. 录音中即使一个字都还没识别，MeetingDocument 也渲染原始转写卡片 */
 const meeting = {

@@ -428,6 +428,66 @@ export function mergeRetranscribeTexts(texts) {
   return lines.join('\n')
 }
 
+/* ── 声纹重新分离（给已有分段补 S1/S2 标签，或整段替换） ─────────────────── */
+/** 进行中的声纹分离任务：meetingId → { status, speakers, error, note, startedAt } */
+const diarizeJobs = new Map()
+
+/**
+ * 用声纹分离结果给**已有转写分段**打说话人标签（保留原有文字与时间，不重写文本）。
+ *
+ * @param segments - `[{ speaker, text, at }]`，`at` 是距录音开始的秒数。
+ * @param lines - 声纹分离结果 `[{ speaker: 'S1', start, end, text }]`。
+ * @returns `{ segments, assigned, total }`；没有可用区间时 segments 为 null。
+ */
+export function relabelSegmentsBySpeaker(segments, lines) {
+  const rows = Array.isArray(segments) ? segments : []
+  const ranges = (Array.isArray(lines) ? lines : [])
+    .map((line) => {
+      const speaker = typeof line?.speaker === 'string' ? line.speaker.trim() : ''
+      const start = Number(line?.start)
+      const end = Number(line?.end)
+      if (speaker === '' || !Number.isFinite(start)) return null
+      return { speaker, start: Math.max(0, start), end: Number.isFinite(end) ? Math.max(start, end) : start }
+    })
+    .filter((range) => range !== null)
+  if (ranges.length === 0) return { segments: null, assigned: 0, total: 0 }
+  let assigned = 0
+  const next = rows.map((segment) => {
+    const at = Number(segment?.at)
+    if (!Number.isFinite(at) || at < 0) return { ...segment }
+    // 1) 落在某条声纹区间的起止范围内（前后各留 2 秒容差）
+    let hit = ranges.find((range) => at >= range.start - 2 && at <= range.end + 2)
+    // 2) 没命中就找最近的区间起点（6 秒内），避免切片边界造成整段没标签
+    if (hit === undefined) {
+      let best = null
+      let bestDistance = Infinity
+      for (const range of ranges) {
+        const distance = Math.abs(range.start - at)
+        if (distance < bestDistance) {
+          bestDistance = distance
+          best = range
+        }
+      }
+      if (best !== null && bestDistance <= 6) hit = best
+    }
+    if (hit === undefined) return { ...segment }
+    assigned += 1
+    return { ...segment, speaker: hit.speaker }
+  })
+  return { segments: next, assigned, total: rows.length }
+}
+
+/** 由分段重建带说话人标记的转写全文（与 store 的自愈逻辑保持一致）。 */
+export function buildTranscriptFromSegments(segments) {
+  return (Array.isArray(segments) ? segments : [])
+    .map((segment) => {
+      const speaker = typeof segment?.speaker === 'string' ? segment.speaker.trim() : ''
+      const text = String(segment?.text ?? '')
+      return speaker === '' ? text : `${speaker}：${text}`
+    })
+    .join('\n')
+}
+
 /** Float32（[-1,1]，16k 单声道）→ PCM16 WAV Buffer。 */
 function encodePcm16Wav(samples, sampleRate = 16000) {
   const data = Buffer.alloc(samples.length * 2)
@@ -541,6 +601,64 @@ async function runRetranscribeJob({ deps, store, meetingId, audioPath, logger })
     logger?.warn?.(`meeting-minutes: retranscribe failed: ${job.error}`)
   } finally {
     if (preprocessedPath !== null) await rm(preprocessedPath, { force: true }).catch(() => {})
+  }
+}
+
+/**
+ * 后台用声纹（pyannote + cam++）重新分离说话人：
+ *   - 优先保留现有转写文本与时间，只给分段补 S1/S2 标签（受手动「重新分离说话人」触发）；
+ *   - 已有分段太少或匹配率过低时，才用整段分离结果替换转写（沿用 shouldUseDiarizedTranscript 的保护）。
+ */
+async function runDiarizeJob({ deps, store, meetingId, audioPath, logger }) {
+  const job = diarizeJobs.get(meetingId)
+  if (job === undefined) return
+  try {
+    if (deps.paraformer === undefined || deps.paraformer === null
+      || typeof deps.paraformer.transcribeFileWithSpeakers !== 'function'
+      || deps.paraformer.diarizationAvailable?.() !== true) {
+      job.status = 'error'
+      job.error = '说话人分离模型未就绪：请到设置 → 模型配置里下载 pyannote 分段与 cam++ 声纹模型'
+      return
+    }
+    job.stage = 'separating'
+    const analyzed = await deps.paraformer.transcribeFileWithSpeakers(audioPath)
+    const lines = Array.isArray(analyzed?.lines) ? analyzed.lines : []
+    job.speakers = Number(analyzed?.speakers) || [...new Set(lines.map((line) => line?.speaker).filter(Boolean))].length
+    const current = store.get(meetingId)
+    const segments = Array.isArray(current?.transcriptSegments) ? current.transcriptSegments : []
+    if (lines.length > 0 && segments.length > 0) {
+      const { segments: relabeled, assigned, total } = relabelSegmentsBySpeaker(segments, lines)
+      if (relabeled !== null && total > 0 && assigned >= Math.max(1, Math.round(total * 0.5))) {
+        await store.patch(meetingId, {
+          transcriptSegments: relabeled,
+          transcript: buildTranscriptFromSegments(relabeled),
+        })
+        job.status = 'done'
+        job.note = `已按声纹重新分离：${String(job.speakers)} 位说话人，标注 ${assigned}/${total} 段`
+        logger?.info?.(`meeting-minutes: diarize relabeled ${assigned}/${total} segments (${job.speakers} speakers)`)
+        return
+      }
+    }
+    // 没有可标注的分段（或匹配率过低）：整段替换，但保留「别把长转写换短」的保护。
+    const batchText = typeof analyzed?.text === 'string' ? analyzed.text : ''
+    const useBatch = shouldUseDiarizedTranscript(current?.transcript, batchText)
+    if (useBatch && lines.length > 0) {
+      await store.patch(meetingId, {
+        transcript: batchText,
+        transcriptSegments: lines.map((line) => ({ speaker: line.speaker, text: line.text, at: Math.round(Number(line.start) || 0) })),
+      })
+      job.status = 'done'
+      job.note = `已用声纹重新分离并重写转写：${String(job.speakers)} 位说话人`
+      logger?.info?.(`meeting-minutes: diarize replaced transcript (${job.speakers} speakers, ${lines.length} lines)`)
+      return
+    }
+    job.status = 'error'
+    job.error = '声纹分离结果太少（音频可能太短或太轻），已保留原转写'
+    logger?.warn?.('meeting-minutes: diarize result too short; keeping the existing transcript')
+  } catch (error) {
+    job.status = 'error'
+    job.error = error instanceof Error ? error.message : String(error)
+    logger?.warn?.('meeting-minutes: diarize failed: ' + job.error)
   }
 }
 
@@ -1300,6 +1418,35 @@ export function registerRoutes(ctx, deps) {
         retranscribeJobs.set(id, job)
         sendJson(res, 200, { ok: true, job: { ...job } })
         void runRetranscribeJob({ deps, store, meetingId: id, audioPath: audio.path, logger })
+        return
+      }
+
+      // 声纹重新分离：POST 启动（异步），GET 查进度。
+      // 用于给已有转写分段补 S1/S2 说话人标签（实时录音里的 A/B/C/D 只是音高估算）。
+      if (segments.length === 3 && segments[2] === 'diarize' && (method === 'POST' || method === 'GET')) {
+        const meeting = requireMeeting(store, id)
+        if (method === 'GET') {
+          const job = diarizeJobs.get(id)
+          sendJson(res, 200, { ok: true, job: job ? { ...job } : { status: 'idle', stage: 'idle', speakers: 0 } })
+          return
+        }
+        const audio = (Array.isArray(meeting.media) ? meeting.media : [])
+          .find((item) => item && item.kind === 'audio' && typeof item.path === 'string' && existsSync(item.path))
+        if (audio === undefined) throw new Error('这场会议没有可用的录音文件，无法重新分离说话人')
+        if (deps.paraformer === undefined || deps.paraformer === null
+          || typeof deps.paraformer.transcribeFileWithSpeakers !== 'function'
+          || deps.paraformer.diarizationAvailable?.() !== true) {
+          throw new Error('说话人分离模型未就绪：请到设置 → 模型配置里下载 pyannote 分段与 cam++ 声纹模型')
+        }
+        const running = diarizeJobs.get(id)
+        if (running !== undefined && running.status === 'running') {
+          sendJson(res, 200, { ok: true, job: { ...running } })
+          return
+        }
+        const job = { status: 'running', stage: 'starting', speakers: 0, error: null, note: null, startedAt: Date.now() }
+        diarizeJobs.set(id, job)
+        sendJson(res, 200, { ok: true, job: { ...job } })
+        void runDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger })
         return
       }
 
