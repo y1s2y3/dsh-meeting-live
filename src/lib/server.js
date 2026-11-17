@@ -1544,7 +1544,8 @@ export function registerRoutes(ctx, deps) {
         const entry = (Array.isArray(meeting.media) ? meeting.media : []).find((item) => item && item.kind === kind)
         if (entry === undefined) throw new Error('这场会议还没有生成该类型的文件')
         const revealed = await revealMediaPath(entry.path)
-        if (revealed !== true) logger?.warn?.('meeting-minutes: reveal media failed: ' + String(entry.path ?? ''))
+        // 每次请求都留痕：下次「点了没反应」时能直接区分「请求没到」还是「系统没打开」。
+        logger?.info?.('meeting-minutes: reveal media -> ' + (revealed === true ? 'launched' : 'failed') + ' (' + String(entry.path ?? '') + ')')
         sendJson(res, 200, { ok: true, path: entry.path, revealed })
         return
       }
