@@ -2921,7 +2921,10 @@ nav[aria-label="Global panels"] > button > span:last-child{
     async function revealMedia(meetingId, kind) {
       if (meetingId === null || meetingId === undefined) return
       try {
-        await requestJson('/meetings/' + encodeURIComponent(meetingId) + '/media/reveal', { method: 'POST', body: { kind } })
+        const payload = await requestJson('/meetings/' + encodeURIComponent(meetingId) + '/media/reveal', { method: 'POST', body: { kind } })
+        if (payload !== null && payload !== undefined && payload.revealed === false) {
+          notify('warn', '没找到这个文件', '它可能已被移动或删除；可以点「播放」确认，或重新录音生成')
+        }
       } catch (error) {
         reportError(error, '打开文件夹失败')
       }

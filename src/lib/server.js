@@ -263,15 +263,30 @@ function transcodeToMp4(sourcePath, targetPath) {
   })
 }
 
-/** 在资源管理器里选中该文件（失败不影响主流程）。 */
-function revealMediaPath(target) {
+/**
+ * 在资源管理器里选中该文件（失败不影响主流程）。
+ *
+ * 2026-11-17 修复：以前用 `spawn('explorer.exe', ['/select,', target], { detached: true, ... })`，
+ * 点击「查看目录」没反应。两个问题：
+ *   ① `/select,` 必须和路径连成**同一个参数**（`/select,D:\a.wav`），分开传会被 explorer 当成空选择；
+ *   ② Windows 上 `detached: true` + `unref()` 会出现「进程起来了但什么都不做」（2026-11-13 已踩过），
+ *      这里保持普通 spawn（不 detached），并把 'error' 事件吃掉，避免宿主进程因 spawn 失败崩掉。
+ */
+export function revealMediaPath(target, spawnImpl = spawn) {
   try {
+    if (typeof target !== 'string' || target === '' || !existsSync(target)) return false
     if (process.platform === 'win32') {
-      spawn('explorer.exe', ['/select,', target], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      const child = spawnImpl('explorer.exe', ['/select,' + target], { stdio: 'ignore', windowsHide: true })
+      child.on('error', () => {})
+      if (typeof child.unref === 'function') child.unref()
     } else if (process.platform === 'darwin') {
-      spawn('open', ['-R', target], { detached: true, stdio: 'ignore' }).unref()
+      const child = spawnImpl('open', ['-R', target], { stdio: 'ignore' })
+      child.on('error', () => {})
+      if (typeof child.unref === 'function') child.unref()
     } else {
-      spawn('xdg-open', [dirname(target)], { detached: true, stdio: 'ignore' }).unref()
+      const child = spawnImpl('xdg-open', [dirname(target)], { stdio: 'ignore' })
+      child.on('error', () => {})
+      if (typeof child.unref === 'function') child.unref()
     }
     return true
   } catch {
@@ -280,17 +295,24 @@ function revealMediaPath(target) {
 }
 
 /** 用系统默认关联程序打开文件（Windows 走 start，macOS 走 open，Linux 走 xdg-open）。 */
-function openMediaPath(target) {
+export function openMediaPath(target, spawnImpl = spawn) {
   if (process.env.DSH_MEETING_NO_OPEN === '1') return true
   try {
     if (!existsSync(target)) return false
     if (process.platform === 'win32') {
       // start 的第一个引号参数是窗口标题位，必须留空，否则带引号的路径会被当成标题。
-      spawn('cmd.exe', ['/c', 'start', '', target], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      // 同样不用 detached：detached + unref 在 Windows 上会「起来但不执行」。
+      const child = spawnImpl('cmd.exe', ['/c', 'start', '', target], { stdio: 'ignore', windowsHide: true })
+      child.on('error', () => {})
+      if (typeof child.unref === 'function') child.unref()
     } else if (process.platform === 'darwin') {
-      spawn('open', [target], { detached: true, stdio: 'ignore' }).unref()
+      const child = spawnImpl('open', [target], { stdio: 'ignore' })
+      child.on('error', () => {})
+      if (typeof child.unref === 'function') child.unref()
     } else {
-      spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref()
+      const child = spawnImpl('xdg-open', [target], { stdio: 'ignore' })
+      child.on('error', () => {})
+      if (typeof child.unref === 'function') child.unref()
     }
     return true
   } catch {
@@ -1476,6 +1498,7 @@ export function registerRoutes(ctx, deps) {
         const entry = (Array.isArray(meeting.media) ? meeting.media : []).find((item) => item && item.kind === kind)
         if (entry === undefined) throw new Error('这场会议还没有生成该类型的文件')
         const revealed = revealMediaPath(entry.path)
+        if (revealed !== true) logger?.warn?.('meeting-minutes: reveal media failed: ' + String(entry.path ?? ''))
         sendJson(res, 200, { ok: true, path: entry.path, revealed })
         return
       }

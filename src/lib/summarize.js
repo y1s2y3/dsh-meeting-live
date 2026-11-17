@@ -19,8 +19,29 @@ const HEAD_CHARS = 105_000
 const TAIL_CHARS = 34_000
 /** Hard deadline for one summary attempt. */
 const CALL_TIMEOUT_MS = 180_000
-/** Output-token cap for one summary attempt. */
-const MAX_TOKENS = 8192
+/**
+ * Output-token cap for one summary attempt.
+ *
+ * 注意：这是「输出」预算，思考模型的 reasoning token 也算在里面。早期用 8192 时，
+ * deepseek-flash 在 2 万字转写上会整整烧掉 8192 个思考 token、正文 0 字，
+ * 于是 JSON 永远解析失败（stop_reason=max_tokens）。这里留足余量。
+ */
+const MAX_TOKENS = 16_384
+/** 重试时允许放宽到的输出上限（第一次被截断时用）。 */
+const RETRY_MAX_TOKENS = 32_768
+/**
+ * 纪要/纠错是结构化输出任务，不需要思考：
+ * 显式关掉 reasoning，避免输出预算被 reasoning token 吃光（见 MAX_TOKENS 注释）。
+ */
+const STRUCTURED_REASONING_EFFORT = 'off'
+/** 前两次都没拿到合法 JSON 时的兜底指令：要求更精简的 JSON。 */
+const COMPACT_FALLBACK_INSTRUCTION = [
+  '注意：你前两次的输出都无法被解析为 JSON（可能太长被截断）。',
+  '请重新输出一个更精简、但结构完全合法的 JSON 对象：',
+  '- overview 控制在 200-350 字；sections 最多 5 段、每段 bullets 最多 3 条；',
+  '- keyPoints / decisions / risks / openQuestions / todos 每个数组最多 5 项；',
+  '- 不要输出任何解释、代码围栏或多余文字，确保 JSON 能被 JSON.parse 直接解析。',
+].join('\n')
 
 /**
  * System instruction: role, output contract, and grounding rules.
@@ -394,8 +415,11 @@ export function createSummarizer(options) {
    * Run one model call and return the raw text.
    * @param messages - request messages.
    * @param system - system instruction.
+   * @param signal - optional AbortSignal.
+   * @param selection - optional explicit provider/model selection.
+   * @param callOptions - optional `{ maxTokens, reasoningEffort }` overrides.
    */
-  async function callModel(messages, system, signal, selection) {
+  async function callModel(messages, system, signal, selection, callOptions = {}) {
     const llm = ctx.get?.('llm')
     if (llm === undefined || llm === null) {
       throw new Error('本机没有可用的模型服务（llm），无法生成会议纪要。')
@@ -408,28 +432,44 @@ export function createSummarizer(options) {
       if (signal.aborted) controller.abort(signal.reason)
       else signal.addEventListener('abort', onAbort, { once: true })
     }
-    try {
-      let call
-      try {
-        call = await llm.prepareCall({
-          provider: route.provider,
-          model: route.model,
-          maxTokens: MAX_TOKENS,
-        }, controller.signal)
-      } catch (error) {
-        // Some routes cap output tokens below this request; retry once with the
-        // adapter's own default cap instead of failing the whole summary.
-        if (!/max.?tokens|output/i.test(String(error?.message ?? ''))) throw error
-        call = await llm.prepareCall({ provider: route.provider, model: route.model }, controller.signal)
-      }
+    const requestedMaxTokens = Number(callOptions?.maxTokens)
+    const maxTokens = Number.isFinite(requestedMaxTokens) && requestedMaxTokens > 0
+      ? Math.round(requestedMaxTokens)
+      : MAX_TOKENS
+    const reasoningEffort = callOptions?.reasoningEffort === undefined
+      ? STRUCTURED_REASONING_EFFORT
+      : callOptions.reasoningEffort
+    const run = async (config) => {
+      const call = await llm.prepareCall(config, controller.signal)
       const streamOptions = {
         ...call.config,
         messages,
         system,
         signal: controller.signal,
       }
-      const { text } = await collectStream(call.stream(streamOptions))
-      return { text, route }
+      return collectStream(call.stream(streamOptions))
+    }
+    // 逐级降级：显式关思考 → 只带 maxTokens → 全用适配器默认。
+    // 只在「能力不支持」类错误上降级；网络/超时等错误直接抛出，避免重复跑三次。
+    const candidates = [
+      { provider: route.provider, model: route.model, maxTokens, reasoningEffort },
+      { provider: route.provider, model: route.model, maxTokens },
+      { provider: route.provider, model: route.model },
+    ]
+    let lastError = null
+    try {
+      for (const candidate of candidates) {
+        try {
+          const result = await run(candidate)
+          return { text: result.text, finish: result.finish ?? null, route }
+        } catch (error) {
+          lastError = error
+          const message = String(error?.message ?? '')
+          const capabilityError = /max.?tokens|output|reasoning|effort|thinking|unsupported|不支持/i.test(message)
+          if (!capabilityError) throw error
+        }
+      }
+      throw lastError ?? new Error('模型调用失败')
     } finally {
       clearTimeout(timer)
       if (signal !== undefined) signal.removeEventListener('abort', onAbort)
@@ -502,12 +542,13 @@ export function createSummarizer(options) {
     }
     const signal = options.signal
     const custom = options.custom ?? null
-    const callModelFn = async (messages, system) => {
+    const callModelFn = async (messages, system, callOptions = {}) => {
       if (custom !== null) return callCustomModel(messages, system, custom, signal)
-      return callModel(messages, system, signal, options.selection ?? null)
+      return callModel(messages, system, signal, options.selection ?? null, callOptions)
     }
     const messages = [{ role: 'user', content: [{ type: 'text', text: buildUserPrompt(meeting) }] }]
-    const first = await callModelFn(messages, SYSTEM_PROMPT + '\n\n' + templateInstruction(options.template))
+    const system = SYSTEM_PROMPT + '\n\n' + templateInstruction(options.template)
+    const first = await callModelFn(messages, system)
     const parsed = parseSummaryJson(first.text)
     if (parsed !== null) {
       const withTodos = await ensureTodos(parsed, meeting, callModelFn)
@@ -517,21 +558,31 @@ export function createSummarizer(options) {
         model: `${first.route.provider}/${first.route.model}`,
       })
     }
-    logger?.warn?.('meeting-minutes: first summary reply was not JSON, retrying once')
+    const truncated = first.finish !== null && first.finish !== undefined && first.finish.kind === 'max-tokens'
+    logger?.warn?.(`meeting-minutes: first summary reply was not JSON (${String(first.text ?? '').length} chars`
+      + `${truncated ? ', stopped by max-tokens' : ''}); retrying once with a larger output budget`)
     const repairMessages = [{
       role: 'user',
       content: [{ type: 'text', text: buildRepairPrompt(first.text, meeting) }],
     }]
-    const second = await callModelFn(repairMessages, SYSTEM_PROMPT)
-    const repaired = parseSummaryJson(second.text)
+    const second = await callModelFn(repairMessages, SYSTEM_PROMPT, { maxTokens: RETRY_MAX_TOKENS })
+    let repaired = parseSummaryJson(second.text)
+    let used = second
     if (repaired === null) {
-      throw new Error('模型返回的纪要格式无法解析，请重试一次；若持续失败，可换一个模型再生成。')
+      // 前两次都拿不到合法 JSON：用「更精简」的兜底指令再来一次，长会议容易把 JSON 写到被截断。
+      logger?.warn?.('meeting-minutes: repair reply was still not JSON; trying a compact fallback prompt')
+      const compact = await callModelFn(messages, SYSTEM_PROMPT + '\n\n' + COMPACT_FALLBACK_INSTRUCTION, { maxTokens: RETRY_MAX_TOKENS })
+      repaired = parseSummaryJson(compact.text)
+      used = compact
+    }
+    if (repaired === null) {
+      throw new Error('模型返回的纪要格式无法解析（已自动重试 2 次）。可再点一次「重新生成纪要」；若持续失败，请在设置里换一个模型或用「手动配置总结模型」。')
     }
     const repairedWithTodos = await ensureTodos(repaired, meeting, callModelFn)
     return normalizeSummary(repairedWithTodos, {
       previous: meeting.summary,
       now: new Date(),
-      model: `${second.route.provider}/${second.route.model}`,
+      model: `${used.route.provider}/${used.route.model}`,
     })
   }
 
