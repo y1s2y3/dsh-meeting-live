@@ -150,9 +150,11 @@ const originalWebSocket = globalThis.WebSocket
     provider: 'tencent',
     config: { secretId: 'AKIDtest', secretKey: 'secretKeyTest' },
     wavBuffer: wav,
+    hotwords: ['智慧工地平台', 'BIM', '张三,带逗号'],
   })
   check('腾讯云请求到 asr.tencentcloudapi.com', calls.length === 1 && calls[0].url.replace(/\/+$/, '') === 'https://asr.tencentcloudapi.com', calls[0]?.url)
   check('腾讯云请求体 VoiceFormat=pcm（回归修复）', calls[0]?.body.VoiceFormat === 'pcm', String(calls[0]?.body.VoiceFormat))
+  check('腾讯云术语作为临时热词表（HotwordList）下发', String(calls[0]?.body.HotwordList ?? '') === '智慧工地平台|5,BIM|5,张三带逗号|5', String(calls[0]?.body.HotwordList))
   check('腾讯云请求体 SourceType=1、DataLen=PCM 长度、引擎 16k_zh', calls[0]?.body.SourceType === 1 && calls[0]?.body.DataLen === wav.length - 44 && calls[0]?.body.EngSerViceType === '16k_zh', JSON.stringify({ source: calls[0]?.body.SourceType, len: calls[0]?.body.DataLen }))
   check('腾讯云 Authorization 为 TC3-HMAC-SHA256', String(calls[0]?.options.headers.Authorization).startsWith('TC3-HMAC-SHA256 Credential=AKIDtest/'), String(calls[0]?.options.headers.Authorization).slice(0, 48))
   check('腾讯云结果去除首尾空白', result.ok === true && result.text === '腾讯云识别结果', JSON.stringify(result))
@@ -193,6 +195,28 @@ const originalWebSocket = globalThis.WebSocket
   check('阿里云识别请求到 nls-gateway 且带 appkey/format/sample_rate', calls[1]?.url.includes('nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/asr') && calls[1]?.url.includes('appkey=appkey-test') && calls[1]?.url.includes('format=wav') && calls[1]?.url.includes('sample_rate=16000'), calls[1]?.url)
   check('阿里云请求头带 X-NLS-Token 与音频 body', calls[1]?.options.headers['X-NLS-Token'] === 'tok-123' && Buffer.isBuffer(calls[1]?.options.body) && calls[1].options.body.length === wav.length)
   check('阿里云结果解析正常', result.ok === true && result.text === '阿里云识别结果', JSON.stringify(result))
+
+  /* 热词：术语表 → CreateAsrVocab → vocabulary_id（Token 已缓存，只有 2 次请求） */
+  const vocabCalls = []
+  globalThis.fetch = async (url, options) => {
+    const text = String(url)
+    vocabCalls.push({ url: text, body: String(options?.body ?? '') })
+    if (text.includes('nls-slp')) {
+      return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify({ RequestId: 'r', VocabId: 'vocab-1' }) }
+    }
+    return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify({ status: 20000000, result: '阿里云识别结果', task_id: 't2' }) }
+  }
+  const hotwordResult = await cloud.transcribeCloud({
+    provider: 'aliyun',
+    config: { appKey: 'appkey-test', accessKeyId: 'AK', accessKeySecret: 'SK' },
+    wavBuffer: wav,
+    hotwords: ['智慧工地平台', 'BIM', '张三'],
+  })
+  const vocabCall = vocabCalls.find((call) => call.url.includes('nls-slp'))
+  const asrCall = vocabCalls.find((call) => call.url.includes('nls-gateway'))
+  check('阿里云术语会同步成热词表（CreateAsrVocab + WordWeights）', vocabCall !== undefined && vocabCall.body.includes('Action=CreateAsrVocab') && decodeURIComponent(vocabCall.body).includes('WordWeights'), vocabCall?.url ?? 'missing')
+  check('阿里云识别请求带 vocabulary_id', asrCall !== undefined && asrCall.url.includes('vocabulary_id=vocab-1'), asrCall?.url ?? 'missing')
+  check('阿里云带热词时识别仍正常', hotwordResult.ok === true && hotwordResult.text === '阿里云识别结果', JSON.stringify(hotwordResult))
 
   globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify({ Code: 'InvalidAccessKeyId.NotFound', Message: 'specified access key is not found' }) })
   const errorResult = await cloud.transcribeCloud({

@@ -131,11 +131,16 @@ export function buildUserPrompt(meeting) {
     : (hasSpeakerMarks
       ? '文本包含说话人标记（如 S1/S2、A：/B：）：请按说话人分别总结到 speakerSummaries。'
       : '文本没有稳定的说话人标记：speakerSummaries 请输出空数组。')
+  const speakerNames = meeting?.speakerNames !== null && typeof meeting?.speakerNames === 'object' ? meeting.speakerNames : {}
+  const speakerNamePairs = Object.entries(speakerNames)
+    .filter(([, name]) => typeof name === 'string' && name.trim() !== '')
+    .map(([speaker, name]) => speaker + '=' + name.trim())
   const lines = [
     `会议标题：${meeting.title}`,
     `会议日期：${meeting.date}`,
     `参会人：${meeting.attendees.length > 0 ? meeting.attendees.join('、') : '（未提供）'}`,
     meeting.notes === '' ? '' : `补充说明：${meeting.notes}`,
+    speakerNamePairs.length > 0 ? '说话人对应关系：' + speakerNamePairs.join('、') + '（speakerSummaries 请使用真实姓名）' : '',
     '',
     '会议文本如下（可能是转写稿或腾讯会议纪要原文）：',
     speakerLine,

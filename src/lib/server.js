@@ -11,6 +11,8 @@
  */
 
 import { formatMoment, isGenericTitle, localDay, projectMeeting, todoProgress } from './model.js'
+import { analyzeWavQuality } from './audio-quality.js'
+import { applyCorrectionChanges, diffTextLines } from './text-diff.js'
 import { sortMeetings } from './store.js'
 import { exportMeeting } from './export.js'
 import {
@@ -382,12 +384,43 @@ function encodePcm16Wav(samples, sampleRate = 16000) {
   return Buffer.concat([header, data])
 }
 
+/** 用 ffmpeg 做音频预处理（音量归一化 + 高通滤波），输出 16k 单声道 WAV；失败返回 null。 */
+async function preprocessAudioWithFfmpeg(inputPath, logger) {
+  const ffmpeg = findFfmpeg()
+  if (ffmpeg === null) return null
+  const outPath = join(tmpdir(), 'dsh-preprocess-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.wav')
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(ffmpeg, [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-i', inputPath,
+        '-af', 'highpass=f=80,dynaudnorm=f=250:g=15',
+        '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outPath,
+      ], { windowsHide: true, stdio: 'ignore' })
+      child.once('error', reject)
+      child.once('exit', (code) => { if (code === 0) resolve(); else reject(new Error('ffmpeg 退出码 ' + String(code))) })
+    })
+    return outPath
+  } catch (error) {
+    await rm(outPath, { force: true }).catch(() => {})
+    logger?.warn?.('meeting-minutes: audio preprocess failed: ' + String(error instanceof Error ? error.message : error))
+    return null
+  }
+}
+
 /** 后台跑完一整场录音的重转写：逐片识别，再决定是否替换现有转写。 */
 async function runRetranscribeJob({ deps, store, meetingId, audioPath, logger }) {
   const job = retranscribeJobs.get(meetingId)
   if (job === undefined) return
+  let preprocessedPath = null
   try {
-    const bytes = await readFile(audioPath)
+    // 音频预处理（可选）：音量归一化 + 高通滤波，改善远场/小声录音
+    let sourcePath = audioPath
+    if (store.settings.preprocessAudio === true) {
+      preprocessedPath = await preprocessAudioWithFfmpeg(audioPath, logger)
+      if (preprocessedPath !== null) sourcePath = preprocessedPath
+    }
+    const bytes = await readFile(sourcePath)
     const decoded = deps.paraformer.decodeWavToSamples(bytes)
     const rate = Number(decoded?.sampleRate) > 0 ? Number(decoded.sampleRate) : 16000
     const samples = decoded?.samples ?? new Float32Array(0)
@@ -438,6 +471,8 @@ async function runRetranscribeJob({ deps, store, meetingId, audioPath, logger })
     job.status = 'error'
     job.error = error instanceof Error ? error.message : String(error)
     logger?.warn?.(`meeting-minutes: retranscribe failed: ${job.error}`)
+  } finally {
+    if (preprocessedPath !== null) await rm(preprocessedPath, { force: true }).catch(() => {})
   }
 }
 
@@ -945,6 +980,28 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
+      if (segments.length === 4 && segments[2] === 'correction' && segments[3] === 'apply' && method === 'POST') {
+        const meeting = requireMeeting(store, id)
+        const correction = meeting.correction
+        if (correction === null || correction === undefined) throw new Error('当前没有待确认的转写纠错')
+        const body = await readJsonBody(req)
+        const accepted = Array.isArray(body.accepted)
+          ? body.accepted.map((value) => Number(value)).filter((value) => Number.isInteger(value))
+          : correction.changes.map((item, index) => index)
+        const transcript = applyCorrectionChanges(correction.original, correction.changes, accepted)
+        const updated = await store.patch(id, { transcript, correction: null })
+        logger?.info?.('meeting-minutes: applied ' + String(accepted.length) + ' correction(s)')
+        sendJson(res, 200, { ok: true, meeting: updated, applied: accepted.length })
+        return
+      }
+
+      if (segments.length === 4 && segments[2] === 'correction' && segments[3] === 'discard' && method === 'POST') {
+        requireMeeting(store, id)
+        const updated = await store.patch(id, { correction: null })
+        sendJson(res, 200, { ok: true, meeting: updated })
+        return
+      }
+
       if (segments.length === 2) {
         if (method === 'GET') {
           sendJson(res, 200, { ok: true, meeting: requireMeeting(store, id) })
@@ -954,7 +1011,7 @@ export function registerRoutes(ctx, deps) {
           requireMeeting(store, id)
           const body = await readJsonBody(req)
           const patch = {}
-          for (const key of ['title', 'date', 'attendees', 'transcript', 'transcriptSegments', 'notes', 'sourceType', 'transcriptSeconds', 'media']) {
+          for (const key of ['title', 'date', 'attendees', 'transcript', 'transcriptSegments', 'speakerNames', 'correction', 'notes', 'sourceType', 'transcriptSeconds', 'media']) {
             if (body[key] !== undefined) patch[key] = body[key]
           }
           if (body.appendTranscript === true) {
@@ -1026,6 +1083,8 @@ export function registerRoutes(ctx, deps) {
               provider: cloudKey,
               config: transcribeSettings.cloud[cloudKey] ?? {},
               wavBuffer: bytes,
+              // 术语表直接作为云端 ASR 热词（腾讯/阿里支持请求级热词；讯飞需控制台配置）
+              hotwords: effectiveTerms(store.settings),
             })
             if (cloudResult.ok !== true) throw new Error(cloudResult.error ?? '云端语音识别失败')
             const audioSeconds = Math.max(0, (bytes.length - 44) / (16000 * 2))
@@ -1257,8 +1316,17 @@ export function registerRoutes(ctx, deps) {
         const stored = muxed === null ? entry : entry
         const kept = previous.filter((item) => item.kind !== kind && (muxed === null || item.kind !== 'video'))
         const media = [...kept, stored, ...(muxed === null ? [] : [muxed])]
+        // 录音质量分析：整段 WAV 上传后算音量/削波/信噪比，存进会议并返回给界面提示
+        let quality = null
+        if (kind === 'audio') {
+          const analyzed = analyzeWavQuality(bytes)
+          if (analyzed !== null) {
+            quality = { ...analyzed, analyzedAt: new Date().toISOString() }
+            await store.patch(id, { audioQuality: quality })
+          }
+        }
         const updated = await store.patch(id, { media })
-        sendJson(res, 200, { ok: true, media: (updated && updated.media) || media, entry: stored })
+        sendJson(res, 200, { ok: true, media: (updated && updated.media) || media, entry: stored, quality })
         // 音频落盘后做两件后台事（不阻塞响应）：
         //  1) 若装了 Paraformer + pyannote + cam++，整段跑真说话人分离，替换启发式的 A/B/C/D；
         //  2) 若开启纠错，用 LLM 只改错别字/术语/人名。
@@ -1292,8 +1360,19 @@ export function registerRoutes(ctx, deps) {
                     terms: effectiveTerms(settingsNow),
                     custom: settingsNow.summary.mode === 'custom' ? settingsNow.summary.custom : null,
                   })
-                  await store.patch(id, { transcript: corrected })
-                  logger?.info?.('meeting-minutes: transcript corrected by LLM')
+                  if (settingsNow.reviewCorrections !== false) {
+                    // 先存成「待审阅」的逐行差异，由界面勾选接受后再替换转写
+                    const changes = diffTextLines(current.transcript, corrected)
+                    if (changes.length > 0) {
+                      await store.patch(id, {
+                        correction: { at: new Date().toISOString(), original: current.transcript, corrected, changes },
+                      })
+                      logger?.info?.('meeting-minutes: transcript correction ready for review (' + String(changes.length) + ' changes)')
+                    }
+                  } else {
+                    await store.patch(id, { transcript: corrected })
+                    logger?.info?.('meeting-minutes: transcript corrected by LLM')
+                  }
                 }
               }
             } catch (error) {

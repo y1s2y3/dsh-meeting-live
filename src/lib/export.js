@@ -50,6 +50,9 @@ function bullets(items, empty = '（无）') {
  */
 export function buildMarkdown(meeting) {
   const summary = meeting.summary
+  const speakerNameLines = meeting.speakerNames !== null && typeof meeting.speakerNames === 'object'
+    ? Object.entries(meeting.speakerNames).filter(([, name]) => typeof name === 'string' && name !== '').map(([speaker, name]) => `- 说话人：${speaker} = ${name}`)
+    : []
   const lines = [
     `# ${meeting.title} · 会议纪要`,
     '',
@@ -57,6 +60,7 @@ export function buildMarkdown(meeting) {
     `- 参会人：${meeting.attendees.length > 0 ? meeting.attendees.join('、') : '（未填写）'}`,
     `- 来源：${meeting.sourceType === 'recording' ? '录音转写' : meeting.sourceType === 'import' ? '导入记录' : '文本导入'}`,
     meeting.transcriptSeconds > 0 ? `- 录音时长：${formatDuration(meeting.transcriptSeconds)}` : '',
+    ...speakerNameLines,
     `- 导出时间：${formatMoment(new Date())}`,
     '',
   ].filter((line) => line !== '')
@@ -207,6 +211,9 @@ export function buildHtml(meeting) {
     ['参会人', meeting.attendees.length > 0 ? meeting.attendees.join('、') : '未填写'],
     ['来源', meeting.sourceType === 'recording' ? '录音转写' : meeting.sourceType === 'import' ? '导入记录' : '文本导入'],
     meeting.transcriptSeconds > 0 ? ['录音时长', formatDuration(meeting.transcriptSeconds)] : null,
+    ...(meeting.speakerNames !== null && typeof meeting.speakerNames === 'object'
+      ? Object.entries(meeting.speakerNames).filter(([, name]) => name !== '').map(([speaker, name]) => ['说话人', speaker + ' = ' + name])
+      : []),
     ['待办', progress.total === 0 ? '无' : `${progress.pushed}/${progress.total} 已写入日历`],
   ].filter((entry) => entry !== null)
 

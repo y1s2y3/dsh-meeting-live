@@ -44,6 +44,18 @@ const TENCENT_SIGNED_HEADERS = 'content-type;host;x-tc-action';
 const ALIYUN_TOKEN_ACTION = 'CreateToken';
 const ALIYUN_TOKEN_VERSION = '2019-02-28';
 const ALIYUN_DEFAULT_REGION = 'cn-shanghai';
+/** 阿里云热词表（POP API）：一句话识别用 vocabulary_id 引用。 */
+const ALIYUN_VOCAB_CREATE_ACTION = 'CreateAsrVocab';
+const ALIYUN_VOCAB_UPDATE_ACTION = 'UpdateAsrVocab';
+const ALIYUN_VOCAB_VERSION = '2018-11-20';
+const ALIYUN_VOCAB_NAME = 'dsh-meeting-live-terms';
+
+/** 各家是否支持「请求级热词」：讯飞的热词要在控制台「个性化热词」上传，无法随请求带。 */
+export const PROVIDER_HOTWORD_SUPPORT = {
+  iflytek: false,
+  tencent: true,
+  aliyun: true,
+};
 
 /** 音频无效时的固定提示（对外口径统一） */
 const INVALID_AUDIO_ERROR = '音频数据无效（需要 16k 单声道 WAV）';
@@ -519,6 +531,89 @@ function decodeWebSocketMessage(raw) {
   return String(raw);
 }
 
+/** 腾讯云一句话识别：临时热词表 `词|权重,词|权重`，最多 128 个、单词≤30 字符。 */
+export function buildTencentHotwordList(hotwords) {
+  const items = []
+  const seen = new Set()
+  for (const raw of Array.isArray(hotwords) ? hotwords : []) {
+    const text = String(raw ?? '').replace(/[,|，；;]/g, '').trim()
+    if (text === '' || text.length > 30 || seen.has(text)) continue
+    seen.add(text)
+    items.push(text + '|5')
+    if (items.length >= 128) break
+  }
+  return items.join(',')
+}
+
+/** 阿里云热词表接口要求：中文≤10 字、英文≤5 词、中英混合≤10 字符，不含标点。 */
+function buildAliyunWordWeights(hotwords) {
+  const weights = {}
+  let count = 0
+  for (const raw of Array.isArray(hotwords) ? hotwords : []) {
+    const text = String(raw ?? '').replace(/[，,。.、；;：:！!？?（）()【】\[\]「」"']/g, '').trim()
+    if (text === '' || text.length > 10) continue
+    if (weights[text] !== undefined) continue
+    weights[text] = 3
+    count += 1
+    if (count >= 128) break
+  }
+  return weights
+}
+
+/** 阿里云已有词表 id 的缓存：key=akId|region，值={ vocabId, hash }（按热词内容哈希判断是否更新）。 */
+const aliyunVocabCache = new Map()
+
+/**
+ * 把术语同步成阿里云热词表（Create / Update），返回 vocabulary_id；失败返回 ''（不阻断识别）。
+ */
+async function syncAliyunVocabulary({ config, region, hotwords, signal }) {
+  try {
+    const weights = buildAliyunWordWeights(hotwords)
+    if (Object.keys(weights).length === 0) return ''
+    const hash = createHash('sha256').update(JSON.stringify(weights)).digest('hex').slice(0, 16)
+    const cacheKey = `${config.accessKeyId}|${region}`
+    const cached = aliyunVocabCache.get(cacheKey)
+    if (cached !== undefined && cached.hash === hash) return cached.vocabId
+    const update = cached !== undefined && typeof cached.vocabId === 'string' && cached.vocabId !== ''
+    const rpc = buildAliyunRpcRequest({
+      action: update ? ALIYUN_VOCAB_UPDATE_ACTION : ALIYUN_VOCAB_CREATE_ACTION,
+      version: ALIYUN_VOCAB_VERSION,
+      regionId: region,
+      accessKeyId: config.accessKeyId,
+      accessKeySecret: config.accessKeySecret,
+      timestamp: Math.floor(Date.now() / 1000),
+      nonce: randomUUID(),
+      extraParams: {
+        ...(update ? { Id: cached.vocabId } : {}),
+        Name: ALIYUN_VOCAB_NAME,
+        Description: 'DSH meeting transcription terms',
+        WordWeights: JSON.stringify(weights),
+      },
+    })
+    const ctx = createRequestController(signal)
+    try {
+      const json = await requestJson(
+        `https://nls-slp.${region}.aliyuncs.com/`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8', Accept: 'application/json' },
+          body: rpc.body,
+          signal: ctx.signal,
+        },
+        '阿里云热词表',
+      )
+      if (json && json.Code) return cached?.vocabId ?? ''
+      const vocabId = update ? cached.vocabId : (json && json.VocabId ? String(json.VocabId) : '')
+      if (vocabId !== '') aliyunVocabCache.set(cacheKey, { vocabId, hash })
+      return vocabId
+    } finally {
+      ctx.cleanup()
+    }
+  } catch {
+    return ''
+  }
+}
+
 /**
  * 科大讯飞实时听写（WebSocket v2/iat）。
  * 流程：建连 → 按 1280 字节切帧逐帧发送（首帧 status=0、中间 1、末帧 2）→ 收 JSON 拼接文字 → status=2 结束。
@@ -687,7 +782,7 @@ function transcribeWithIflytek({ config, pcm, sampleRate, language, signal }) {
 }
 
 /** 腾讯云一句话识别（SentenceRecognition），Data 传去掉 WAV 头后的裸 PCM */
-async function transcribeWithTencent({ config, pcm, language, signal }) {
+async function transcribeWithTencent({ config, pcm, language, signal, hotwords = [] }) {
   const region = isBlank(config.region) ? 'ap-shanghai' : String(config.region);
   // engine 缺省按语言推导（16k_zh / 16k_en）
   const engine = isBlank(config.engine)
@@ -702,6 +797,10 @@ async function transcribeWithTencent({ config, pcm, language, signal }) {
     Data: pcm.toString('base64'),
     DataLen: pcm.length,
   };
+  // 术语表 → 腾讯云临时热词表（HotwordList）：最多 128 个，权重 5；
+  // 未配术语时不下发，避免空字符串被服务端判参数错误。
+  const hotwordList = buildTencentHotwordList(hotwords);
+  if (hotwordList !== '') payload.HotwordList = hotwordList;
 
   const auth = buildTencentHeaders({
     secretId: config.secretId,
@@ -750,7 +849,7 @@ async function transcribeWithTencent({ config, pcm, language, signal }) {
 /** 阿里云 Token 缓存：Token 有效期 24 小时，避免每次识别都重新 CreateToken（也避免 nonce 复用被拒）。 */
 const aliyunTokenCache = new Map();
 
-async function transcribeWithAliyun({ config, wavBuffer, sampleRate, signal }) {
+async function transcribeWithAliyun({ config, wavBuffer, sampleRate, signal, hotwords = [] }) {
   const region = isBlank(config.region) ? ALIYUN_DEFAULT_REGION : String(config.region);
   const metaHost = `nls-meta.${region}.aliyuncs.com`;
   const gatewayHost = `nls-gateway-${region}.aliyuncs.com`;
@@ -810,13 +909,17 @@ async function transcribeWithAliyun({ config, wavBuffer, sampleRate, signal }) {
   /* ---------- 步骤二：一句话识别 ---------- */
   const asrCtx = createRequestController(signal);
   try {
-    const query = new URLSearchParams({
+    // 术语表 → 阿里云热词表（vocabulary_id）；同步失败不影响识别
+    const vocabularyId = await syncAliyunVocabulary({ config, region, hotwords, signal });
+    const queryParams = {
       appkey: String(config.appKey),
       format: 'wav',
       sample_rate: String(sampleRate),
       enable_punctuation_prediction: 'true',
       enable_inverse_text_normalization: 'true',
-    });
+    };
+    if (vocabularyId !== '') queryParams.vocabulary_id = vocabularyId;
+    const query = new URLSearchParams(queryParams);
     const json = await requestJson(
       `https://${gatewayHost}/stream/v1/asr?${query.toString()}`,
       {
@@ -868,6 +971,7 @@ export async function transcribeCloud({
   sampleRate = 16000,
   language = 'zh',
   signal,
+  hotwords = [],
 } = {}) {
   // ① 配置校验（三家必填字段）
   const configCheck = validateCloudConfig(provider, config);
@@ -899,10 +1003,10 @@ export async function transcribeCloud({
       return await transcribeWithIflytek({ config, pcm, sampleRate: rate, language: lang, signal });
     }
     if (provider === 'tencent') {
-      return await transcribeWithTencent({ config, pcm, language: lang, signal });
+      return await transcribeWithTencent({ config, pcm, language: lang, signal, hotwords });
     }
     if (provider === 'aliyun') {
-      return await transcribeWithAliyun({ config, wavBuffer: wav.buffer, sampleRate: rate, language: lang, signal });
+      return await transcribeWithAliyun({ config, wavBuffer: wav.buffer, sampleRate: rate, language: lang, signal, hotwords });
     }
     return { ok: false, error: `不支持的云服务商：${String(provider)}` };
   } catch (error) {

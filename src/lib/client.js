@@ -755,6 +755,18 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-speaker--x{background:#94A3B8}
 .dsm-transcript-plain{font-size:12px;line-height:20px;color:#334155;white-space:pre-wrap;max-height:220px;overflow:auto;font-family:inherit}
 .dsm-transcript-note{margin-top:8px;font-size:11px;line-height:16px;color:#8A94A6}
+/* 说话人重命名 + 纠错 diff */
+.dsm-speaker-rename{border:1px solid #DCE7FF;background:#F7FAFF;border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.dsm-speaker-rename-title{font-size:11.5px;color:#475569;margin-bottom:4px}
+.dsm-speaker-rename-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.dsm-speaker-rename-row .dsm-input{height:28px;font-size:12px;flex:1 1 auto;min-width:0}
+.dsm-speaker-rename-actions{display:flex;gap:6px;margin-top:8px}
+.dsm-diff{display:flex;flex-direction:column;gap:6px}
+.dsm-diff-row{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border:1px solid #E9EEF7;border-radius:8px;background:#FBFDFF}
+.dsm-diff-body{min-width:0;font-size:12px;line-height:19px}
+.dsm-diff-before{color:#B91C1C;text-decoration:line-through;word-break:break-word}
+.dsm-diff-after{color:#15803D;word-break:break-word}
+.dsm-check-row{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;padding-top:4px}
 
 /* ── 会议文件（音频/视频）行：录音与录屏并排展示，窄屏自动换行 ── */
 .dsm-files{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px}
@@ -2826,6 +2838,12 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       if (!response.ok || payload === null || payload.ok !== true) {
         throw new Error(payload?.error ?? ('保存文件失败（HTTP ' + response.status + '）'))
       }
+      // 录音质量分析结果：直接提示最需要处理的一项（不影响保存成功）
+      const quality = payload.quality ?? null
+      if (kind === 'audio' && quality !== null && quality.level !== 'good') {
+        const advice = Array.isArray(quality.suggestions) && quality.suggestions.length > 0 ? quality.suggestions[0] : ''
+        notify('warn', quality.level === 'poor' ? '录音质量较差' : '录音质量一般', advice)
+      }
       return payload
     }
 
@@ -4469,6 +4487,25 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
             }, termsSaving ? '保存中…' : '保存术语'),
             h('span', { className: 'dsm-hint' }, '共 ' + String(termLineCount) + ' 条；保存后自动用于转写纠错。'),
           ),
+          h('div', { className: 'dsm-check-row' },
+            h('label', { className: 'dsm-check' },
+              h('input', {
+                type: 'checkbox',
+                checked: settings.reviewCorrections !== false,
+                onChange: (event) => { void patchSettings({ reviewCorrections: event.target.checked }) },
+              }),
+              h('span', null, '纠错后先审阅（逐句对比，勾选接受）'),
+            ),
+            h('label', { className: 'dsm-check' },
+              h('input', {
+                type: 'checkbox',
+                checked: settings.preprocessAudio !== false,
+                onChange: (event) => { void patchSettings({ preprocessAudio: event.target.checked }) },
+              }),
+              h('span', null, '音频预处理（重转写/转码时音量归一化 + 高通滤波，需 ffmpeg）'),
+            ),
+          ),
+          h('div', { className: 'dsm-hint' }, '术语会作为热词传给云端识别（腾讯云 / 阿里云支持请求级热词；讯飞热词需在讯飞控制台「个性化热词」上传，本地 Paraformer 暂不支持热词）。'),
           h('div', { className: 'dsm-set-divider' }),
           h('div', { className: 'dsm-set-subhead' },
             h('div', { className: 'dsm-set-section-head' },
@@ -6140,6 +6177,14 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           ? h(MetaChip, { key: 'duration', icon: 'clock', label: `时长 ${formatDuration(meeting.transcriptSeconds)}` })
           : null,
         h(MetaChip, { key: 'chars', icon: 'list', label: formatChars(meeting.transcriptChars ?? (meeting.transcript ?? '').length) }),
+        meeting.audioQuality
+          ? h(MetaChip, {
+            key: 'quality',
+            icon: meeting.audioQuality.level === 'poor' ? 'alert' : 'info',
+            label: '录音质量：' + (meeting.audioQuality.level === 'good' ? '良好' : (meeting.audioQuality.level === 'fair' ? '一般' : '较差')),
+            title: [meeting.audioQuality.summary, ...(Array.isArray(meeting.audioQuality.suggestions) ? meeting.audioQuality.suggestions : [])].filter(Boolean).join('；'),
+          })
+          : null,
         summary?.generatedAt
           ? h(MetaChip, { key: 'generated', icon: 'sparkle', label: `生成于 ${formatStamp(summary.generatedAt)}` })
           : null,
@@ -6597,16 +6642,22 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
     function TranscriptSection(props) {
       const text = String(props.transcript ?? '')
       const segments = Array.isArray(props.segments) ? props.segments : []
+      const speakerNames = props.speakerNames !== null && typeof props.speakerNames === 'object' ? props.speakerNames : {}
       const [open, setOpen] = useState(false)
       const [copied, setCopied] = useState(false)
-      const speakerCount = segments.reduce((count, segment) => {
+      const [renaming, setRenaming] = useState(false)
+      const [draftNames, setDraftNames] = useState({})
+      const speakers = segments.reduce((list, segment) => {
         const label = typeof segment?.speaker === 'string' ? segment.speaker : ''
-        return label !== '' && !count.includes(label) ? [...count, label] : count
-      }, []).length
+        return label !== '' && !list.includes(label) ? [...list, label] : list
+      }, [])
+      const speakerCount = speakers.length
+      const speakerLabel = (speaker) => (speakerNames[speaker] !== undefined && speakerNames[speaker] !== '' ? speakerNames[speaker] : speaker)
       const plainOf = () => {
         if (segments.length === 0) return text
         return segments.map((segment) => {
-          const label = typeof segment?.speaker === 'string' && segment.speaker !== '' ? segment.speaker + '：' : ''
+          const speaker = typeof segment?.speaker === 'string' && segment.speaker !== '' ? segment.speaker : ''
+          const label = speaker === '' ? '' : speakerLabel(speaker) + '：'
           return label + String(segment?.text ?? '')
         }).join('\n')
       }
@@ -6648,6 +6699,21 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           onClick: () => setOpen((previous) => !previous),
           title: open ? '收起' : '展开全文',
         }, h('span', null, open ? '收起' : '展开'), h('span', { className: 'dsm-minutes-caret' + (open ? ' dsm-minutes-caret--up' : '') }, '⌄')),
+        props.onRenameSpeakers && speakerCount > 0
+          ? h('button', {
+            key: 'rename',
+            type: 'button',
+            className: 'dsm-minutes-action',
+            onClick: () => {
+              if (renaming) { setRenaming(false); return }
+              const next = {}
+              for (const speaker of speakers) next[speaker] = speakerNames[speaker] ?? ''
+              setDraftNames(next)
+              setRenaming(true)
+            },
+            title: '把 S1/S2 改成真实姓名，纠错和纪要都会用这个名字',
+          }, h(Icon, { name: 'users', size: 12 }), h('span', null, renaming ? '取消重命名' : '说话人重命名'))
+          : null,
         props.onRetranscribe && props.hasAudio === true
           ? h('button', {
             key: 'retranscribe',
@@ -6675,6 +6741,30 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
         h(
           'div',
           { className: 'dsm-transcript dsm-transcript--card' },
+          renaming
+            ? h('div', { className: 'dsm-speaker-rename' },
+              h('div', { className: 'dsm-speaker-rename-title' }, '把说话人改成真实姓名（留空则保留 S1/S2）'),
+              ...speakers.map((speaker) => h('div', { key: 'rename-' + speaker, className: 'dsm-speaker-rename-row' },
+                h('span', { className: 'dsm-speaker dsm-speaker--' + speaker.toLowerCase() }, speaker),
+                h(TextInput, {
+                  value: draftNames[speaker] ?? '',
+                  onChange: (value) => { setDraftNames((previous) => ({ ...previous, [speaker]: value })) },
+                  placeholder: '例如：张三',
+                }),
+              )),
+              h('div', { className: 'dsm-speaker-rename-actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+                  onClick: () => {
+                    if (typeof props.onRenameSpeakers === 'function') props.onRenameSpeakers(draftNames)
+                    setRenaming(false)
+                  },
+                }, '保存姓名'),
+                h('button', { type: 'button', className: 'dsm-btn dsm-btn--sm', onClick: () => setRenaming(false) }, '取消'),
+              ),
+            )
+            : null,
           segments.length > 0
             ? h(
               'div',
@@ -6687,7 +6777,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
                   { key: 'seg-' + String(index), className: 'dsm-transcript-line' },
                   label === ''
                     ? null
-                    : h('span', { className: 'dsm-speaker dsm-speaker--' + tone }, label),
+                    : h('span', {
+                      className: 'dsm-speaker dsm-speaker--' + tone,
+                      title: speakerNames[label] ? label + ' → ' + speakerNames[label] : undefined,
+                    }, speakerLabel(label)),
                   h('span', { className: 'dsm-transcript-text' }, String(segment?.text ?? '')),
                 )
               }),
@@ -6933,6 +7026,59 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       )
     }
 
+    /** 转写纠错待审阅：逐行对比，勾选后应用。 */
+    function CorrectionReviewSection(props) {
+      const correction = props.correction ?? null
+      const changes = correction !== null && Array.isArray(correction.changes) ? correction.changes : []
+      const [checked, setChecked] = useState(() => changes.map(() => true))
+      useEffect(() => {
+        setChecked(changes.map(() => true))
+      }, [correction?.at])
+      if (correction === null || changes.length === 0) return null
+      const selectedCount = checked.filter((value) => value === true).length
+      return h(
+        Section,
+        {
+          title: '转写纠错待确认',
+          icon: 'check',
+          card: true,
+          sub: String(changes.length) + ' 处修改',
+          actions: h('div', { className: 'dsm-section-action-row' },
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--sm',
+              onClick: () => { if (typeof props.onDiscard === 'function') props.onDiscard() },
+            }, '忽略全部'),
+            h('button', {
+              type: 'button',
+              className: 'dsm-btn dsm-btn--sm dsm-btn--primary',
+              disabled: selectedCount === 0,
+              onClick: () => {
+                if (typeof props.onApply !== 'function') return
+                const accepted = checked.map((value, index) => (value === true ? index : -1)).filter((index) => index >= 0)
+                props.onApply(accepted)
+              },
+            }, '应用选中 ' + String(selectedCount) + ' 处'),
+          ),
+        },
+        h('div', { className: 'dsm-diff' },
+          ...changes.map((change, index) => h('label', { key: 'diff-' + String(index), className: 'dsm-diff-row' },
+            h('input', {
+              type: 'checkbox',
+              className: 'dsm-term-check',
+              checked: checked[index] === true,
+              onChange: () => { setChecked((previous) => previous.map((value, itemIndex) => (itemIndex === index ? value !== true : value))) },
+            }),
+            h('div', { className: 'dsm-diff-body' },
+              h('div', { className: 'dsm-diff-before' }, change.before === '' ? '（新增一行）' : change.before),
+              h('div', { className: 'dsm-diff-after' }, change.after === '' ? '（删除这一行）' : change.after),
+            ),
+          )),
+        ),
+        h('div', { className: 'dsm-hint', style: { padding: '2px 0 0' } }, '勾选要接受的修改，点「应用选中」才会替换转写；不勾的保持原文。'),
+      )
+    }
+
     function MeetingDocument(props) {
       const meeting = props.meeting
       const summary = meeting.summary
@@ -6961,6 +7107,11 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           onSummarize: props.onSummarize,
           summarizing: props.summarizing !== null,
           canSummarize: hasTranscript,
+        }),
+        h(CorrectionReviewSection, {
+          correction: props.correction ?? null,
+          onApply: props.onApplyCorrection,
+          onDiscard: props.onDiscardCorrection,
         }),
         summaryStartedAt !== null
           ? h(SummarizingCard, { startedAt: summaryStartedAt })
@@ -7029,6 +7180,8 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
           ? h(TranscriptSection, {
             transcript: meeting.transcript,
             segments: meeting.transcriptSegments,
+            speakerNames: meeting.speakerNames,
+            onRenameSpeakers: props.onRenameSpeakers,
             hasAudio,
             retranscribe: props.retranscribe,
             onRetranscribe: props.onRetranscribe,
@@ -7483,6 +7636,50 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
       }
 
       /** 整段重转写：POST 启动后台任务，每 1.5 秒查进度；完成后刷新会议详情。 */
+      const applyCorrection = async (accepted) => {
+        const meeting = selected
+        if (!meeting) return
+        try {
+          const payload = await requestJson(`/meetings/${encodeURIComponent(meeting.id)}/correction/apply`, {
+            method: 'POST',
+            body: Array.isArray(accepted) ? { accepted } : {},
+          })
+          if (payload.meeting) commit({ meeting: payload.meeting, selectedId: meeting.id })
+          await refreshList()
+          notifySuccess('已应用纠错', '接受了 ' + String(payload.applied ?? accepted?.length ?? 0) + ' 处修改')
+        } catch (caught) {
+          reportError(caught, '应用纠错失败')
+        }
+      }
+
+      const discardCorrection = async () => {
+        const meeting = selected
+        if (!meeting) return
+        try {
+          const payload = await requestJson(`/meetings/${encodeURIComponent(meeting.id)}/correction/discard`, { method: 'POST', body: {} })
+          if (payload.meeting) commit({ meeting: payload.meeting, selectedId: meeting.id })
+          notify('info', '已忽略本次纠错', '保留原转写')
+        } catch (caught) {
+          reportError(caught, '忽略纠错失败')
+        }
+      }
+
+      const renameSpeakers = async (names) => {
+        const meeting = selected
+        if (!meeting) return
+        try {
+          const payload = await requestJson(`/meetings/${encodeURIComponent(meeting.id)}`, {
+            method: 'PATCH',
+            body: { speakerNames: names },
+          })
+          if (payload.meeting) commit({ meeting: payload.meeting, selectedId: meeting.id })
+          await refreshList()
+          notifySuccess('已更新说话人姓名', '纠错和会议纪要会使用新名字')
+        } catch (caught) {
+          reportError(caught, '保存说话人姓名失败')
+        }
+      }
+
       const startRetranscribe = async () => {
         const meeting = selected
         if (!meeting || retranscribe?.status === 'running' || retranscribe?.status === 'starting') return
@@ -7619,6 +7816,10 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
               recordDisabled: !speechAvailable,
               retranscribe: retranscribe !== null && retranscribe.meetingId === selected.id ? retranscribe : null,
               onRetranscribe: startRetranscribe,
+              correction: selected.correction ?? null,
+              onApplyCorrection: applyCorrection,
+              onDiscardCorrection: discardCorrection,
+              onRenameSpeakers: renameSpeakers,
             })
         content = h(
           'div',

@@ -51,6 +51,10 @@ export const DEFAULT_SETTINGS = {
   },
   /** 转写结束后用 LLM 做一次语境纠错（错别字/人名/术语）。 */
   correctTranscript: true,
+  /** 纠错结果先审阅（逐句对比、勾选接受）还是直接替换转写。 */
+  reviewCorrections: true,
+  /** 音频预处理：转码/重转写前做音量归一化 + 高通滤波（需要 ffmpeg）。 */
+  preprocessAudio: true,
   /** 用声纹做真说话人分离（需要 Paraformer + pyannote + cam++ 模型就绪）。 */
   diarize: true,
 }
@@ -205,6 +209,8 @@ export function normalizeSettings(raw, base = DEFAULT_SETTINGS) {
     terms: typeof termsInput === 'string' ? termsInput.slice(0, 4000) : '',
     termExtract: normalizeTermExtract(input.termExtract === undefined ? baseInput.termExtract : input.termExtract),
     correctTranscript: input.correctTranscript === undefined ? baseInput.correctTranscript !== false : input.correctTranscript !== false,
+    reviewCorrections: input.reviewCorrections === undefined ? baseInput.reviewCorrections !== false : input.reviewCorrections !== false,
+    preprocessAudio: input.preprocessAudio === undefined ? baseInput.preprocessAudio !== false : input.preprocessAudio !== false,
     // 真说话人分离固定开启：模型就绪就自动做，没装模型时自动跳过
     diarize: true,
   }

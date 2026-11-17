@@ -427,6 +427,13 @@ export function normalizeMeeting(raw, options = {}) {
     .filter((segment) => segment !== null)
     .slice(0, 500)
 
+  const speakerNames = normalizeSpeakerNames(
+    input.speakerNames === undefined ? base.speakerNames : input.speakerNames,
+    base.speakerNames,
+  )
+  const audioQuality = normalizeAudioQuality(input.audioQuality === undefined ? base.audioQuality : input.audioQuality)
+  const correction = normalizeCorrection(input.correction === undefined ? base.correction : input.correction)
+
   return {
     id: asText(input.id, asText(base.id, newId())),
     title,
@@ -436,6 +443,9 @@ export function normalizeMeeting(raw, options = {}) {
     transcript,
     transcriptSeconds,
     transcriptSegments,
+    speakerNames,
+    audioQuality,
+    correction,
     media,
     notes,
     autoImported,
@@ -445,10 +455,82 @@ export function normalizeMeeting(raw, options = {}) {
   }
 }
 
+/** 归一化说话人重命名映射：{ A: '张三' }，最多 10 个、每个名字 ≤20 字。 */
+export function normalizeSpeakerNames(value, base = {}) {
+  const source = value === undefined ? base : value
+  const input = source !== null && typeof source === 'object' && !Array.isArray(source) ? source : {}
+  const names = {}
+  for (const [key, raw] of Object.entries(input)) {
+    if (!/^[A-Z]$/.test(key)) continue
+    const name = capText(raw, 20)
+    if (name === '') continue
+    names[key] = name
+    if (Object.keys(names).length >= 10) break
+  }
+  return names
+}
+
+/** 归一化录音质量分析结果（来自宿主侧 audio-quality）。 */
+export function normalizeAudioQuality(value) {
+  if (value === null || typeof value !== 'object') return null
+  const level = ['good', 'fair', 'poor'].includes(value.level) ? value.level : 'fair'
+  const summary = capText(value.summary, 240)
+  const suggestions = Array.isArray(value.suggestions)
+    ? value.suggestions.map((item) => capText(item, 120)).filter((item) => item !== '').slice(0, 3)
+    : []
+  const metrics = value.metrics !== null && typeof value.metrics === 'object' ? value.metrics : {}
+  const number = (key) => {
+    const parsed = Number(metrics[key])
+    return Number.isFinite(parsed) ? Math.round(parsed * 1000) / 1000 : 0
+  }
+  return {
+    level,
+    summary,
+    suggestions,
+    metrics: {
+      durationSeconds: number('durationSeconds'),
+      rmsDbfs: number('rmsDbfs'),
+      peakDbfs: number('peakDbfs'),
+      snrDb: number('snrDb'),
+      noiseDbfs: number('noiseDbfs'),
+      clippingRatio: number('clippingRatio'),
+      silenceRatio: number('silenceRatio'),
+    },
+    analyzedAt: capText(value.analyzedAt, 40),
+  }
+}
+
+/** 归一化「纠错待审阅」：原文/修改稿/逐行变化。 */
+export function normalizeCorrection(value) {
+  if (value === null || typeof value !== 'object') return null
+  const changes = []
+  for (const entry of Array.isArray(value.changes) ? value.changes : []) {
+    if (entry === null || typeof entry !== 'object') continue
+    const before = capText(entry.before, 4000)
+    const after = capText(entry.after, 4000)
+    if (before === '' && after === '') continue
+    const index = Number(entry.index)
+    changes.push({
+      ...(Number.isInteger(index) && index >= 0 ? { index } : {}),
+      before,
+      after,
+    })
+    if (changes.length >= 500) break
+  }
+  const original = capText(value.original, 200000)
+  const corrected = capText(value.corrected, 200000)
+  if (original === '' || corrected === '' || changes.length === 0) return null
+  return {
+    at: capText(value.at, 40),
+    original,
+    corrected,
+    changes,
+  }
+}
+
 /** 归一化「生成纪要使用的模型」：`{ provider, model }` 或 null（跟随 DSH 默认）。 */
 export function normalizeSummaryModel(value) {
-  if (value === null || value === undefined) return null
-  if (typeof value !== 'object') return null
+  if (value === null || value === undefined || typeof value !== 'object') return null
   const provider = typeof value.provider === 'string' ? value.provider.trim() : ''
   const model = typeof value.model === 'string' ? value.model.trim() : ''
   if (provider === '' || model === '') return null

@@ -29,7 +29,7 @@ src/                     插件源码（直接改这里）
   cordis.patch.yml       插件加载声明
   README.md              插件用户说明（随包分发）
   LICENSE                MIT 授权文本（随包分发）
-tests/                   离线自测（14 套，改完代码跑一遍）
+tests/                   离线自测（15 套，改完代码跑一遍）
 deploy.mjs               部署到 DSH Desktop profile
 package.mjs              打包成可分发的 .tgz
 INSTALL.md               给使用者的安装/升级/卸载说明
@@ -62,6 +62,7 @@ node tests/smoke-model-hash.mjs     # 模型文件 SHA-256 清单与本机已下
 node tests/smoke-update-check.mjs   # 版本更新检查（版本比较 / npm 优先 / GitHub 兜底 / 缓存）
 node tests/smoke-summary-rich.mjs   # 详细纪要结构：新字段规范化、prompt 要求、Word/HTML/Markdown 导出
 node tests/smoke-terms.mjs          # 文件夹术语提取：扫描 txt/docx、排序去重、设置归一化、前端入口
+node tests/smoke-accuracy.mjs       # 转写准确率：录音质量分析、纠错 diff、说话人重命名、prompt/导出映射
 ```
 
 改完何时生效：
@@ -127,6 +128,12 @@ node package.mjs --name dsh-meeting-live-pro --version 1.2.0
   顺序即优先级，去掉了独立的逐条编辑/上下排序 UI
 - 解析结果改为下方独立候选框（v1.5.1）：解析后在下方的候选框里勾选（支持全选/清空），
   点「采纳选中」才把术语加到上方输入框，再点「保存术语」写入术语库
+- 转写准确率五件套（v1.6.0）：
+  - 术语接云端 ASR 热词（腾讯 HotwordList / 阿里云自动热词表；讯飞需控制台上传、本地模型不支持）；
+  - 录音质量检测（音量/削波/底噪/信噪比/静音占比 + 中文建议，会议封面显示质量）；
+  - 音频预处理（重转写/转码时 ffmpeg 音量归一化 + 高通滤波，设置里可关）；
+  - 纠错结果逐行 diff 审阅（勾选接受、应用选中/忽略全部，设置里可关）；
+  - 说话人重命名（S1→张三，显示/导出/纪要 prompt 都用真名）
 - 转写纠错新增独立「转写纠错」菜单：设置弹窗从三页变四页（模型配置 / 转写纠错 / 自动识别 / 问题反馈），
   自动纠错开关、手填术语表、从文件夹提取术语都移到这一页，不再挤在模型配置里
 - 修复中文文件夹路径乱码：系统文件夹选择对话框改为用 UTF-8 临时文件中转（PowerShell 5.1 控制台

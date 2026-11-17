@@ -623,6 +623,58 @@ check('二维码上传接口已移除（二维码写死在插件里）', noUploa
   termFs.rmSync(emptyDir, { recursive: true, force: true })
 }
 
+/* 24. 转写准确率提升相关接口：说话人重命名 / 纠错审阅 / 录音质量 / ASR 热词 */
+{
+  // 说话人重命名
+  const renameRes = await uploadCase('PATCH', '/dsh-meeting/meetings/mt_test', JSON.stringify({ speakerNames: { A: '张三', B: '李四' } }), 'application/json')
+  check('会议接口支持保存说话人姓名', renameRes.status === 200 && JSON.parse(renameRes.body).meeting?.speakerNames?.A === '张三', renameRes.body.slice(0, 160))
+
+  // 纠错待审阅：写入 → 应用选中 → 转写被替换
+  const correctionBody = {
+    correction: {
+      at: new Date().toISOString(),
+      original: 'A：你好 世界\nB：收到',
+      corrected: 'A：你好，世界\nB：收到',
+      changes: [{ before: 'A：你好 世界', after: 'A：你好，世界' }],
+    },
+  }
+  const setCorrection = await uploadCase('PATCH', '/dsh-meeting/meetings/mt_test', JSON.stringify(correctionBody), 'application/json')
+  check('可以写入待审阅的纠错', setCorrection.status === 200 && JSON.parse(setCorrection.body).meeting?.correction?.changes?.length === 1, setCorrection.body.slice(0, 160))
+  const applyCorrection = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/correction/apply', JSON.stringify({ accepted: [0] }), 'application/json')
+  const appliedPayload = JSON.parse(applyCorrection.body)
+  check('应用选中纠错后替换转写并清空待审阅', applyCorrection.status === 200 && appliedPayload.meeting?.transcript === 'A：你好，世界\nB：收到' && appliedPayload.meeting?.correction === null, JSON.stringify({ transcript: appliedPayload.meeting?.transcript, correction: appliedPayload.meeting?.correction }))
+
+  // 忽略纠错
+  await uploadCase('PATCH', '/dsh-meeting/meetings/mt_test', JSON.stringify(correctionBody), 'application/json')
+  const discardCorrection = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/correction/discard', JSON.stringify({}), 'application/json')
+  check('忽略纠错后只清空待审阅、不动转写', discardCorrection.status === 200 && JSON.parse(discardCorrection.body).meeting?.correction === null, discardCorrection.body.slice(0, 140))
+
+  // 录音质量：上传一段真实 WAV 后返回质量分析
+  const qualityWav = makeWav(2)
+  const qualityUpload = await uploadCase('POST', '/dsh-meeting/meetings/mt_test/media/upload?kind=audio&name=quality.wav&seconds=2', qualityWav, 'audio/wav')
+  const qualityPayload = JSON.parse(qualityUpload.body)
+  check('音频上传后返回录音质量分析', qualityUpload.status === 200 && qualityPayload.quality !== null && typeof qualityPayload.quality.level === 'string', JSON.stringify(qualityPayload.quality))
+  check('录音质量带中文建议', Array.isArray(qualityPayload.quality?.suggestions) && qualityPayload.quality.suggestions.length > 0, JSON.stringify(qualityPayload.quality?.suggestions))
+
+  // ASR 热词：切到腾讯云后，术语表会作为 hotwords 传进 transcribeCloud
+  const hotwordCaptured = {}
+  const askHotwords = await runRoute({
+    status: () => ({ available: true, providers: [], selection: {} }),
+    prepare: () => {},
+    async transcribeWav() { return { text: '', audioSeconds: 0 }; },
+  }, {
+    cloudAsr: {
+      async transcribeCloud(args) {
+        hotwordCaptured.args = args
+        return { ok: true, text: '云端识别结果' }
+      },
+    },
+  })
+  await askHotwords('PATCH', '/dsh-meeting/settings', JSON.stringify({ settings: { transcribe: { provider: 'cloud-tencent' }, terms: '智慧工地平台\nBIM' } }), 'application/json')
+  const hotwordTranscribe = await askHotwords('POST', '/dsh-meeting/meetings/mt_test/transcribe?language=zh', makeWav(2))
+  check('云端转写会把术语表作为热词传入', hotwordTranscribe.status === 200 && Array.isArray(hotwordCaptured.args?.hotwords) && hotwordCaptured.args.hotwords.includes('智慧工地平台') && hotwordCaptured.args.hotwords.includes('BIM'), JSON.stringify(hotwordCaptured.args?.hotwords))
+}
+
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
 
