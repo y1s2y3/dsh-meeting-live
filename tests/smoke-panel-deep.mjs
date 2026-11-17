@@ -216,11 +216,13 @@ try {
   }
 }
 
-/* 交互回归：录音开始后不再弹「会议进行中」白色弹窗，直接交给桌面浮窗 / 页面录音条 */
+/* 交互回归：录音开始后不再弹「会议进行中」白色弹窗，原文回「会议纪要」面板里看 */
 {
   const checks = [
-    ['开始录音成功后自动收起弹窗', code.includes('started === true) props.onClose()')],
+    ['开始录音成功后收起弹窗、切回纪要面板并选中本次会议',
+      /if \(started === true\) \{[\s\S]{0,160}?props\.onClose\(\)[\s\S]{0,320}?selectedId: activeId[\s\S]{0,120}?openMeetingPanel\(\)/.test(code)],
     ['录音中再点入口只提示、不再打开发录音弹窗', code.includes("notify('info', '录音进行中'")],
+    ['录音中提示原文在面板的原始转写卡片里看', code.includes('原始转写卡片里正在实时出字')],
   ]
   for (const [label, ok] of checks) {
     if (ok) {

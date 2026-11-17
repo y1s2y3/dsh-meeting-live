@@ -763,8 +763,27 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-speaker--c{background:#059669}
 .dsm-speaker--d{background:#D97706}
 .dsm-speaker--x{background:#94A3B8}
+/* 说话人色板：按出现顺序取色，A/B/C/D 与 S1/S2/任意姓名都能区分（超出 6 个循环） */
+.dsm-speaker--t0{background:#2F6BFF}
+.dsm-speaker--t1{background:#7C3AED}
+.dsm-speaker--t2{background:#059669}
+.dsm-speaker--t3{background:#D97706}
+.dsm-speaker--t4{background:#DB2777}
+.dsm-speaker--t5{background:#0891B2}
 .dsm-transcript-plain{font-size:12px;line-height:20px;color:#334155;white-space:pre-wrap;max-height:220px;overflow:auto;font-family:inherit}
 .dsm-transcript-note{margin-top:8px;font-size:11px;line-height:16px;color:#8A94A6}
+/* 录音中：原始转写卡片顶部的实时条（计时 / 字数 / 暂停 / 停止） */
+.dsm-transcript-live{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:9px;padding:7px 10px;border-radius:9px;background:#FFF5F5;border:1px solid #FBD5D5;font-size:11.5px;line-height:17px;color:#B91C1C}
+.dsm-transcript-live-dot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:#DC2626;box-shadow:0 0 0 3px rgba(220,38,38,.14)}
+.dsm-transcript-live-title{font-weight:650;color:#B91C1C}
+.dsm-transcript-live-meta{color:#A05A5A}
+.dsm-transcript-live-spacer{flex:1 1 auto}
+.dsm-root .dsm-transcript-live .dsm-btn{height:24px;padding:0 9px;font-size:11.5px}
+/* 转写状态条：声纹重新分离进行中 / 完成 / 未生效 */
+.dsm-transcript-status{display:flex;align-items:flex-start;gap:7px;margin-top:8px;padding:8px 10px;border-radius:9px;background:#F4F7FF;border:1px solid #E1EAFB;font-size:11.5px;line-height:17px;color:#3B66C4}
+.dsm-transcript-status--ok{background:#F2FBF5;border-color:#CFEAD8;color:#15803D}
+.dsm-transcript-status--warn{background:#FFFAF0;border-color:#F4D3A6;color:#A16207}
+.dsm-transcript-status-dot{flex:0 0 auto;width:6px;height:6px;margin-top:6px;border-radius:50%;background:currentColor}
 /* 说话人重命名 + 纠错 diff */
 .dsm-speaker-rename{border:1px solid #DCE7FF;background:#F7FAFF;border-radius:10px;padding:10px 12px;margin-bottom:10px}
 .dsm-speaker-rename-title{font-size:11.5px;color:#475569;margin-bottom:4px}
@@ -5418,8 +5437,14 @@ nav[aria-label="Global panels"] > button > span:last-child{
           screen: wantScreen,
           screenSource: form.screenSource ?? screenSources[0]?.id ?? 'desktop',
         })
-        // 成功开始录音：立刻收起弹窗，只保留桌面浮窗 / 页面录音条。
-        if (started === true) props.onClose()
+        // 成功开始录音：立刻收起弹窗，并回到「会议纪要」功能面板看这场会议的实时原文
+        // （桌面浮窗仍保留暂停/停止，但原文不再只能在浮窗里看）。
+        if (started === true) {
+          props.onClose()
+          const activeId = snapshot.live.meetingId
+          if (typeof activeId === 'string' && activeId !== '') commit({ selectedId: activeId, meetingLoading: false })
+          openMeetingPanel()
+        }
       }
 
       function finishLiveAndClose() {
@@ -6721,15 +6746,36 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const text = String(props.transcript ?? '')
       const segments = Array.isArray(props.segments) ? props.segments : []
       const speakerNames = props.speakerNames !== null && typeof props.speakerNames === 'object' ? props.speakerNames : {}
-      const [open, setOpen] = useState(false)
+      const live = props.live ?? null
+      const liveActive = live !== null
+      const diarizing = props.diarizing ?? null
+      // 原始转写默认展开：开始会议后直接在功能面板里看实时原文，不用再点「展开」。
+      const [open, setOpen] = useState(true)
       const [copied, setCopied] = useState(false)
       const [renaming, setRenaming] = useState(false)
       const [draftNames, setDraftNames] = useState({})
+      const scrollRef = useRef(null)
       const speakers = segments.reduce((list, segment) => {
         const label = typeof segment?.speaker === 'string' ? segment.speaker : ''
         return label !== '' && !list.includes(label) ? [...list, label] : list
       }, [])
       const speakerCount = speakers.length
+      // 按说话人出现顺序取色：A/B/C/D 与声纹分离出的 S1/S2/自定义姓名都能区分。
+      const speakerTone = (label) => {
+        if (label === '') return 'x'
+        const index = speakers.indexOf(label)
+        return index < 0 ? 'x' : 't' + String(index % 6)
+      }
+      // 声纹分离出来的标签是 S1/S2…；A/B/C/D 是录音中按音色临时估算的，两者提示文案不同。
+      const diarizedLabels = speakerCount > 0 && speakers.every((speaker) => /^S\d+$/.test(speaker))
+      // 录音中：每来一段新文字就滚到底部，视线停在「刚说的话」上。
+      const liveTick = live === null ? 0 : (Number(live.chars) || 0)
+      useEffect(() => {
+        if (liveActive !== true || open !== true) return
+        const node = scrollRef.current
+        if (node === null || node === undefined) return
+        node.scrollTop = node.scrollHeight
+      }, [liveActive, open, liveTick, segments.length, text.length])
       const speakerLabel = (speaker) => (speakerNames[speaker] !== undefined && speakerNames[speaker] !== '' ? speakerNames[speaker] : speaker)
       const plainOf = () => {
         if (segments.length === 0) return text
@@ -6750,6 +6796,29 @@ nav[aria-label="Global panels"] > button > span:last-child{
         if (retranscribe.status === 'error' && retranscribe.error) return '整段重转写失败：' + retranscribe.error
         if (retranscribe.status === 'done' && retranscribe.note) return retranscribe.note
         return null
+      })()
+      const diarizeStatus = (() => {
+        if (diarizing === null) return null
+        if (diarizing.phase === 'running') {
+          return { tone: '', text: '正在按声纹重新分离说话人…（约 10–60 秒，完成后自动刷新）', spin: true }
+        }
+        if (diarizing.phase === 'done') {
+          return { tone: 'ok', text: '已按声纹重新分离：共 ' + String(Number(diarizing.speakers) || 0) + ' 位说话人（S1、S2…）。点「说话人重命名」可改成真实姓名。', spin: false }
+        }
+        if (diarizing.phase === 'timeout') {
+          return { tone: 'warn', text: '声纹分离还没完成（录音较长时要几分钟）：稍后点刷新即可，也可点「整段重转写」重试。', spin: false }
+        }
+        return null
+      })()
+      const estimateNote = (() => {
+        if (speakerCount === 0) return null
+        if (liveActive === true) {
+          return '录音中的 A/B/C/D 是按音色临时估算的分组；停止后会自动用声纹重新分离（S1、S2…），也可以点「说话人重命名」直接改成真实姓名。'
+        }
+        if (diarizedLabels === true) {
+          return '说话人由声纹分离自动得出（S1、S2…）；点「说话人重命名」可改成真实姓名，纠错、纪要和导出都会用新名字。'
+        }
+        return 'A/B/C/D 为按音色自动分组的估算结果，仅供参考；导入的音频文件暂不区分说话人。停止录音后会自动用声纹重新分离。'
       })()
       const copy = async () => {
         try {
@@ -6789,7 +6858,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
               setDraftNames(next)
               setRenaming(true)
             },
-            title: '把 S1/S2 改成真实姓名，纠错和纪要都会用这个名字',
+            title: diarizedLabels
+              ? '把 S1/S2 改成真实姓名，纠错和纪要都会用这个名字'
+              : '把 A/B/C/D 改成真实姓名，纠错和纪要都会用这个名字',
           }, h(Icon, { name: 'users', size: 12 }), h('span', null, renaming ? '取消重命名' : '说话人重命名'))
           : null,
         props.onRetranscribe && props.hasAudio === true
@@ -6821,9 +6892,11 @@ nav[aria-label="Global panels"] > button > span:last-child{
           { className: 'dsm-transcript dsm-transcript--card' },
           renaming
             ? h('div', { className: 'dsm-speaker-rename' },
-              h('div', { className: 'dsm-speaker-rename-title' }, '把说话人改成真实姓名（留空则保留 S1/S2）'),
+              h('div', { className: 'dsm-speaker-rename-title' }, diarizedLabels
+                ? '把说话人改成真实姓名（留空则保留 S1/S2）'
+                : '把说话人改成真实姓名（留空则保留原来的说话人标记）'),
               ...speakers.map((speaker) => h('div', { key: 'rename-' + speaker, className: 'dsm-speaker-rename-row' },
-                h('span', { className: 'dsm-speaker dsm-speaker--' + speaker.toLowerCase() }, speaker),
+                h('span', { className: 'dsm-speaker dsm-speaker--' + speakerTone(speaker) }, speaker),
                 h(TextInput, {
                   value: draftNames[speaker] ?? '',
                   onChange: (value) => { setDraftNames((previous) => ({ ...previous, [speaker]: value })) },
@@ -6843,13 +6916,39 @@ nav[aria-label="Global panels"] > button > span:last-child{
               ),
             )
             : null,
+          liveActive
+            ? h(
+              'div',
+              { className: 'dsm-transcript-live' },
+              h('span', { className: 'dsm-transcript-live-dot' }),
+              h('span', { className: 'dsm-transcript-live-title' }, live.status === 'paused' ? '已暂停' : live.status === 'preparing' ? '正在准备' : live.status === 'stopping' ? '正在结束' : '录音中'),
+              h('span', { className: 'dsm-transcript-live-meta' }, formatTimer(live.elapsedSeconds) + ' · 已转写 ' + formatChars(live.chars)),
+              h('span', { className: 'dsm-transcript-live-spacer' }),
+              live.status === 'recording' || live.status === 'paused'
+                ? h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm',
+                  onClick: () => { if (typeof props.onPauseLive === 'function') props.onPauseLive() },
+                  title: live.status === 'paused' ? '继续采集麦克风' : '暂停采集（会议与计时保留，可继续）',
+                }, live.status === 'paused' ? '继续' : '暂停')
+                : null,
+              live.status === 'recording' || live.status === 'paused'
+                ? h('button', {
+                  type: 'button',
+                  className: 'dsm-btn dsm-btn--sm dsm-btn--danger',
+                  onClick: () => { if (typeof props.onStopLive === 'function') props.onStopLive() },
+                  title: '结束录音并保存这场会议',
+                }, '停止并保存')
+                : null,
+            )
+            : null,
           segments.length > 0
             ? h(
               'div',
-              { className: 'dsm-transcript-lines' + (open ? ' dsm-transcript-lines--open' : '') },
+              { ref: scrollRef, className: 'dsm-transcript-lines' + (open ? ' dsm-transcript-lines--open' : '') },
               ...segments.map((segment, index) => {
                 const label = typeof segment?.speaker === 'string' ? segment.speaker : ''
-                const tone = label === '' ? 'x' : label.toLowerCase()
+                const tone = speakerTone(label)
                 return h(
                   'div',
                   { key: 'seg-' + String(index), className: 'dsm-transcript-line' },
@@ -6863,9 +6962,21 @@ nav[aria-label="Global panels"] > button > span:last-child{
                 )
               }),
             )
-            : h('div', { className: 'dsm-transcript-plain' }, text === '' ? '（暂无转写文本）' : text),
-          speakerCount > 0
-            ? h('div', { className: 'dsm-transcript-note' }, 'A/B/C/D 为按音色自动分组的估算结果，仅供参考；导入的音频文件暂不区分说话人。')
+            : h('div', { ref: scrollRef, className: 'dsm-transcript-plain' }, text === ''
+              ? (liveActive ? '正在等待第一段识别结果…（约 6–10 秒）' : '（暂无转写文本）')
+              : text),
+          diarizeStatus !== null
+            ? h(
+              'div',
+              { className: 'dsm-transcript-status' + (diarizeStatus.tone === '' ? '' : ' dsm-transcript-status--' + diarizeStatus.tone) },
+              diarizeStatus.spin === true
+                ? h('span', { className: 'dsm-spin', style: { width: 11, height: 11, borderWidth: 1.5 } })
+                : h('span', { className: 'dsm-transcript-status-dot' }),
+              h('span', null, diarizeStatus.text),
+            )
+            : null,
+          estimateNote !== null
+            ? h('div', { className: 'dsm-transcript-note' }, estimateNote)
             : null,
           retranscribeNote !== null
             ? h('div', { className: 'dsm-transcript-note' }, retranscribeNote)
@@ -7165,6 +7276,8 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const hasSummary = summary !== null && summary !== undefined
       const hasTranscript = typeof meeting.transcript === 'string' && meeting.transcript.trim() !== ''
       const hasAudio = Array.isArray(meeting.media) && meeting.media.some((item) => item && item.kind === 'audio')
+      // 正在录的这场会议：即使还没有第一段识别结果，也要先摆出「原始转写」卡片（默认展开）。
+      const live = props.live ?? null
 
       return h(
         'article',
@@ -7194,7 +7307,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
         summaryStartedAt !== null
           ? h(SummarizingCard, { startedAt: summaryStartedAt })
           : null,
-        !hasSummary && summaryStartedAt === null
+        !hasSummary && summaryStartedAt === null && live === null
           ? h(
             'div',
             { className: 'dsm-cta' },
@@ -7254,11 +7367,15 @@ nav[aria-label="Global panels"] > button > span:last-child{
             h('div', { className: 'dsm-notes' }, meeting.notes),
           )
           : null,
-        hasTranscript || hasAudio
+        hasTranscript || hasAudio || live !== null
           ? h(TranscriptSection, {
             transcript: meeting.transcript,
             segments: meeting.transcriptSegments,
             speakerNames: meeting.speakerNames,
+            live,
+            diarizing: props.diarizing ?? null,
+            onPauseLive: props.onPauseLive,
+            onStopLive: props.onStopLive,
             onRenameSpeakers: props.onRenameSpeakers,
             hasAudio,
             retranscribe: props.retranscribe,
@@ -7633,6 +7750,52 @@ nav[aria-label="Global panels"] > button > span:last-child{
       const onboardingCheckedRef = useRef(false)
       const [retranscribe, setRetranscribe] = useState(null)
       const retranscribeTimer = useRef(null)
+      // 停止录音后底层会用声纹重新分离说话人（几秒到一分钟）：
+      // 这里轮询标签是否已从 A/B/C/D 变成 S1/S2…，并把进度显示在「原始转写」卡片上。
+      const [diarize, setDiarize] = useState(null)
+      const diarizeMeetingId = state.live !== null && state.live !== undefined && state.live.status === 'done'
+        ? (state.live.result?.meetingId ?? state.live.meetingId ?? null)
+        : null
+      useEffect(() => {
+        if (typeof diarizeMeetingId !== 'string' || diarizeMeetingId === '') return undefined
+        let cancelled = false
+        let tries = 0
+        setDiarize({ meetingId: diarizeMeetingId, phase: 'running' })
+        const finish = (next) => { if (cancelled !== true) setDiarize(next) }
+        const readSpeakers = () => {
+          const meeting = snapshot.meeting
+          if (meeting === null || meeting === undefined || meeting.id !== diarizeMeetingId) return null
+          const rows = Array.isArray(meeting.transcriptSegments) ? meeting.transcriptSegments : []
+          if (rows.length === 0) return null
+          const speakers = []
+          for (const row of rows) {
+            const label = typeof row?.speaker === 'string' ? row.speaker.trim() : ''
+            if (label !== '' && !speakers.includes(label)) speakers.push(label)
+          }
+          return speakers
+        }
+        const timer = window.setInterval(() => {
+          tries += 1
+          void loadMeeting(diarizeMeetingId, { silent: true, quiet: true }).catch(() => {})
+          window.setTimeout(() => {
+            if (cancelled === true) return
+            const speakers = readSpeakers()
+            if (speakers !== null && speakers.length > 0 && speakers.every((label) => /^S\d+$/.test(label))) {
+              window.clearInterval(timer)
+              finish({ meetingId: diarizeMeetingId, phase: 'done', speakers: speakers.length })
+              return
+            }
+            if (tries >= 24) {
+              window.clearInterval(timer)
+              finish({ meetingId: diarizeMeetingId, phase: 'timeout' })
+            }
+          }, 800)
+        }, 5000)
+        return () => {
+          cancelled = true
+          window.clearInterval(timer)
+        }
+      }, [diarizeMeetingId])
 
       // 首次使用：数据加载完成后弹一次引导（模型 / 待办插件），看过就记住。
       useEffect(() => {
@@ -7670,6 +7833,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
 
       const meetings = state.meetings ?? []
       const selected = state.meeting
+      // 正在录制的这场会议：用于把「原始转写」卡片切成实时模式（计时 / 暂停 / 停止）。
+      const liveMeeting = liveIsActive(state.live) && state.live.meetingId === selected?.id ? state.live : null
+      const diarizeForSelected = diarize !== null && selected !== null && diarize.meetingId === selected.id ? diarize : null
       const speech = state.speech ?? state.data?.speech
       const speechAvailable = speechUsable(speech)
       const calendar = state.data?.calendar ?? null
@@ -7916,10 +8082,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
           setRecordTab(mode === 'file' ? 'file' : 'record')
           const live = snapshot.live ?? initialLiveState()
           if (liveIsActive(live)) {
-            // 录音中不再弹白色弹窗：Windows 由桌面浮窗控制，其它平台用页面底部录音条。
-            notify('info', '录音进行中', snapshot.orbActive === true
-              ? '用桌面浮窗（球或气泡）暂停 / 停止；结束后会自动回到纪要'
-              : '用页面底部的录音条暂停 / 停止；结束后会自动回到纪要')
+            // 录音中不再弹白色弹窗：原文看「会议纪要」面板里的原始转写卡片（默认展开），
+            // 暂停 / 停止可以用卡片上的按钮或桌面浮窗。
+            notify('info', '录音进行中', '回到「会议纪要」面板，原始转写卡片里正在实时出字；暂停 / 停止可用卡片上的按钮或桌面浮窗')
             return
           }
           if (live.status === 'done' || live.status === 'error') clearLiveRecording()
@@ -8008,6 +8173,12 @@ nav[aria-label="Global panels"] > button > span:last-child{
               onApplyCorrection: applyCorrection,
               onDiscardCorrection: discardCorrection,
               onRenameSpeakers: renameSpeakers,
+              live: liveMeeting,
+              diarizing: diarizeForSelected,
+              onPauseLive: () => {
+                void (liveMeeting !== null && liveMeeting.status === 'paused' ? resumeLiveRecording() : pauseLiveRecording())
+              },
+              onStopLive: () => { void stopLiveRecording('user') },
             })
         content = h(
           'div',
