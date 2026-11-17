@@ -8,3 +8,5 @@ node_modules/
 # 含真实会议内容的示例与截图，不要提交（需要示例时请换脱敏数据）
 docs/会议纪要-导出样式示例.docx
 docs/导出Word-美化预览.png
+
+browser-screenshots/

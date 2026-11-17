@@ -859,6 +859,33 @@ button.dsm-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border
 .dsm-root .dsm-level{background:#E9EEF6}
 .dsm-root .dsm-level-bar{background:linear-gradient(90deg,#7FA8FF,#2F6BFF)}
 
+/* 全局面板（插件 / 自动化任务 / 会议纪要…）改为一行两个：
+   用 aria-label 选中侧栏面板列表，:has(标题) 保证只在展开状态生效，收起时仍是一列图标。 */
+nav[aria-label="全局面板"]:has(> button > span + span),
+nav[aria-label="Global panels"]:has(> button > span + span){
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:4px;
+}
+nav[aria-label="全局面板"] > button,
+nav[aria-label="Global panels"] > button{
+  width:100%;
+  min-width:0;
+  margin:0;
+  padding:5px 6px;
+  min-height:32px;
+  gap:4px;
+  font-size:12.5px;
+  line-height:18px;
+}
+nav[aria-label="全局面板"] > button > span:last-child,
+nav[aria-label="Global panels"] > button > span:last-child{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
 `
 
     const STYLE_TAG_ID = 'dsh-meeting-live/client.css'
