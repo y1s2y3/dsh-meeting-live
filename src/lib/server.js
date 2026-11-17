@@ -428,9 +428,16 @@ export function mergeRetranscribeTexts(texts) {
   return lines.join('\n')
 }
 
-/* ── 声纹重新分离（给已有分段补 S1/S2 标签，或整段替换） ─────────────────── */
-/** 进行中的声纹分离任务：meetingId → { status, speakers, error, note, startedAt } */
+/* ── 声纹重新分离（给已有分段补 S1/S2 标签） ─────────────────────────── */
+/** 进行中的声纹分离任务：meetingId → { status, stage, speakers, error, note, startedAt } */
 const diarizeJobs = new Map()
+/** 进行中的分离子进程：meetingId → ChildProcess（用于取消） */
+const diarizeChildren = new Map()
+/** 单次声纹分离的最长运行时间（1 小时音频在 CPU 上约 7–10 分钟，留足余量）。 */
+const DIARIZE_MAX_MS = 30 * 60 * 1000
+/** 自动聚类超过这个人数基本是远场过度分割，界面会提示可指定人数重试。 */
+const DIARIZE_WARN_SPEAKERS = 12
+
 
 /**
  * 用声纹分离结果给**已有转写分段**打说话人标签（保留原有文字与时间，不重写文本）。
@@ -606,59 +613,119 @@ async function runRetranscribeJob({ deps, store, meetingId, audioPath, logger })
 
 /**
  * 后台用声纹（pyannote + cam++）重新分离说话人：
- *   - 优先保留现有转写文本与时间，只给分段补 S1/S2 标签（受手动「重新分离说话人」触发）；
+ *   - **在独立子进程里跑**（sherpa 的分离是同步 CPU 计算，放在宿主进程会阻塞事件循环、
+ *     页面拿不到进度、整个插件卡住；1 小时音频实测要 7–10 分钟）；
+ *   - 优先保留现有转写文本与时间，只给分段补 S1/S2 标签；
  *   - 已有分段太少或匹配率过低时，才用整段分离结果替换转写（沿用 shouldUseDiarizedTranscript 的保护）。
  */
-async function runDiarizeJob({ deps, store, meetingId, audioPath, logger }) {
+async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speakers = 0 }) {
   const job = diarizeJobs.get(meetingId)
   if (job === undefined) return
+  const outputPath = join(tmpdir(), 'dsh-diarize-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.json')
+  const argsPath = outputPath + '.args.json'
+  let child = null
+  let stderrTail = ''
   try {
     if (deps.paraformer === undefined || deps.paraformer === null
-      || typeof deps.paraformer.transcribeFileWithSpeakers !== 'function'
       || deps.paraformer.diarizationAvailable?.() !== true) {
       job.status = 'error'
       job.error = '说话人分离模型未就绪：请到设置 → 模型配置里下载 pyannote 分段与 cam++ 声纹模型'
       return
     }
-    job.stage = 'separating'
-    const analyzed = await deps.paraformer.transcribeFileWithSpeakers(audioPath)
-    const lines = Array.isArray(analyzed?.lines) ? analyzed.lines : []
-    job.speakers = Number(analyzed?.speakers) || [...new Set(lines.map((line) => line?.speaker).filter(Boolean))].length
-    const current = store.get(meetingId)
-    const segments = Array.isArray(current?.transcriptSegments) ? current.transcriptSegments : []
-    if (lines.length > 0 && segments.length > 0) {
-      const { segments: relabeled, assigned, total } = relabelSegmentsBySpeaker(segments, lines)
-      if (relabeled !== null && total > 0 && assigned >= Math.max(1, Math.round(total * 0.5))) {
-        await store.patch(meetingId, {
-          transcriptSegments: relabeled,
-          transcript: buildTranscriptFromSegments(relabeled),
-        })
-        job.status = 'done'
-        job.note = `已按声纹重新分离：${String(job.speakers)} 位说话人，标注 ${assigned}/${total} 段`
-        logger?.info?.(`meeting-minutes: diarize relabeled ${assigned}/${total} segments (${job.speakers} speakers)`)
-        return
-      }
-    }
-    // 没有可标注的分段（或匹配率过低）：整段替换，但保留「别把长转写换短」的保护。
-    const batchText = typeof analyzed?.text === 'string' ? analyzed.text : ''
-    const useBatch = shouldUseDiarizedTranscript(current?.transcript, batchText)
-    if (useBatch && lines.length > 0) {
-      await store.patch(meetingId, {
-        transcript: batchText,
-        transcriptSegments: lines.map((line) => ({ speaker: line.speaker, text: line.text, at: Math.round(Number(line.start) || 0) })),
+    const models = deps.modelManager?.paths?.() ?? {}
+    await writeFile(argsPath, JSON.stringify({
+      audioPath,
+      models,
+      numClusters: Number(speakers) > 0 ? Math.round(Number(speakers)) : 0,
+      outputPath,
+    }), 'utf8')
+    const workerPath = fileURLToPath(new URL('./diarize-worker.js', import.meta.url))
+    job.stage = 'starting'
+    let exited = null
+    try {
+      child = spawn(process.execPath, [workerPath, argsPath], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
       })
-      job.status = 'done'
-      job.note = `已用声纹重新分离并重写转写：${String(job.speakers)} 位说话人`
-      logger?.info?.(`meeting-minutes: diarize replaced transcript (${job.speakers} speakers, ${lines.length} lines)`)
+    } catch (error) {
+      throw new Error('无法启动声纹分离进程：' + (error instanceof Error ? error.message : String(error)))
+    }
+    diarizeChildren.set(meetingId, child)
+    child.stdout?.on('data', (chunk) => {
+      const text = String(chunk)
+      if (text.includes('STAGE loading')) job.stage = 'loading'
+      if (text.includes('STAGE diarizing')) job.stage = 'diarizing'
+      for (const line of text.split('\n')) {
+        if (line.startsWith('STAGE done')) job.stage = 'relabeling'
+      }
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderrTail = (stderrTail + String(chunk)).slice(-800)
+    })
+    exited = await new Promise((resolve) => {
+      let settled = false
+      const finish = (value) => { if (!settled) { settled = true; resolve(value) } }
+      child.on('error', (error) => finish({ code: -1, errorMessage: error instanceof Error ? error.message : String(error) }))
+      child.on('exit', (code) => finish({ code }))
+      setTimeout(() => {
+        try { child.kill() } catch { /* ignore */ }
+        finish({ code: -2, timeout: true })
+      }, DIARIZE_MAX_MS)
+    })
+    diarizeChildren.delete(meetingId)
+    if (job.status === 'cancelled') {
+      job.error = '已取消声纹分离（原转写保持不变）'
       return
     }
-    job.status = 'error'
-    job.error = '声纹分离结果太少（音频可能太短或太轻），已保留原转写'
-    logger?.warn?.('meeting-minutes: diarize result too short; keeping the existing transcript')
+    if (exited.timeout === true) throw new Error('声纹分离超过 ' + String(Math.round(DIARIZE_MAX_MS / 60000)) + ' 分钟仍未结束，已停止（可改用指定人数重试）')
+    let parsed = null
+    try {
+      parsed = JSON.parse(await readFile(outputPath, 'utf8'))
+    } catch {
+      parsed = null
+    }
+    if (parsed === null || parsed.ok !== true) {
+      const reason = parsed !== null && typeof parsed.error === 'string' && parsed.error !== ''
+        ? parsed.error
+        : (stderrTail.trim() !== '' ? stderrTail.trim().split('\n').slice(-2).join(' ') : '分离进程异常退出（code ' + String(exited.code) + '）')
+      throw new Error(reason)
+    }
+    const lines = Array.isArray(parsed.lines) ? parsed.lines : []
+    job.speakers = Number(parsed.speakers) || [...new Set(lines.map((line) => line?.speaker).filter(Boolean))].length
+    const current = store.get(meetingId)
+    const segments = Array.isArray(current?.transcriptSegments) ? current.transcriptSegments : []
+    if (lines.length === 0) throw new Error('声纹分离没有识别出任何说话人片段（音频可能太短或太轻）')
+    if (segments.length === 0) {
+      throw new Error('这场会议还没有分段转写，无法回填说话人标签：请先点「整段重转写」再重新分离')
+    }
+    const { segments: relabeled, assigned, total } = relabelSegmentsBySpeaker(segments, lines)
+    if (relabeled === null || total === 0 || assigned < Math.max(1, Math.round(total * 0.5))) {
+      throw new Error('声纹分离结果与转写时间对不上（匹配 ' + String(assigned) + '/' + String(total) + ' 段），建议先「整段重转写」再试')
+    }
+    await store.patch(meetingId, {
+      transcriptSegments: relabeled,
+      transcript: buildTranscriptFromSegments(relabeled),
+    })
+    job.status = 'done'
+    job.stage = 'done'
+    const tooMany = job.speakers > DIARIZE_WARN_SPEAKERS
+    job.note = '已按声纹重新分离：' + String(job.speakers) + ' 位说话人，标注 ' + String(assigned) + '/' + String(total) + ' 段'
+      + (tooMany ? '。检测到的说话人数偏多（远场录音容易过度分割），可指定人数重试' : '')
+    logger?.info?.(`meeting-minutes: diarize relabeled ${assigned}/${total} segments (${job.speakers} speakers${Number(speakers) > 0 ? ', forced ' + String(speakers) : ''})`)
   } catch (error) {
-    job.status = 'error'
-    job.error = error instanceof Error ? error.message : String(error)
-    logger?.warn?.('meeting-minutes: diarize failed: ' + job.error)
+    if (job.status !== 'cancelled') {
+      job.status = 'error'
+      job.error = error instanceof Error ? error.message : String(error)
+      logger?.warn?.('meeting-minutes: diarize failed: ' + job.error)
+    }
+  } finally {
+    if (child !== null) {
+      diarizeChildren.delete(meetingId)
+      try { child.kill() } catch { /* already exited */ }
+    }
+    await rm(outputPath, { force: true }).catch(() => {})
+    await rm(argsPath, { force: true }).catch(() => {})
   }
 }
 
@@ -1421,32 +1488,66 @@ export function registerRoutes(ctx, deps) {
         return
       }
 
-      // 声纹重新分离：POST 启动（异步），GET 查进度。
+      // 声纹重新分离：POST 启动（独立子进程跑，宿主不等它），GET 查进度，POST /cancel 取消。
       // 用于给已有转写分段补 S1/S2 说话人标签（实时录音里的 A/B/C/D 只是音高估算）。
+      if (segments.length === 4 && segments[2] === 'diarize' && segments[3] === 'cancel' && method === 'POST') {
+        requireMeeting(store, id)
+        const job = diarizeJobs.get(id)
+        if (job === undefined || job.status !== 'running') {
+          sendJson(res, 200, { ok: true, job: job ? { ...job } : { status: 'idle', stage: 'idle' } })
+          return
+        }
+        job.status = 'cancelled'
+        job.stage = 'cancelled'
+        job.error = '已取消（原转写保持不变）'
+        const child = diarizeChildren.get(id)
+        if (child !== undefined) {
+          try { child.kill() } catch { /* already exited */ }
+          diarizeChildren.delete(id)
+        }
+        logger?.info?.('meeting-minutes: diarize cancelled by user')
+        sendJson(res, 200, { ok: true, job: { ...job } })
+        return
+      }
+
       if (segments.length === 3 && segments[2] === 'diarize' && (method === 'POST' || method === 'GET')) {
         const meeting = requireMeeting(store, id)
         if (method === 'GET') {
           const job = diarizeJobs.get(id)
-          sendJson(res, 200, { ok: true, job: job ? { ...job } : { status: 'idle', stage: 'idle', speakers: 0 } })
+          const elapsedSeconds = job !== undefined && typeof job.startedAt === 'number'
+            ? Math.max(0, Math.round((Date.now() - job.startedAt) / 1000))
+            : 0
+          sendJson(res, 200, { ok: true, job: job ? { ...job, elapsedSeconds } : { status: 'idle', stage: 'idle', speakers: 0, elapsedSeconds: 0 } })
           return
         }
+        const body = await readJsonBody(req)
+        const wanted = Number(body.speakers ?? body.numSpeakers ?? 0)
+        const forcedSpeakers = Number.isFinite(wanted) && wanted >= 2 && wanted <= 20 ? Math.round(wanted) : 0
         const audio = (Array.isArray(meeting.media) ? meeting.media : [])
           .find((item) => item && item.kind === 'audio' && typeof item.path === 'string' && existsSync(item.path))
         if (audio === undefined) throw new Error('这场会议没有可用的录音文件，无法重新分离说话人')
         if (deps.paraformer === undefined || deps.paraformer === null
-          || typeof deps.paraformer.transcribeFileWithSpeakers !== 'function'
           || deps.paraformer.diarizationAvailable?.() !== true) {
           throw new Error('说话人分离模型未就绪：请到设置 → 模型配置里下载 pyannote 分段与 cam++ 声纹模型')
         }
         const running = diarizeJobs.get(id)
         if (running !== undefined && running.status === 'running') {
-          sendJson(res, 200, { ok: true, job: { ...running } })
+          sendJson(res, 200, { ok: true, job: { ...running, elapsedSeconds: Math.max(0, Math.round((Date.now() - running.startedAt) / 1000)) } })
           return
         }
-        const job = { status: 'running', stage: 'starting', speakers: 0, error: null, note: null, startedAt: Date.now() }
+        const job = {
+          status: 'running',
+          stage: 'starting',
+          speakers: 0,
+          forcedSpeakers,
+          error: null,
+          note: null,
+          startedAt: Date.now(),
+        }
         diarizeJobs.set(id, job)
         sendJson(res, 200, { ok: true, job: { ...job } })
-        void runDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger })
+        // 后台子进程执行，立即返回；前端轮询 GET 拿 elapsedSeconds 显示「已运行 X 分 Y 秒」。
+        void runDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger, speakers: forcedSpeakers })
         return
       }
 

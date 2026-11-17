@@ -124,7 +124,8 @@ export function createParaformerEngine(options = {}) {
   const models = options.models ?? {}
   let sherpa = null
   let recognizer = null
-  let diarizer = null
+  /** 按聚类参数缓存分离器：numClusters/threshold 不同需要不同实例。 */
+  const diarizers = new Map()
 
   const paraformerModel = models.paraformer?.model ?? ''
   const paraformerTokens = models.paraformer?.tokens ?? ''
@@ -165,19 +166,73 @@ export function createParaformerEngine(options = {}) {
     return recognizer
   }
 
-  function ensureDiarizer() {
-    if (diarizer !== null) return diarizer
+  /**
+   * 取（或创建）一个说话人分离器。
+   * @param overrides - `{ numClusters, threshold, numThreads }`；
+   *   numClusters > 0 时强制聚成指定人数（远场录音自动聚类容易过度分割，实测能分出上百个「说话人」）。
+   */
+  function ensureDiarizer(overrides = {}) {
     if (!diarizationAvailable()) throw new Error('说话人分离模型还没下载：请到设置 → 模型配置里下载')
+    const numClusters = Number(overrides.numClusters)
+    const threshold = Number(overrides.threshold)
+    const numThreads = Number(overrides.numThreads)
+    const config = {
+      numClusters: Number.isFinite(numClusters) && numClusters > 0 ? Math.round(numClusters) : -1,
+      threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 0.5,
+      numThreads: Number.isFinite(numThreads) && numThreads > 0 ? Math.round(numThreads) : 2,
+    }
+    const key = JSON.stringify(config)
+    const cached = diarizers.get(key)
+    if (cached !== undefined) return cached
     const lib = ensureSherpa()
-    diarizer = new lib.OfflineSpeakerDiarization({
-      segmentation: { pyannote: { model: segmentationModel }, numThreads: 2, provider: 'cpu', debug: 0 },
-      embedding: { model: campplusModel, numThreads: 2, provider: 'cpu', debug: 0 },
-      clustering: { numClusters: -1, threshold: 0.5 },
+    const instance = new lib.OfflineSpeakerDiarization({
+      segmentation: { pyannote: { model: segmentationModel }, numThreads: config.numThreads, provider: 'cpu', debug: 0 },
+      embedding: { model: campplusModel, numThreads: config.numThreads, provider: 'cpu', debug: 0 },
+      clustering: { numClusters: config.numClusters, threshold: config.threshold },
       minDurationOn: 0.25,
       minDurationOff: 0.5,
     })
-    logger?.info?.('meeting-minutes: speaker diarization loaded (pyannote + cam++)')
-    return diarizer
+    diarizers.set(key, instance)
+    logger?.info?.('meeting-minutes: speaker diarization loaded (pyannote + cam++, clusters=' + String(config.numClusters) + ', threshold=' + String(config.threshold) + ')')
+    return instance
+  }
+
+  /**
+   * 只做说话人分离（**不逐段识别文本**）：给已有转写补 S1/S2 标签时用，
+   * 省掉重复 ASR（1 小时音频能省掉一两分钟）。
+   * @param samples - 16k float32 样本。
+   * @returns `{ speakers, lines: [{ speaker, start, end }] }`，speaker 形如 `S1`。
+   */
+  function diarizeSamples(samples, overrides = {}) {
+    const engine = ensureDiarizer(overrides)
+    const turns = engine.process(samples)
+    const rows = []
+    for (const turn of Array.isArray(turns) ? turns : []) {
+      const start = Math.max(0, Number(turn.start) || 0)
+      const end = Math.max(start, Number(turn.end) || start)
+      if (end - start < 0.1) continue
+      const index = Number(turn.speaker)
+      const speaker = 'S' + String((Number.isFinite(index) ? index : 0) + 1)
+      rows.push({ speaker, start, end })
+    }
+    // 合并同一说话人相邻且间隔很短的 turn，减少碎片
+    const merged = []
+    for (const row of rows) {
+      const previous = merged[merged.length - 1]
+      if (previous !== undefined && previous.speaker === row.speaker && row.start - previous.end <= 1.2) {
+        previous.end = row.end
+        continue
+      }
+      merged.push({ ...row })
+    }
+    const speakers = [...new Set(merged.map((row) => row.speaker))].length
+    return { speakers, lines: merged }
+  }
+
+  /** 按音频文件路径做「只分离说话人」（不识别文本）。 */
+  function diarizeFile(filePath, overrides = {}) {
+    const { samples } = readAudioFile(filePath)
+    return diarizeSamples(samples, overrides)
   }
 
   /** 识别一段 16k float32 样本。 */
@@ -258,5 +313,15 @@ export function createParaformerEngine(options = {}) {
     return transcribeWithSpeakers(samples)
   }
 
-  return { available, diarizationAvailable, transcribeWav, transcribeWithSpeakers, transcribeFileWithSpeakers, decodeWavToSamples }
+  return {
+    available,
+    diarizationAvailable,
+    transcribeWav,
+    transcribeWithSpeakers,
+    transcribeFileWithSpeakers,
+    decodeWavToSamples,
+    diarizeSamples,
+    diarizeFile,
+    readAudioFile,
+  }
 }

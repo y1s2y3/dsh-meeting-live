@@ -412,7 +412,7 @@ export function normalizeMeeting(raw, options = {}) {
     .filter((entry) => entry !== null)
     .slice(0, 10)
 
-  /** 分说话人转写片段：{ speaker: 'A'..'Z' | '', text, at }。 */
+  /** 分说话人转写片段：{ speaker: 'A'..'Z' | 'S1'..'S999' | '', text, at }。 */
   const rawSegments = Array.isArray(input.transcriptSegments)
     ? input.transcriptSegments
     : (Array.isArray(base.transcriptSegments) ? base.transcriptSegments : [])
@@ -421,11 +421,11 @@ export function normalizeMeeting(raw, options = {}) {
       if (segment === null || typeof segment !== 'object') return null
       const text = capText(segment.text, 2000)
       if (text === '') return null
-      const speaker = /^[A-Z]$/.test(String(segment.speaker ?? '')) ? String(segment.speaker) : ''
+      const speaker = normalizeSpeakerLabel(segment.speaker)
       return { speaker, text, at: Math.max(0, Math.round(Number(segment.at) || 0)) }
     })
     .filter((segment) => segment !== null)
-    .slice(0, 500)
+    .slice(0, 2000)
 
   const speakerNames = normalizeSpeakerNames(
     input.speakerNames === undefined ? base.speakerNames : input.speakerNames,
@@ -455,13 +455,29 @@ export function normalizeMeeting(raw, options = {}) {
   }
 }
 
-/** 归一化说话人重命名映射：{ A: '张三' }，最多 10 个、每个名字 ≤20 字。 */
+/**
+ * 说话人标记白名单：
+ *   - `A`..`Z`：录音中按音高临时估算的分组；
+ *   - `S1`..`S999`：停止录音后 pyannote + cam++ 声纹分离得到的分组。
+ * 其他值一律视为「无标签」。**注意**：早期这里只允许单个 A-Z，
+ * 导致声纹分离写回的 S1/S2 被静默清空（表现为「重新分离说话人后没有任何结果」）。
+ * @param value - 原始标记。
+ * @returns 合法标记或空串。
+ */
+export function normalizeSpeakerLabel(value) {
+  const label = String(value ?? '').trim()
+  if (/^[A-Z]$/.test(label)) return label
+  if (/^S[1-9]\d{0,2}$/.test(label)) return label
+  return ''
+}
+
+/** 归一化说话人重命名映射：{ A: '张三', S1: '李四' }，最多 10 个、每个名字 ≤20 字。 */
 export function normalizeSpeakerNames(value, base = {}) {
   const source = value === undefined ? base : value
   const input = source !== null && typeof source === 'object' && !Array.isArray(source) ? source : {}
   const names = {}
   for (const [key, raw] of Object.entries(input)) {
-    if (!/^[A-Z]$/.test(key)) continue
+    if (normalizeSpeakerLabel(key) === '') continue
     const name = capText(raw, 20)
     if (name === '') continue
     names[key] = name

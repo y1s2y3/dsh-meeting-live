@@ -140,6 +140,15 @@ function texts(node, found = []) {
 }
 const hasClass = (node, part) => classes(node).some((name) => name.includes(part))
 const joinedText = (node) => texts(node).join(' ')
+/** 按按钮文字找 button 元素（含子树的文本匹配）。 */
+function findButtons(node, label, found = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return found
+  if (Array.isArray(node)) { node.forEach((child) => findButtons(child, label, found)); return found }
+  if (typeof node !== 'object' || node.isElement !== true) return found
+  if (node.type === 'button' && texts(node).join('').includes(label)) found.push(node)
+  findButtons(node.props?.children, label, found)
+  return found
+}
 /** 在元素树里找某个组件类型的元素（函数组件本身不展开，直接把 props 拿出来单独渲染）。 */
 function findComponent(node, component, found = []) {
   if (node === null || node === undefined || typeof node === 'boolean') return found
@@ -245,7 +254,7 @@ const runningTree = render(hooks.TranscriptSection, {
   live: null,
   diarizing: { phase: 'running' },
 })
-check('声纹分离进行中显示进度条文案', joinedText(runningTree).includes('正在用声纹（音色）重新分离说话人'))
+check('声纹分离进行中显示进度与耗时文案', joinedText(runningTree).includes('正在分析整段录音') && joinedText(runningTree).includes('已运行'))
 
 const doneTree = render(hooks.TranscriptSection, {
   transcript: 'S1：一\nS2：二',
@@ -274,6 +283,54 @@ const errorTree = render(hooks.TranscriptSection, {
   diarizing: { phase: 'error', note: '说话人分离模型未就绪' },
 })
 check('声纹分离失败显示原因', hasClass(errorTree, 'dsm-transcript-status--warn') && joinedText(errorTree).includes('说话人分离模型未就绪'), joinedText(errorTree).slice(-120))
+
+/* 3.b 后台运行中的进度：已运行时长 + 取消按钮；完成时人数过多给「按 N 人重试」 */
+{
+  const runningTree2 = render(hooks.TranscriptSection, {
+    transcript: 'A：一\nD：二',
+    segments,
+    speakerNames: {},
+    live: null,
+    diarizing: { phase: 'running', elapsedSeconds: 200, stage: 'diarizing', speakers: 0 },
+    onCancelDiarize() {},
+  })
+  check('运行中显示已运行时长（分/秒）', joinedText(runningTree2).includes('已运行 3 分 20 秒'), joinedText(runningTree2).slice(-160))
+  check('运行中显示阶段（分析整段录音）', joinedText(runningTree2).includes('正在分析整段录音'), joinedText(runningTree2).slice(-160))
+  check('运行中提供「取消」', joinedText(runningTree2).includes('取消') && findButtons(runningTree2, '取消').length === 1)
+
+  const autoTree = render(hooks.TranscriptSection, {
+    transcript: 'A：一\nD：二',
+    segments,
+    speakerNames: {},
+    live: null,
+    diarizing: { phase: 'running', elapsedSeconds: 20, stage: 'diarizing', auto: true },
+  })
+  check('自动分离（停止录音后）不显示取消按钮', findButtons(autoTree, '取消').length === 0)
+
+  let retriedCount = null
+  const tooManyTree = render(hooks.TranscriptSection, {
+    transcript: 'A：一\nD：二',
+    segments,
+    speakerNames: {},
+    live: null,
+    diarizing: { phase: 'done', speakers: 205, note: '标注 135/156 段' },
+    onDiarize(count) { retriedCount = count },
+  })
+  check('检测到 205 位说话人时给出黄色提醒', hasClass(tooManyTree, 'dsm-transcript-status--warn') && joinedText(tooManyTree).includes('205 位说话人'), joinedText(tooManyTree).slice(-160))
+  const retryButtons = findButtons(tooManyTree, '按 4 人重试')
+  check('提供「按 4/6/8 人重试」按钮', retryButtons.length === 1 && findButtons(tooManyTree, '按 6 人重试').length === 1 && findButtons(tooManyTree, '按 8 人重试').length === 1)
+  retryButtons[0]?.props?.onClick?.()
+  check('点「按 4 人重试」把人数传给回调', retriedCount === 4, String(retriedCount))
+
+  const normalTree = render(hooks.TranscriptSection, {
+    transcript: 'S1：一\nS2：二',
+    segments: [{ speaker: 'S1', text: '一', at: 0 }, { speaker: 'S2', text: '二', at: 5 }],
+    speakerNames: {},
+    live: null,
+    diarizing: { phase: 'done', speakers: 3, note: '标注 156/156 段' },
+  })
+  check('人数正常时显示绿色完成提示', hasClass(normalTree, 'dsm-transcript-status--ok') && joinedText(normalTree).includes('共 3 位说话人'), joinedText(normalTree).slice(-120))
+}
 
 /* 4. 录音中即使一个字都还没识别，MeetingDocument 也渲染原始转写卡片 */
 const meeting = {
