@@ -318,7 +318,7 @@ check('声纹分离失败显示原因', hasClass(errorTree, 'dsm-transcript-stat
   })
   check('检测到 205 位说话人时给出黄色提醒', hasClass(tooManyTree, 'dsm-transcript-status--warn') && joinedText(tooManyTree).includes('205 位说话人'), joinedText(tooManyTree).slice(-160))
   const retryButtons = findButtons(tooManyTree, '按 4 人重试')
-  check('提供「按 4/6/8 人重试」按钮', retryButtons.length === 1 && findButtons(tooManyTree, '按 6 人重试').length === 1 && findButtons(tooManyTree, '按 8 人重试').length === 1)
+  check('提供「按 2/3/4/6 人重试」按钮', retryButtons.length === 1 && findButtons(tooManyTree, '按 2 人重试').length === 1 && findButtons(tooManyTree, '按 3 人重试').length === 1 && findButtons(tooManyTree, '按 6 人重试').length === 1)
   retryButtons[0]?.props?.onClick?.()
   check('点「按 4 人重试」把人数传给回调', retriedCount === 4, String(retriedCount))
 
@@ -327,9 +327,43 @@ check('声纹分离失败显示原因', hasClass(errorTree, 'dsm-transcript-stat
     segments: [{ speaker: 'S1', text: '一', at: 0 }, { speaker: 'S2', text: '二', at: 5 }],
     speakerNames: {},
     live: null,
-    diarizing: { phase: 'done', speakers: 3, note: '标注 156/156 段' },
+    diarizing: { phase: 'done', speakers: 3, note: '标注 156/156 段', counts: { S1: 96, S2: 60 } },
   })
   check('人数正常时显示绿色完成提示', hasClass(normalTree, 'dsm-transcript-status--ok') && joinedText(normalTree).includes('共 3 位说话人'), joinedText(normalTree).slice(-120))
+  check('完成提示里显示每位说话人的段数', joinedText(normalTree).includes('S1 96 段') && joinedText(normalTree).includes('S2 60 段'), joinedText(normalTree).slice(-200))
+}
+
+/* 3.c 按说话人切句（turns 模式）：按钮、逐句进度、完成/失败文案 */
+{
+  const splitTree = render(hooks.TranscriptSection, {
+    transcript: 'A：一', segments, speakerNames: {}, live: null, diarizing: null, hasAudio: true,
+    onDiarizeSplit() {},
+  })
+  const splitActions = sectionActionsText(splitTree, '原始转写')
+  check('传了 onDiarizeSplit 且有音频时显示「按说话人切句」', splitActions.includes('按说话人切句'), splitActions.slice(0, 140))
+
+  const transcribingTree = render(hooks.TranscriptSection, {
+    transcript: 'A：一', segments, speakerNames: {}, live: null,
+    diarizing: { phase: 'running', mode: 'turns', stage: 'transcribing', elapsedSeconds: 65, transcribeDone: 40, transcribeTotal: 502 },
+    onCancelDiarize() {},
+  })
+  check('切句模式运行中显示逐句进度', joinedText(transcribingTree).includes('正在按说话人逐句识别（40/502）'), joinedText(transcribingTree).slice(-200))
+  check('切句模式运行中带「按说话人切句」前缀', joinedText(transcribingTree).includes('按说话人切句：'), joinedText(transcribingTree).slice(-200))
+
+  const turnsDoneTree = render(hooks.TranscriptSection, {
+    transcript: 'S1：一\nS2：二',
+    segments: [{ speaker: 'S1', text: '一', at: 0 }, { speaker: 'S2', text: '二', at: 5 }],
+    speakerNames: {}, live: null,
+    diarizing: { phase: 'done', mode: 'turns', speakers: 2, note: '已按说话人切句：2 位说话人、2 句（每句一个说话人）', counts: { S1: 1, S2: 1 } },
+  })
+  check('切句完成后文案是「已按说话人切句」', joinedText(turnsDoneTree).includes('已按说话人切句'), joinedText(turnsDoneTree).slice(-140))
+
+  const turnsErrorTree = render(hooks.TranscriptSection, {
+    transcript: 'A：一', segments, speakerNames: {}, live: null,
+    diarizing: { phase: 'error', mode: 'turns', note: '按说话人切句后文本明显变少（5 < 600 字），已保留原转写' },
+    onDiarize() {},
+  })
+  check('切句失败提示带「按说话人切句未完成」', joinedText(turnsErrorTree).includes('按说话人切句未完成'), joinedText(turnsErrorTree).slice(-160))
 }
 
 /* 4. 录音中即使一个字都还没识别，MeetingDocument 也渲染原始转写卡片 */

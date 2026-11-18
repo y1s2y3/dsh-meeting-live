@@ -6887,16 +6887,21 @@ nav[aria-label="Global panels"] > button > span:last-child{
       })()
       const diarizeStatus = (() => {
         if (diarizing === null) return null
+        const mode = diarizing.mode === 'turns' ? 'turns' : 'relabel'
         if (diarizing.phase === 'running') {
           const elapsed = Number(diarizing.elapsedSeconds) || 0
           const stage = typeof diarizing.stage === 'string' ? diarizing.stage : ''
+          const done = Number(diarizing.transcribeDone) || 0
+          const total = Number(diarizing.transcribeTotal) || 0
           const stageLabel = stage === 'loading'
             ? '正在加载声纹模型…'
-            : (stage === 'relabeling' ? '正在把 S1/S2 回填到原文…' : '正在分析整段录音…')
+            : (stage === 'transcribing'
+              ? '正在按说话人逐句识别' + (total > 0 ? '（' + String(done) + '/' + String(total) + '）' : '') + '…'
+              : (stage === 'rebuilding' ? '正在按说话人重排原文…' : (stage === 'relabeling' ? '正在把 S1/S2 回填到原文…' : '正在分析整段录音…')))
           const forced = Number(diarizing.forcedSpeakers) > 0 ? '（指定 ' + String(diarizing.forcedSpeakers) + ' 人）' : ''
           return {
             tone: '',
-            text: stageLabel + forced + ' 已运行 ' + formatElapsedCn(elapsed) + '。分离在后台跑，页面不会卡，可以继续用别的功能。',
+            text: (mode === 'turns' ? '按说话人切句：' : '') + stageLabel + forced + ' 已运行 ' + formatElapsedCn(elapsed) + '。后台运行，页面不会卡，可以继续用别的功能。',
             spin: true,
             actions: diarizing.auto === true
               ? null
@@ -6905,13 +6910,25 @@ nav[aria-label="Global panels"] > button > span:last-child{
         }
         if (diarizing.phase === 'done') {
           const speakers = Number(diarizing.speakers) || 0
+          const counts = diarizing.counts !== null && typeof diarizing.counts === 'object' ? diarizing.counts : null
+          const countText = counts === null
+            ? ''
+            : '（' + Object.entries(counts).map(([label, value]) => (label === '（空）' ? '未标注 ' : label + ' ') + String(value) + ' 段').join('、') + '）'
           const note = typeof diarizing.note === 'string' && diarizing.note !== '' ? ' ' + diarizing.note : ''
+          if (mode === 'turns') {
+            return {
+              tone: 'ok',
+              text: '已按说话人切句：' + String(speakers) + ' 位说话人，一行一句。' + countText + ' 点「说话人重命名」可改成真实姓名。',
+              spin: false,
+              actions: null,
+            }
+          }
           if (speakers > 12) {
             return {
               tone: 'warn',
               text: '已按音色重新分离：检测到 ' + String(speakers) + ' 位说话人（远场录音容易过度分割，正常会议一般 2–8 人）。可指定人数重试：',
               spin: false,
-              actions: [4, 6, 8].map((count) => ({
+              actions: [2, 3, 4, 6].map((count) => ({
                 label: '按 ' + String(count) + ' 人重试',
                 onClick: () => { if (typeof props.onDiarize === 'function') props.onDiarize(count) },
               })),
@@ -6919,7 +6936,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
           }
           return {
             tone: 'ok',
-            text: '已按音色重新分离：共 ' + String(speakers) + ' 位说话人（S1、S2…）。' + note + ' 点「说话人重命名」可改成真实姓名。',
+            text: '已按音色重新分离：共 ' + String(speakers) + ' 位说话人（S1、S2…）。' + countText + note + ' 点「说话人重命名」可改成真实姓名。',
             spin: false,
             actions: null,
           }
@@ -6930,7 +6947,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
             tone: 'warn',
             text: cancelled
               ? '已取消声纹分离（原转写保持不变）'
-              : '声纹分离未完成：' + String(diarizing.note ?? diarizing.error ?? '请稍后重试') + '（已保留原转写）',
+              : (mode === 'turns' ? '按说话人切句未完成：' : '声纹分离未完成：') + String(diarizing.note ?? diarizing.error ?? '请稍后重试') + '（已保留原转写）',
             spin: false,
             actions: cancelled ? null : [{ label: '重试', onClick: () => { if (typeof props.onDiarize === 'function') props.onDiarize() } }],
           }
@@ -7006,12 +7023,24 @@ nav[aria-label="Global panels"] > button > span:last-child{
             className: 'dsm-minutes-action',
             onClick: () => { if (typeof props.onDiarize === 'function') props.onDiarize() },
             disabled: diarizeRunning,
-            title: '用整段录音做声纹（音色）分离，给每一段标上 S1/S2 说话人标签（需要几分钟）',
+            title: '用整段录音做声纹（音色）分离，给每一段标上 S1/S2 说话人标签（需要几分钟；算过会复用缓存）',
           },
           diarizeRunning
             ? h('span', { className: 'dsm-spin', style: { width: 11, height: 11, borderWidth: 1.5 } })
             : h(Icon, { name: 'users', size: 12 }),
           h('span', null, diarizeRunning ? '分离中…' : '重新分离说话人'))
+          : null,
+        props.onDiarizeSplit && props.hasAudio === true
+          ? h('button', {
+            key: 'diarize-split',
+            type: 'button',
+            className: 'dsm-minutes-action',
+            onClick: () => { if (typeof props.onDiarizeSplit === 'function') props.onDiarizeSplit() },
+            disabled: diarizeRunning,
+            title: '按说话人回合重新识别并切句：一行一句、每句一个说话人（原文是 30 秒大段、两个人混在一句里时更准；多花几分钟）',
+          },
+          h(Icon, { name: 'users', size: 12 }),
+          h('span', null, diarizeRunning ? '处理中…' : '按说话人切句'))
           : null,
         props.onRetranscribe && props.hasAudio === true
           ? h('button', {
@@ -7545,6 +7574,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
             onRenameSpeakers: props.onRenameSpeakers,
             hasAudio,
             onDiarize: props.onDiarize,
+            onDiarizeSplit: props.onDiarizeSplit,
             onCancelDiarize: props.onCancelDiarize,
             retranscribe: props.retranscribe,
             onRetranscribe: props.onRetranscribe,
@@ -8267,17 +8297,23 @@ nav[aria-label="Global panels"] > button > span:last-child{
        * 用声纹（音色）重新分离说话人；宿主在独立子进程里跑，这里只轮询进度。
        * @param speakerCount - 可选：指定说话人数（2–20），远场自动聚类过度分割时用。
        */
-      const startDiarize = async (speakerCount) => {
+      /**
+       * 用声纹（音色）重新分离说话人；宿主在独立子进程里跑，这里只轮询进度。
+       * @param speakerCount - 可选：指定说话人数（2–20），远场自动聚类过度分割时用。
+       * @param options - `{ mode }`：`relabel`（只补 S 标签，默认）/ `turns`（按说话人逐句重排原文，更准但多花几分钟）。
+       */
+      const startDiarize = async (speakerCount, options) => {
         const meeting = selected
         if (!meeting) return
         if (diarizeForSelected !== null && diarizeForSelected.phase === 'running') return
         const id = meeting.id
         const forced = Number(speakerCount) >= 2 ? Math.round(Number(speakerCount)) : 0
-        setDiarizeRun({ meetingId: id, phase: 'running', speakers: 0, note: null, elapsedSeconds: 0, stage: 'starting', forcedSpeakers: forced })
+        const mode = options !== null && typeof options === 'object' && options.mode === 'turns' ? 'turns' : 'relabel'
+        setDiarizeRun({ meetingId: id, phase: 'running', speakers: 0, note: null, elapsedSeconds: 0, stage: 'starting', forcedSpeakers: forced, mode })
         try {
           const payload = await requestJson(`/meetings/${encodeURIComponent(id)}/diarize`, {
             method: 'POST',
-            body: forced > 0 ? { speakers: forced } : {},
+            body: forced > 0 ? { speakers: forced, mode } : { mode },
           })
           const job = payload?.job ?? {}
           setDiarizeRun({
@@ -8288,8 +8324,9 @@ nav[aria-label="Global panels"] > button > span:last-child{
             elapsedSeconds: Number(job.elapsedSeconds) || 0,
             stage: typeof job.stage === 'string' ? job.stage : 'starting',
             forcedSpeakers: forced,
+            mode,
           })
-          notify('info', '开始用声纹分离说话人', '后台运行，录音长时需要几分钟；页面不会卡，期间可以继续用别处')
+          notify('info', mode === 'turns' ? '开始按说话人逐句重排' : '开始用声纹分离说话人', '后台运行，录音长时需要几分钟；页面不会卡，期间可以继续用别处')
           stopDiarizePolling()
           diarizeTimer.current = window.setInterval(async () => {
             try {
@@ -8303,6 +8340,8 @@ nav[aria-label="Global panels"] > button > span:last-child{
                   speakers: Number(current.speakers) || 0,
                   elapsedSeconds: Number(current.elapsedSeconds) || 0,
                   stage: typeof current.stage === 'string' ? current.stage : 'diarizing',
+                  transcribeDone: Number(current.transcribeDone) || 0,
+                  transcribeTotal: Number(current.transcribeTotal) || 0,
                 }))
                 return
               }
@@ -8314,6 +8353,8 @@ nav[aria-label="Global panels"] > button > span:last-child{
                   speakers: Number(current.speakers) || 0,
                   note: typeof current.note === 'string' ? current.note : null,
                   forcedSpeakers: forced,
+                  mode,
+                  counts: current.counts !== null && typeof current.counts === 'object' ? current.counts : null,
                 })
                 await refreshAll()
                 await loadMeeting(id, { quiet: true }).catch(() => {})
@@ -8325,6 +8366,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
                   speakers: 0,
                   note: typeof current.error === 'string' ? current.error : '声纹分离失败',
                   forcedSpeakers: forced,
+                  mode,
                 })
                 notify('warn', '声纹分离未完成', typeof current.error === 'string' ? current.error : '请稍后重试')
               }
@@ -8335,7 +8377,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
           }, 2000)
         } catch (error) {
           setDiarizeRun({ meetingId: id, phase: 'error', speakers: 0, note: messageOf(error) })
-          notify('warn', '重新分离说话人失败', messageOf(error))
+          notify('warn', mode === 'turns' ? '按说话人切句失败' : '重新分离说话人失败', messageOf(error))
         }
       }
 
@@ -8449,6 +8491,7 @@ nav[aria-label="Global panels"] > button > span:last-child{
               retranscribe: retranscribe !== null && retranscribe.meetingId === selected.id ? retranscribe : null,
               onRetranscribe: startRetranscribe,
               onDiarize: startDiarize,
+              onDiarizeSplit: () => startDiarize(0, { mode: 'turns' }),
               onCancelDiarize: cancelDiarize,
               correction: selected.correction ?? null,
               onApplyCorrection: applyCorrection,

@@ -469,7 +469,7 @@ export async function readDiarizeCache(audioPath, cacheDir = DIARIZE_CACHE_DIR) 
   }
 }
 
-/** 写声纹分离缓存（失败不影响主流程）。 */
+/** 写声纹分离缓存（失败不影响主流程）。`textLines` 是按说话人切句时带文本的结果。 */
 export async function writeDiarizeCache(audioPath, payload, cacheDir = DIARIZE_CACHE_DIR) {
   const key = diarizeCacheKey(audioPath)
   if (key === '') return false
@@ -480,6 +480,7 @@ export async function writeDiarizeCache(audioPath, payload, cacheDir = DIARIZE_C
       numClusters: Number(payload?.numClusters) || 0,
       speakers: Number(payload?.speakers) || 0,
       lines: Array.isArray(payload?.lines) ? payload.lines : [],
+      textLines: Array.isArray(payload?.textLines) ? payload.textLines : [],
       createdAt: new Date().toISOString(),
     }), 'utf8')
     return true
@@ -514,7 +515,7 @@ export function relabelSegmentsBySpeaker(segments, lines) {
     if (!Number.isFinite(at) || at < 0) return { ...segment }
     // 1) 落在某条声纹区间的起止范围内（前后各留 2 秒容差）
     let hit = ranges.find((range) => at >= range.start - 2 && at <= range.end + 2)
-    // 2) 没命中就找最近的区间起点（6 秒内），避免切片边界造成整段没标签
+    // 2) 没命中就找最近的区间起点（20 秒内），避免切片边界造成整段没标签
     if (hit === undefined) {
       let best = null
       let bestDistance = Infinity
@@ -525,12 +526,40 @@ export function relabelSegmentsBySpeaker(segments, lines) {
           best = range
         }
       }
-      if (best !== null && bestDistance <= 6) hit = best
+      if (best !== null && bestDistance <= 20) hit = best
     }
     if (hit === undefined) return { ...segment }
     assigned += 1
     return { ...segment, speaker: hit.speaker }
   })
+  // 3) 还没匹配上的（长静音、切片错位）：沿用相邻已标注分段的说话人，减少「空标签」。
+  //    只在前后 90 秒内找，避免跨大段空白乱套。
+  for (let index = 0; index < next.length; index += 1) {
+    if (next[index].speaker !== undefined && next[index].speaker !== '') continue
+    let previous = null
+    for (let probe = index - 1; probe >= 0; probe -= 1) {
+      const label = next[probe].speaker
+      if (typeof label === 'string' && label !== '') {
+        const gap = Math.abs(Number(next[index].at) - Number(next[probe].at))
+        if (gap <= 90) previous = label
+        break
+      }
+    }
+    let following = null
+    for (let probe = index + 1; probe < next.length; probe += 1) {
+      const label = next[probe].speaker
+      if (typeof label === 'string' && label !== '') {
+        const gap = Math.abs(Number(next[probe].at) - Number(next[index].at))
+        if (gap <= 90) following = label
+        break
+      }
+    }
+    const label = previous !== null ? previous : following
+    if (label !== null) {
+      next[index] = { ...next[index], speaker: label }
+      assigned += 1
+    }
+  }
   return { segments: next, assigned, total: rows.length }
 }
 
@@ -685,11 +714,56 @@ async function applyDiarizeLines({ store, meetingId, lines, speakers, job, logge
   job.status = 'done'
   job.stage = 'done'
   job.speakers = Number(speakers) || [...new Set(rows.map((line) => line?.speaker).filter(Boolean))].length
+  job.counts = countSpeakers(relabeled)
   const tooMany = job.speakers > DIARIZE_WARN_SPEAKERS
   job.note = '已按声纹重新分离：' + String(job.speakers) + ' 位说话人，标注 ' + String(assigned) + '/' + String(total) + ' 段'
     + (tooMany ? '。检测到的说话人数偏多（远场录音容易过度分割），可指定人数重试' : '')
     + noteSuffix
   return { assigned, total }
+}
+
+/** 统计每个说话人的段数：`{ S1: 39, S2: 2, '': 23 }`。 */
+function countSpeakers(segments) {
+  const counts = {}
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    const key = typeof segment?.speaker === 'string' && segment.speaker !== '' ? segment.speaker : '（空）'
+    counts[key] = (counts[key] || 0) + 1
+  }
+  return counts
+}
+
+/**
+ * 「按说话人切句」：用声纹回合 + **逐回合识别的文本**重建原文，一行一句、一行一个说话人。
+ * 适合原文是 30 秒大段（一段里混了两个人）的会议。
+ * @param options - `{ store, meetingId, lines, speakers, job, logger }`；lines 需带 `text`。
+ * @returns `{ assigned, total }`。
+ */
+export async function applyTurnLines({ store, meetingId, lines, speakers, job, logger }) {
+  const rows = (Array.isArray(lines) ? lines : [])
+    .map((line) => ({
+      speaker: typeof line?.speaker === 'string' ? line.speaker.trim() : '',
+      text: String(line?.text ?? '').replace(/\s+/g, ' ').trim(),
+      start: Math.max(0, Number(line?.start) || 0),
+    }))
+    .filter((line) => line.text !== '')
+  if (rows.length === 0) throw new Error('按说话人切句后没有任何文本（音频可能太轻或静音）')
+  const current = store.get(meetingId)
+  const currentText = String(current?.transcript ?? '')
+  const rebuilt = rows.map((row) => (row.speaker === '' ? row.text : row.speaker + '：' + row.text)).join('\n')
+  // 保护：切句后文本明显变少说明识别大面积失败，别覆盖原转写。
+  const minChars = Math.max(80, Math.round(currentText.length * 0.6))
+  if (rebuilt.length < minChars) {
+    throw new Error('按说话人切句后文本明显变少（' + String(rebuilt.length) + ' < ' + String(minChars) + ' 字），已保留原转写；可稍后重试或改用「重新分离说话人」')
+  }
+  const transcriptSegments = rows.map((row) => ({ speaker: row.speaker, text: row.text, at: Math.round(row.start) }))
+  await store.patch(meetingId, { transcript: rebuilt, transcriptSegments })
+  job.status = 'done'
+  job.stage = 'done'
+  job.speakers = Number(speakers) || [...new Set(rows.map((row) => row.speaker).filter(Boolean))].length
+  job.counts = countSpeakers(transcriptSegments)
+  job.note = '已按说话人切句：' + String(job.speakers) + ' 位说话人、' + String(rows.length) + ' 句（每句一个说话人）'
+  logger?.info?.('meeting-minutes: diarize rebuilt transcript by speaker turns (' + String(rows.length) + ' lines, ' + String(job.speakers) + ' speakers)')
+  return { assigned: rows.length, total: rows.length }
 }
 
 /**
@@ -699,9 +773,10 @@ async function applyDiarizeLines({ store, meetingId, lines, speakers, job, logge
  *   - 优先保留现有转写文本与时间，只给分段补 S1/S2 标签；
  *   - 同一段音频算过一次就写进缓存，重试时直接复用（`readDiarizeCache`），不再等十分钟。
  */
-async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speakers = 0 }) {
+async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speakers = 0, mode = 'relabel' }) {
   const job = diarizeJobs.get(meetingId)
   if (job === undefined) return
+  const splitTurns = mode === 'turns'
   const outputPath = join(tmpdir(), 'dsh-diarize-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.json')
   const argsPath = outputPath + '.args.json'
   let child = null
@@ -715,20 +790,30 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
     }
     // 先查缓存：同一段音频算过一次就直接复用（自动/相同人数才复用，指定人数不同则重算）。
     const cached = await readDiarizeCache(audioPath)
-    if (cached !== null && (Number(speakers) === 0 || Number(cached.numClusters) === Number(speakers))) {
+    const cachedMatch = cached !== null && (Number(speakers) === 0 || Number(cached.numClusters) === Number(speakers))
+    if (cachedMatch) {
       job.stage = 'cached'
       try {
-        await applyDiarizeLines({
-          store,
-          meetingId,
-          lines: cached.lines,
-          speakers: cached.speakers,
-          job,
-          logger,
-          noteSuffix: '（复用本机已算好的分离结果，未重新计算）',
-        })
-        logger?.info?.('meeting-minutes: diarize applied from cache (' + String(job.speakers) + ' speakers)')
-        return
+        if (splitTurns) {
+          // 切句模式需要带文本的缓存；没有就回落到 worker 重新算。
+          if (Array.isArray(cached.textLines) && cached.textLines.length > 0) {
+            await applyTurnLines({ store, meetingId, lines: cached.textLines, speakers: cached.speakers, job, logger })
+            logger?.info?.('meeting-minutes: diarize turns applied from cache (' + String(job.speakers) + ' speakers)')
+            return
+          }
+        } else {
+          await applyDiarizeLines({
+            store,
+            meetingId,
+            lines: cached.lines,
+            speakers: cached.speakers,
+            job,
+            logger,
+            noteSuffix: '（复用本机已算好的分离结果，未重新计算）',
+          })
+          logger?.info?.('meeting-minutes: diarize applied from cache (' + String(job.speakers) + ' speakers)')
+          return
+        }
       } catch (error) {
         logger?.warn?.('meeting-minutes: diarize cache not applicable, recomputing: ' + String(error instanceof Error ? error.message : error))
       }
@@ -739,6 +824,7 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       models,
       numClusters: Number(speakers) > 0 ? Math.round(Number(speakers)) : 0,
       outputPath,
+      splitTurns,
     }), 'utf8')
     const workerPath = fileURLToPath(new URL('./diarize-worker.js', import.meta.url))
     job.stage = 'starting'
@@ -758,7 +844,15 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       if (text.includes('STAGE loading')) job.stage = 'loading'
       if (text.includes('STAGE diarizing')) job.stage = 'diarizing'
       for (const line of text.split('\n')) {
-        if (line.startsWith('STAGE done')) job.stage = 'relabeling'
+        if (line.startsWith('STAGE transcribing')) {
+          job.stage = 'transcribing'
+          const match = /(\d+)\s*\/\s*(\d+)/.exec(line)
+          if (match !== null) {
+            job.transcribeDone = Number(match[1])
+            job.transcribeTotal = Number(match[2])
+          }
+        }
+        if (line.startsWith('STAGE done')) job.stage = splitTurns ? 'rebuilding' : 'relabeling'
       }
     })
     child.stderr?.on('data', (chunk) => {
@@ -793,6 +887,17 @@ async function runDiarizeJob({ deps, store, meetingId, audioPath, logger, speake
       throw new Error(reason)
     }
     const lines = Array.isArray(parsed.lines) ? parsed.lines : []
+    if (splitTurns) {
+      await applyTurnLines({ store, meetingId, lines, speakers: parsed.speakers, job, logger })
+      // 缓存里同时保存「回合区间」与「带文本的逐句结果」，下次切句可直接复用。
+      await writeDiarizeCache(audioPath, {
+        numClusters: Number(speakers) || 0,
+        speakers: job.speakers,
+        lines: lines.map((line) => ({ speaker: line.speaker, start: line.start, end: line.end })),
+        textLines: lines.map((line) => ({ speaker: line.speaker, text: line.text, start: line.start, end: line.end })),
+      })
+      return
+    }
     const { assigned, total } = await applyDiarizeLines({
       store,
       meetingId,
@@ -1614,6 +1719,7 @@ export function registerRoutes(ctx, deps) {
         const body = await readJsonBody(req)
         const wanted = Number(body.speakers ?? body.numSpeakers ?? 0)
         const forcedSpeakers = Number.isFinite(wanted) && wanted >= 2 && wanted <= 20 ? Math.round(wanted) : 0
+        const requestedMode = body.mode === 'turns' ? 'turns' : 'relabel'
         const audio = (Array.isArray(meeting.media) ? meeting.media : [])
           .find((item) => item && item.kind === 'audio' && typeof item.path === 'string' && existsSync(item.path))
         if (audio === undefined) throw new Error('这场会议没有可用的录音文件，无法重新分离说话人')
@@ -1629,6 +1735,7 @@ export function registerRoutes(ctx, deps) {
         const job = {
           status: 'running',
           stage: 'starting',
+          mode: requestedMode,
           speakers: 0,
           forcedSpeakers,
           error: null,
@@ -1638,7 +1745,7 @@ export function registerRoutes(ctx, deps) {
         diarizeJobs.set(id, job)
         sendJson(res, 200, { ok: true, job: { ...job } })
         // 后台子进程执行，立即返回；前端轮询 GET 拿 elapsedSeconds 显示「已运行 X 分 Y 秒」。
-        void runDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger, speakers: forcedSpeakers })
+        void runDiarizeJob({ deps, store, meetingId: id, audioPath: audio.path, logger, speakers: forcedSpeakers, mode: requestedMode })
         return
       }
 

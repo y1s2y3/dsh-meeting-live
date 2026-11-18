@@ -1,6 +1,6 @@
 {
   "name": "dsh-meeting-live",
-  "version": "1.9.2",
+  "version": "1.10.0",
   "private": false,
   "description": "把会议变成能执行的纪要：录音/录屏自动转写，AI 整理结论、决策与待办，核对后直接进待办清单",
   "type": "module",
