@@ -121,6 +121,8 @@ function toHtml(node) {
   if (Array.isArray(node)) return node.map(toHtml).join('')
   if (typeof node !== 'object' || node.isElement !== true) return ''
   if (typeof node.type === 'function') return toHtml(renderComponent(node.type, node.props ?? {}))
+  // Fragment（React.Fragment 是 Symbol）：只渲染子节点
+  if (typeof node.type === 'symbol') return toHtml(node.props?.children)
   const props = node.props ?? {}
   const attrs = []
   for (const [key, value] of Object.entries(props)) {
@@ -147,7 +149,8 @@ const segments = [
 const baseMeeting = {
   id: 'mt_live', title: '录音纪要 2026-11-17 16:05', date: '2026-11-17', attendees: ['安莉', '荣旺', '徐金杰'],
   sourceType: 'recording', transcriptSeconds: 1840, transcriptSegments: segments,
-  speakerNames: {}, audioQuality: null, correction: null, media: [], notes: '', autoImported: false,
+  speakerNames: {}, audioQuality: null, correction: null, notes: '', autoImported: false,
+  media: [{ kind: 'audio', name: '会议录音-20261117-1725.wav', path: 'C:/fake/会议录音.wav', size: 148946988 }],
   summary: null, createdAt: '2026-11-17T08:06:15.995Z', updatedAt: new Date().toISOString(),
   transcript: segments.map((segment) => `${segment.speaker}：${segment.text}`).join('\n'),
 }
@@ -174,6 +177,9 @@ const liveHtml = documentHtml(baseMeeting, {
   live: { status: 'recording', elapsedSeconds: 1840, chars: 1293 },
   onPauseLive() {},
   onStopLive() {},
+  onDiarize() {},
+  onDiarizeSplit() {},
+  onRetranscribe() {},
 })
 const diarizingHtml = documentHtml(baseMeeting, {
   live: { status: 'stopping', elapsedSeconds: 1840, chars: 1293 },
